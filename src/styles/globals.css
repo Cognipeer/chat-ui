@@ -1,0 +1,157 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Default Dark Theme (ChatGPT-like) */
+:root {
+  --chat-bg-primary: #212121;
+  --chat-bg-secondary: #171717;
+  --chat-bg-tertiary: #2f2f2f;
+  --chat-bg-hover: #3f3f3f;
+
+  --chat-text-primary: #ececec;
+  --chat-text-secondary: #b4b4b4;
+  --chat-text-tertiary: #8e8e8e;
+  --chat-text-inverse: #171717;
+
+  --chat-border-primary: #3f3f3f;
+  --chat-border-secondary: #2f2f2f;
+
+  --chat-accent-primary: #10a37f;
+  --chat-accent-secondary: #1a7f64;
+}
+
+/* Light Theme */
+.chat-theme-light {
+  --chat-bg-primary: #ffffff;
+  --chat-bg-secondary: #f7f7f8;
+  --chat-bg-tertiary: #ececec;
+  --chat-bg-hover: #e3e3e3;
+
+  --chat-text-primary: #171717;
+  --chat-text-secondary: #6b6b6b;
+  --chat-text-tertiary: #8e8e8e;
+  --chat-text-inverse: #ffffff;
+
+  --chat-border-primary: #e3e3e3;
+  --chat-border-secondary: #ececec;
+
+  --chat-accent-primary: #10a37f;
+  --chat-accent-secondary: #1a7f64;
+}
+
+/* Base styles */
+.chat-container {
+  @apply font-sans antialiased;
+}
+
+/* Markdown styles */
+.chat-markdown {
+  @apply text-chat-text-primary leading-relaxed;
+}
+
+.chat-markdown p {
+  @apply mb-4 last:mb-0;
+}
+
+.chat-markdown h1,
+.chat-markdown h2,
+.chat-markdown h3,
+.chat-markdown h4,
+.chat-markdown h5,
+.chat-markdown h6 {
+  @apply font-semibold mb-2 mt-4 first:mt-0;
+}
+
+.chat-markdown h1 {
+  @apply text-2xl;
+}
+
+.chat-markdown h2 {
+  @apply text-xl;
+}
+
+.chat-markdown h3 {
+  @apply text-lg;
+}
+
+.chat-markdown ul,
+.chat-markdown ol {
+  @apply mb-4 pl-6;
+}
+
+.chat-markdown ul {
+  @apply list-disc;
+}
+
+.chat-markdown ol {
+  @apply list-decimal;
+}
+
+.chat-markdown li {
+  @apply mb-1;
+}
+
+.chat-markdown code {
+  @apply bg-chat-bg-tertiary px-1.5 py-0.5 rounded text-sm font-mono;
+}
+
+.chat-markdown pre {
+  @apply bg-chat-bg-tertiary p-4 rounded-lg overflow-x-auto mb-4;
+}
+
+.chat-markdown pre code {
+  @apply bg-transparent p-0;
+}
+
+.chat-markdown blockquote {
+  @apply border-l-4 border-chat-border-primary pl-4 italic text-chat-text-secondary mb-4;
+}
+
+.chat-markdown a {
+  @apply text-chat-accent-primary hover:underline;
+}
+
+.chat-markdown table {
+  @apply w-full border-collapse mb-4;
+}
+
+.chat-markdown th,
+.chat-markdown td {
+  @apply border border-chat-border-primary px-4 py-2 text-left;
+}
+
+.chat-markdown th {
+  @apply bg-chat-bg-tertiary font-semibold;
+}
+
+.chat-markdown hr {
+  @apply border-chat-border-primary my-4;
+}
+
+/* Scrollbar styles */
+.chat-scrollbar::-webkit-scrollbar {
+  @apply w-2;
+}
+
+.chat-scrollbar::-webkit-scrollbar-track {
+  @apply bg-transparent;
+}
+
+.chat-scrollbar::-webkit-scrollbar-thumb {
+  @apply bg-chat-border-primary rounded-full;
+}
+
+.chat-scrollbar::-webkit-scrollbar-thumb:hover {
+  @apply bg-chat-text-tertiary;
+}
+
+/* Animation classes */
+@layer utilities {
+  .animation-delay-200 {
+    animation-delay: 0.2s;
+  }
+  .animation-delay-400 {
+    animation-delay: 0.4s;
+  }
+}
