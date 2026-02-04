@@ -277,9 +277,11 @@ interface DefaultHeaderProps {
   title: string;
 }
 
+const CHAT_HEADER_HEIGHT = "h-[58px]";
+
 function DefaultHeader({ showMenuButton, onMenuClick, title }: DefaultHeaderProps) {
   return (
-    <div className="flex-shrink-0 flex items-center gap-3 px-4 py-3 border-b border-chat-border-primary">
+    <div className={cn("flex-shrink-0 flex items-center gap-3 px-4 border-b border-chat-border-primary", CHAT_HEADER_HEIGHT)}>
       {showMenuButton && (
         <button
           onClick={onMenuClick}

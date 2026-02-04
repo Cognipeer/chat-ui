@@ -71,15 +71,15 @@ export function ChatHistory({
           className
         )}
       >
-        {/* Header */}
+        {/* Header — fixed height to align border with main chat header */}
         {header || (
-          <div className="flex-shrink-0 p-4 border-b border-chat-border-primary">
+          <div className="flex-shrink-0 flex items-center px-4 h-[58px] border-b border-chat-border-primary">
             {onNewChat && (
               <button
                 onClick={onNewChat}
-                className="w-full flex items-center gap-2 px-4 py-2.5 bg-chat-bg-tertiary hover:bg-chat-bg-hover rounded-lg text-chat-text-primary transition-colors"
+                className="w-full flex items-center gap-2 px-3 py-2 text-sm bg-chat-bg-tertiary hover:bg-chat-bg-hover rounded-lg text-chat-text-primary transition-colors"
               >
-                <PlusIcon className="w-4 h-4" />
+                <PlusIcon className="w-3 h-3" />
                 <span>New Chat</span>
               </button>
             )}
