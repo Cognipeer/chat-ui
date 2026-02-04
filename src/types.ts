@@ -97,6 +97,11 @@ export interface StreamTextEvent extends StreamEventBase {
   isFinal?: boolean;
 }
 
+export interface StreamThinkingEvent extends StreamEventBase {
+  type: "stream.thinking";
+  thinking: string;
+}
+
 export interface StreamToolCallEvent extends StreamEventBase {
   type: "stream.tool_call";
   toolName: string;
@@ -139,6 +144,7 @@ export interface StreamDoneEvent extends StreamEventBase {
 export type StreamEvent =
   | StreamStartEvent
   | StreamTextEvent
+  | StreamThinkingEvent
   | StreamToolCallEvent
   | StreamToolResultEvent
   | StreamProgressEvent

@@ -232,6 +232,11 @@ export class AgentServerClient {
                   fullText += event.text;
                   callbacks.onText?.(event.text, fullText);
                   break;
+                case "stream.thinking":
+                  // Treat thinking as text for now
+                  fullText += (event as any).thinking;
+                  callbacks.onText?.((event as any).thinking, fullText);
+                  break;
                 case "stream.tool_call":
                   callbacks.onToolCall?.(event);
                   break;

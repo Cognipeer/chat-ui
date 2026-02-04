@@ -92,7 +92,7 @@ export function ChatMessageList({
         ))}
 
         {/* Streaming placeholder for new assistant message */}
-        {isStreaming && messages[messages.length - 1]?.role === "user" && streamingText && (
+        {isStreaming && streamingText && (
           <ChatMessage
             message={{
               id: "streaming",

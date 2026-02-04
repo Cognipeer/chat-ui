@@ -133,9 +133,9 @@ export function ToolCalls({ toolCalls, className, isExecuting = false }: ToolCal
       <div className="text-xs font-medium text-chat-text-tertiary uppercase">
         Tool Calls
       </div>
-      {Array.from(toolCalls.entries()).map(([id, call]) => (
+      {Array.from(toolCalls.entries()).map(([id, call], index) => (
         <ToolCall
-          key={id}
+          key={`${id}-${index}`}
           toolName={call.name}
           toolCallId={id}
           args={call.args}
@@ -150,7 +150,8 @@ export function ToolCalls({ toolCalls, className, isExecuting = false }: ToolCal
 /**
  * Format tool name for display
  */
-function formatToolName(name: string): string {
+function formatToolName(name: string | undefined): string {
+  if (!name) return "Unknown Tool";
   return name
     .replace(/_/g, " ")
     .replace(/([a-z])([A-Z])/g, "$1 $2")

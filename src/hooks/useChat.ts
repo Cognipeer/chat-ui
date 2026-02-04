@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useRef, useEffect } from "react";
+import { flushSync } from "react-dom";
 import { generateId } from "../utils";
 import type { Message, FileAttachment, ChatConfig, ChatCallbacks, Conversation } from "../types";
 import { AgentServerClient } from "../api";
@@ -188,7 +189,10 @@ export function useChat(options: UseChatOptions): UseChatReturn {
               // Stream started
             },
             onText: (text, fullText) => {
-              setStreamingText(fullText);
+              // Use flushSync to force immediate render during streaming
+              flushSync(() => {
+                setStreamingText(fullText);
+              });
               onStreamText?.(text, fullText);
             },
             onToolCall: (event) => {
@@ -219,6 +223,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
             },
             onError: (err) => {
               setError(err);
+              setIsLoading(false);
               onError?.(err);
             },
             onDone: (event) => {
@@ -231,9 +236,11 @@ export function useChat(options: UseChatOptions): UseChatReturn {
                   createdAt: new Date(),
                   updatedAt: new Date(),
                 };
-                setMessages((prev) => [...prev, assistantMessage]);
+                // Clear streaming first, then add message
                 setStreamingText("");
                 setActiveToolCalls(new Map());
+                setIsLoading(false);
+                setMessages((prev) => [...prev, assistantMessage]);
                 onMessageReceived?.(assistantMessage);
               }
             },
