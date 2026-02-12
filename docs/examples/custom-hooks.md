@@ -2,6 +2,48 @@
 
 Build a custom chat interface using hooks.
 
+## React-controlled alternative (Context + Hooks)
+
+If you want chat state to be available across multiple components without prop drilling, use `ChatProvider` and `useChatContext`.
+
+```tsx
+import {
+  ChatProvider,
+  useChatContext,
+  ChatMessageList,
+  ChatInput,
+} from "@cognipeer/chat-ui";
+
+function ChatPanel() {
+  const chat = useChatContext();
+
+  return (
+    <>
+      <ChatMessageList
+        messages={chat.messages}
+        isStreaming={chat.isStreaming}
+        streamingText={chat.streamingText}
+      />
+      <ChatInput
+        onSend={chat.sendMessage}
+        onStop={chat.stop}
+        isLoading={chat.isStreaming}
+      />
+    </>
+  );
+}
+
+export default function Page() {
+  return (
+    <ChatProvider baseUrl="/api/agents" agentId="assistant">
+      <ChatPanel />
+    </ChatProvider>
+  );
+}
+```
+
+This is useful when headers, sidebars, and message panels all need to read/update chat state.
+
 ## Full Example
 
 ```tsx

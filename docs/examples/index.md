@@ -11,7 +11,7 @@ Learn by exploring practical examples of Chat UI usage.
 ## Advanced
 
 - [With Feedback](/examples/with-feedback) - Add feedback buttons
-- [Custom Hooks](/examples/custom-hooks) - Build with hooks
+- [Custom Hooks](/examples/custom-hooks) - Build with hooks and context
 
 ## Live Examples
 

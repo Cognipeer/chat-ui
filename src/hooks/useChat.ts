@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect, useMemo } from "react";
+import { useState, useCallback, useRef, useEffect, useMemo, type Dispatch, type SetStateAction } from "react";
 import { flushSync } from "react-dom";
 import { generateId } from "../utils";
 import type { Message, FileAttachment, ChatConfig, ChatCallbacks, Conversation } from "../types";
@@ -52,6 +52,20 @@ export interface UseChatReturn {
   stop: () => void;
   /** Set error */
   setError: (error: Error | null) => void;
+  /** Directly override message state */
+  setMessages: Dispatch<SetStateAction<Message[]>>;
+  /** Directly override conversation state */
+  setConversation: Dispatch<SetStateAction<Conversation | null>>;
+  /** Directly override streaming state */
+  setIsStreaming: Dispatch<SetStateAction<boolean>>;
+  /** Directly override streaming text */
+  setStreamingText: Dispatch<SetStateAction<string>>;
+  /** Directly override progress message */
+  setProgressMessage: Dispatch<SetStateAction<string>>;
+  /** Directly override pending files */
+  setPendingFiles: Dispatch<SetStateAction<FileAttachment[]>>;
+  /** Directly override active tool calls */
+  setActiveToolCalls: Dispatch<SetStateAction<Map<string, { name: string; args: Record<string, unknown>; result?: unknown; reasoning?: string; displayName?: string }>>>;
 }
 
 /**
@@ -495,5 +509,12 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     retry,
     stop,
     setError,
+    setMessages,
+    setConversation,
+    setIsStreaming,
+    setStreamingText,
+    setProgressMessage,
+    setPendingFiles,
+    setActiveToolCalls,
   };
 }

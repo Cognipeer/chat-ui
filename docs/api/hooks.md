@@ -8,6 +8,17 @@ Chat UI provides React hooks for building custom chat interfaces.
 |------|-------------|
 | [useChat](/api/use-chat) | Main chat hook with message handling |
 | [useChatHistory](/api/use-chat-history) | Conversation history management |
+| [useChatContext](/api/chat-provider) | Access shared chat state/actions from `ChatProvider` |
+| [useChatContextOptional](/api/chat-provider) | Optional context accessor without throwing |
+
+## Two integration modes
+
+Chat UI now supports two complementary patterns:
+
+1. **API-first (default):** Use `Chat` / `ChatMinimal` for fastest setup.
+2. **React-controlled:** Use `ChatProvider + useChatContext` to control flow from any React component.
+
+Choose React-controlled mode when you want to orchestrate chat from multiple components (custom toolbar, side panels, feature flags, local app state sync).
 
 ## useChat
 
@@ -151,6 +162,52 @@ function CustomChatApp() {
         />
       </div>
     </div>
+  );
+}
+```
+
+## Context + Hooks composition
+
+When you want shared access, wrap your page with `ChatProvider`, then consume from child components:
+
+```tsx
+import {
+  ChatProvider,
+  useChatContext,
+  useChatHistory,
+  ChatMessageList,
+  ChatInput,
+} from "@cognipeer/chat-ui";
+
+function ChatBody() {
+  const chat = useChatContext();
+  const history = useChatHistory({
+    baseUrl: "/api/agents",
+    agentId: "assistant",
+  });
+
+  return (
+    <>
+      <button onClick={() => history.refresh()}>Refresh History</button>
+      <ChatMessageList
+        messages={chat.messages}
+        isStreaming={chat.isStreaming}
+        streamingText={chat.streamingText}
+      />
+      <ChatInput
+        onSend={chat.sendMessage}
+        onStop={chat.stop}
+        isLoading={chat.isStreaming}
+      />
+    </>
+  );
+}
+
+export default function Page() {
+  return (
+    <ChatProvider baseUrl="/api/agents" agentId="assistant">
+      <ChatBody />
+    </ChatProvider>
   );
 }
 ```

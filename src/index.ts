@@ -13,6 +13,7 @@ export { useChatHistory, type UseChatHistoryOptions, type UseChatHistoryReturn }
 
 // Providers
 export { ChatThemeProvider, useChatTheme, useChatThemeOptional } from "./providers";
+export { ChatProvider, useChatContext, useChatContextOptional, type ChatProviderProps } from "./providers";
 
 // API Client
 export { AgentServerClient } from "./api";

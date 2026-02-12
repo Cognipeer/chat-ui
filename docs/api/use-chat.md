@@ -29,7 +29,16 @@ const {
   loadConversation,
   addFiles,
   removeFile,
-  clearFiles,
+  clearMessages,
+
+  // Direct state control
+  setMessages,
+  setConversation,
+  setIsStreaming,
+  setStreamingText,
+  setProgressMessage,
+  setPendingFiles,
+  setActiveToolCalls,
 } = useChat({
   baseUrl: "/api/agents",
   agentId: "assistant",
@@ -92,7 +101,17 @@ interface UseChatReturn {
   loadConversation: (id: string) => Promise<void>;
   addFiles: (files: File[]) => Promise<void>;
   removeFile: (fileId: string) => void;
-  clearFiles: () => void;
+  clearMessages: () => void;
+
+  // Direct state control
+  setMessages: React.Dispatch<React.SetStateAction<Message[]>>;
+  setConversation: React.Dispatch<React.SetStateAction<Conversation | null>>;
+  setIsStreaming: React.Dispatch<React.SetStateAction<boolean>>;
+  setStreamingText: React.Dispatch<React.SetStateAction<string>>;
+  setProgressMessage: React.Dispatch<React.SetStateAction<string>>;
+  setPendingFiles: React.Dispatch<React.SetStateAction<FileAttachment[]>>;
+  setActiveToolCalls: React.Dispatch<React.SetStateAction<Map<string, ToolCallState>>>;
+  setError: (error: Error | null) => void;
 }
 ```
 
@@ -303,6 +322,14 @@ The hook manages:
 3. **Files** - Pending file attachments
 4. **Error** - Last error state
 5. **Loading** - Request in progress
+
+## React-controlled mode
+
+If you want to share this controller across many components, use:
+
+- [ChatProvider + useChatContext](/api/chat-provider)
+
+This gives the same API as `useChat`, but through React context.
 
 ## Related
 

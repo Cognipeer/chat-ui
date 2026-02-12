@@ -142,4 +142,5 @@ The Chat component fills its container. Make sure the parent has a defined heigh
 - [Theming](/guide/theming) - Customize colors and appearance
 - [Streaming](/guide/streaming) - Real-time response handling
 - [File Uploads](/guide/file-uploads) - Enable file attachments
+- [State Management](/guide/state-management) - API-first vs React-controlled mode
 - [Components](/components/chat) - Component reference
