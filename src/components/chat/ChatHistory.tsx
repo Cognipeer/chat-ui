@@ -1,9 +1,9 @@
 "use client";
 
-import React from "react";
+import React, { useMemo, useState } from "react";
 import { cn, formatRelativeTime } from "../../utils";
 import type { ConversationListItem } from "../../types";
-import { ChatIcon, TrashIcon, PlusIcon } from "./Icons";
+import { ChatIcon, TrashIcon, PlusIcon, SearchIcon, XIcon } from "./Icons";
 
 export interface ChatHistoryProps {
   /** Conversations list */
@@ -32,6 +32,8 @@ export interface ChatHistoryProps {
   header?: React.ReactNode;
   /** Custom footer content */
   footer?: React.ReactNode;
+  /** Enable search input for filtering conversation history */
+  enableSearch?: boolean;
 }
 
 /**
@@ -51,7 +53,22 @@ export function ChatHistory({
   onClose,
   header,
   footer,
+  enableSearch = false,
 }: ChatHistoryProps) {
+  const [searchQuery, setSearchQuery] = useState("");
+
+  const normalizedQuery = searchQuery.trim().toLowerCase();
+  const filteredConversations = useMemo(() => {
+    if (!normalizedQuery) {
+      return conversations;
+    }
+
+    return conversations.filter((conversation) => {
+      const title = (conversation.title || "New Chat").toLowerCase();
+      return title.includes(normalizedQuery);
+    });
+  }, [conversations, normalizedQuery]);
+
   return (
     <>
       {/* Mobile overlay */}
@@ -86,15 +103,40 @@ export function ChatHistory({
           </div>
         )}
 
+        {enableSearch && (
+          <div className="flex-shrink-0 px-3 py-2 border-b border-chat-border-primary bg-chat-bg-secondary">
+            <div className="relative">
+              <SearchIcon className="w-4 h-4 text-chat-text-tertiary absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                placeholder="Search chats..."
+                className="w-full bg-chat-bg-tertiary border border-chat-border-primary rounded-lg pl-9 pr-9 py-2 text-sm text-chat-text-primary placeholder:text-chat-text-tertiary focus:outline-none focus:border-chat-accent-primary"
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery("")}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-chat-text-tertiary hover:text-chat-text-primary"
+                  aria-label="Clear search"
+                >
+                  <XIcon className="w-4 h-4" />
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Conversation list */}
         <div className="flex-1 overflow-y-auto chat-scrollbar">
-          {conversations.length === 0 && !isLoading ? (
+          {filteredConversations.length === 0 && !isLoading ? (
             <div className="p-4 text-center text-chat-text-tertiary text-sm">
-              No conversations yet
+              {normalizedQuery ? "No matching conversations" : "No conversations yet"}
             </div>
           ) : (
             <div className="p-2">
-              {conversations.map((conversation) => (
+              {filteredConversations.map((conversation) => (
                 <ConversationItem
                   key={conversation.id}
                   conversation={conversation}

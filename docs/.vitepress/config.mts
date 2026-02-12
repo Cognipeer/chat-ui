@@ -2,15 +2,14 @@ import { defineConfig } from 'vitepress';
 
 export default defineConfig({
   title: 'Chat UI',
-  description: 'A customizable React chat UI component library for AI agents',
+  description: 'Production-ready React chat UI components for AI applications',
   base: '/chat-ui/',
   ignoreDeadLinks: true,
   themeConfig: {
     logo: '/logo.svg',
     nav: [
       { text: 'Guide', link: '/guide/getting-started' },
-      { text: 'Components', link: '/components/chat' },
-      { text: 'API', link: '/api/hooks' },
+      { text: 'API Reference', link: '/api/hooks' },
       { text: 'Examples', link: '/examples/' },
       {
         text: 'v0.1.0',
@@ -27,11 +26,14 @@ export default defineConfig({
           items: [
             { text: 'Getting Started', link: '/guide/getting-started' },
             { text: 'Installation', link: '/guide/installation' },
+            { text: 'Core Concepts', link: '/guide/core-concepts' },
+            { text: 'Architecture', link: '/guide/architecture' },
           ],
         },
         {
           text: 'Features',
           items: [
+            { text: 'State Management', link: '/guide/state-management' },
             { text: 'Theming', link: '/guide/theming' },
             { text: 'Streaming', link: '/guide/streaming' },
             { text: 'File Uploads', link: '/guide/file-uploads' },
@@ -48,11 +50,19 @@ export default defineConfig({
             { text: 'Agent Server', link: '/guide/agent-server' },
           ],
         },
+        {
+          text: 'Advanced',
+          items: [
+            { text: 'Debugging', link: '/guide/debugging' },
+            { text: 'FAQ', link: '/guide/faq' },
+          ],
+        },
       ],
       '/components/': [
         {
           text: 'Components',
           items: [
+            { text: 'Overview', link: '/components/' },
             { text: 'Chat', link: '/components/chat' },
             { text: 'ChatMinimal', link: '/components/chat-minimal' },
             { text: 'ChatMessage', link: '/components/chat-message' },
@@ -67,6 +77,7 @@ export default defineConfig({
         {
           text: 'API Reference',
           items: [
+            { text: 'Overview', link: '/api/' },
             { text: 'Hooks', link: '/api/hooks' },
             { text: 'useChat', link: '/api/use-chat' },
             { text: 'useChatHistory', link: '/api/use-chat-history' },
@@ -101,7 +112,7 @@ export default defineConfig({
     },
   },
   head: [
-    ['link', { rel: 'icon', type: 'image/svg+xml', href: '/chat-ui/favicon.svg' }],
+    ['link', { rel: 'icon', type: 'image/svg+xml', href: '/favicon.svg' }],
     ['meta', { name: 'theme-color', content: '#10a37f' }],
     ['meta', { name: 'og:type', content: 'website' }],
     ['meta', { name: 'og:locale', content: 'en' }],

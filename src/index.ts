@@ -2,7 +2,7 @@
 export { Chat, ChatMinimal, type ChatProps, type ChatMinimalProps } from "./components/chat";
 export { ChatMessage, type ChatMessageProps } from "./components/chat";
 export { ChatMessageList, type ChatMessageListProps } from "./components/chat";
-export { ChatInput, type ChatInputProps } from "./components/chat";
+export { ChatInput, type ChatInputProps, type ChatInputHandle } from "./components/chat";
 export { ChatHistory, type ChatHistoryProps } from "./components/chat";
 export { ToolCall, ToolCalls, type ToolCallProps, type ToolCallsProps } from "./components/chat";
 export { MessageActions, type MessageActionsProps } from "./components/chat";
@@ -65,3 +65,12 @@ export {
 
 // Utils
 export { cn, formatFileSize, formatRelativeTime, generateId } from "./utils";
+
+// Theme Presets
+export {
+  themePresets,
+  darkPresets,
+  lightPresets,
+  getThemePreset,
+  type ThemePreset,
+} from "./themes";

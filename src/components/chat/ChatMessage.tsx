@@ -4,8 +4,9 @@ import React from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { cn } from "../../utils";
-import type { Message, MessageActionProps, FileAttachment } from "../../types";
+import type { Message, MessageActionProps, FileAttachment, Citation } from "../../types";
 import { FileIcon } from "./Icons";
+import { ToolCalls } from "./ToolCall";
 
 export interface ChatMessageProps {
   /** The message to display */
@@ -24,6 +25,8 @@ export interface ChatMessageProps {
   showAvatar?: boolean;
   /** Show timestamp */
   showTimestamp?: boolean;
+  /** Show sources section for assistant messages */
+  enableCitations?: boolean;
 }
 
 /**
@@ -38,6 +41,7 @@ export function ChatMessage({
   renderAvatar,
   showAvatar = true,
   showTimestamp = false,
+  enableCitations = true,
 }: ChatMessageProps) {
   const isUser = message.role === "user";
   const isAssistant = message.role === "assistant";
@@ -64,6 +68,11 @@ export function ChatMessage({
 
       {/* Content */}
       <div className="flex-1 min-w-0 space-y-2">
+        {/* Tool calls from completed messages — shown above the text */}
+        {isAssistant && !isStreaming && hasToolCalls(message) && (
+          <MessageToolCalls message={message} />
+        )}
+
         {/* Message content */}
         <div className="chat-markdown">
           <ReactMarkdown remarkPlugins={[remarkGfm]}>
@@ -75,6 +84,11 @@ export function ChatMessage({
         {/* File attachments */}
         {message.files && message.files.length > 0 && (
           <FileAttachments files={message.files} />
+        )}
+
+        {/* Sources */}
+        {enableCitations && isAssistant && !isStreaming && message.citations && message.citations.length > 0 && (
+          <MessageCitations citations={message.citations} />
         )}
 
         {/* Timestamp */}
@@ -155,6 +169,69 @@ function FileAttachments({ files }: { files: FileAttachment[] }) {
   );
 }
 
+function MessageCitations({ citations }: { citations: Citation[] }) {
+  const DEFAULT_VISIBLE_CITATIONS = 5;
+  const [showAll, setShowAll] = React.useState(false);
+
+  const hasMoreThanDefault = citations.length > DEFAULT_VISIBLE_CITATIONS;
+  const visibleCitations = showAll ? citations : citations.slice(0, DEFAULT_VISIBLE_CITATIONS);
+
+  return (
+    <div className="mt-3">
+      <div className="text-xs font-medium text-chat-text-secondary mb-2">Sources</div>
+      <div className="space-y-2">
+        {visibleCitations.map((citation, index) => {
+          const title = citation.title?.trim() || `Source ${index + 1}`;
+          
+          return (
+            <div
+              key={citation.id || `${title}-${index}`}
+              className="rounded-lg border border-chat-border-primary bg-chat-bg-tertiary/50 p-3"
+            >
+              {citation.link ? (
+                <a
+                  href={citation.link}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-sm font-medium text-chat-accent-primary hover:underline"
+                >
+                  {title}
+                </a>
+              ) : (
+                <div className="text-sm font-medium text-chat-text-primary">{title}</div>
+              )}
+
+              {citation.image && (
+                <img
+                  src={citation.image}
+                  alt={title}
+                  className="mt-2 max-h-40 w-full rounded-md object-cover"
+                />
+              )}
+
+              {citation.description && (
+                <p className="mt-2 text-xs text-chat-text-secondary leading-relaxed">{citation.description}</p>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {hasMoreThanDefault && (
+        <div className="mt-2">
+          <button
+            type="button"
+            className="text-xs text-chat-accent-primary hover:underline"
+            onClick={() => setShowAll((current) => !current)}
+          >
+            {showAll ? "Show Less" : `Show All (${citations.length})`}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /**
  * Extract text content from message content
  */
@@ -176,4 +253,36 @@ function formatTime(date: Date): string {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+/**
+ * Check if a message has tool call details
+ */
+function hasToolCalls(message: Message): boolean {
+  const details = (message.metadata as Record<string, unknown> | undefined)?.toolCallDetails;
+  return Array.isArray(details) && details.length > 0;
+}
+
+/**
+ * Render tool calls from a completed message's metadata
+ */
+function MessageToolCalls({ message }: { message: Message }) {
+  const meta = message.metadata as Record<string, unknown> | undefined;
+  const details = meta?.toolCallDetails as
+    | Array<{ id: string; name: string; args: Record<string, unknown>; result?: unknown }>
+    | undefined;
+  const durationSeconds = meta?.toolCallDurationSeconds as number | undefined;
+
+  if (!details || details.length === 0) return null;
+
+  return (
+    <div className="mt-2">
+      <ToolCalls
+        toolCalls={details}
+        isExecuting={false}
+        durationSeconds={durationSeconds}
+        defaultExpanded={false}
+      />
+    </div>
+  );
 }

@@ -182,7 +182,8 @@ export class AgentServerClient {
       onProgress?: (event: StreamEvent) => void;
       onError?: (error: Error) => void;
       onDone?: (event: StreamEvent) => void;
-    }
+    },
+    signal?: AbortSignal
   ): Promise<void> {
     const response = await fetch(
       `${this.baseUrl}/conversations/${conversationId}/messages`,
@@ -190,6 +191,7 @@ export class AgentServerClient {
         method: "POST",
         headers: this.headers,
         body: JSON.stringify({ ...options, stream: true }),
+        signal,
       }
     );
 

@@ -6,7 +6,7 @@ hero:
   text: React Chat Components for AI Agents
   tagline: Customizable, streaming-ready chat UI with dark/light themes, file uploads, and tool visualization
   image:
-    src: /chat-ui/logo.svg
+    src: /logo.svg
     alt: Chat UI
   actions:
     - theme: brand

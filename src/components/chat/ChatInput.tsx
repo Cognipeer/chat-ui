@@ -1,9 +1,14 @@
 "use client";
 
-import React, { useState, useRef, useCallback, KeyboardEvent, ChangeEvent } from "react";
+import React, { useState, useRef, useCallback, useEffect, useImperativeHandle, forwardRef, KeyboardEvent, ChangeEvent } from "react";
 import { cn, formatFileSize } from "../../utils";
 import type { FileAttachment } from "../../types";
 import { SendIcon, PaperclipIcon, XIcon, StopIcon } from "./Icons";
+
+export interface ChatInputHandle {
+  /** Programmatically focus the textarea */
+  focus: () => void;
+}
 
 export interface ChatInputProps {
   /** Callback when sending a message */
@@ -34,12 +39,14 @@ export interface ChatInputProps {
   renderSendButton?: (props: { onClick: () => void; disabled: boolean }) => React.ReactNode;
   /** Render custom stop button */
   renderStopButton?: (props: { onClick: () => void }) => React.ReactNode;
+  /** Auto-focus the textarea on mount */
+  autoFocus?: boolean;
 }
 
 /**
  * Chat input component with file upload support
  */
-export function ChatInput({
+export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput({
   onSend,
   onStop,
   onFilesAdd,
@@ -54,10 +61,27 @@ export function ChatInput({
   className,
   renderSendButton,
   renderStopButton,
-}: ChatInputProps) {
+  autoFocus = false,
+}, ref) {
   const [value, setValue] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Expose focus method to parent via ref
+  useImperativeHandle(ref, () => ({
+    focus: () => {
+      textareaRef.current?.focus();
+    },
+  }), []);
+
+  // Auto-focus on mount if requested
+  useEffect(() => {
+    if (autoFocus) {
+      // Small delay to ensure the component is fully rendered
+      const timer = setTimeout(() => textareaRef.current?.focus(), 50);
+      return () => clearTimeout(timer);
+    }
+  }, [autoFocus]);
 
   const handleSend = useCallback(() => {
     if (value.trim() && !isLoading && !disabled) {
@@ -221,4 +245,4 @@ export function ChatInput({
       </div>
     </div>
   );
-}
+});

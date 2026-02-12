@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import type { ConversationListItem, ChatConfig } from "../types";
 import { AgentServerClient } from "../api";
 
@@ -49,22 +49,29 @@ export function useChatHistory(options: UseChatHistoryOptions): UseChatHistoryRe
   const [hasMore, setHasMore] = useState(false);
   const [offset, setOffset] = useState(0);
 
-  const client = new AgentServerClient({
-    baseUrl,
-    agentId,
-    authorization,
-    headers,
-  });
+  // Keep a stable client reference that updates when config changes
+  const clientRef = useRef<AgentServerClient | null>(null);
+  useMemo(() => {
+    clientRef.current = new AgentServerClient({
+      baseUrl,
+      agentId: agentId || "",
+      authorization,
+      headers,
+    });
+  }, [baseUrl, agentId, authorization, headers]);
 
   const load = useCallback(async () => {
+    if (!clientRef.current) return;
     try {
       setIsLoading(true);
       setError(null);
-      const response = await client.getConversations({
-        agentId,
+      // When agentId is undefined/empty, don't filter — return all conversations
+      const params: { agentId?: string; limit: number; offset: number } = {
         limit: pageSize,
         offset: 0,
-      });
+      };
+      if (agentId) params.agentId = agentId;
+      const response = await clientRef.current.getConversations(params);
       setConversations(response.conversations);
       setHasMore(response.hasMore);
       setOffset(pageSize);
@@ -76,15 +83,16 @@ export function useChatHistory(options: UseChatHistoryOptions): UseChatHistoryRe
   }, [agentId, pageSize]);
 
   const loadMore = useCallback(async () => {
-    if (isLoading || !hasMore) return;
+    if (!clientRef.current || isLoading || !hasMore) return;
 
     try {
       setIsLoading(true);
-      const response = await client.getConversations({
-        agentId,
+      const params: { agentId?: string; limit: number; offset: number } = {
         limit: pageSize,
         offset,
-      });
+      };
+      if (agentId) params.agentId = agentId;
+      const response = await clientRef.current.getConversations(params);
       setConversations((prev) => [...prev, ...response.conversations]);
       setHasMore(response.hasMore);
       setOffset((prev) => prev + pageSize);
@@ -101,19 +109,21 @@ export function useChatHistory(options: UseChatHistoryOptions): UseChatHistoryRe
   }, [load]);
 
   const deleteConversation = useCallback(async (id: string) => {
+    if (!clientRef.current) return;
     try {
-      await client.deleteConversation(id);
+      await clientRef.current.deleteConversation(id);
       setConversations((prev) => prev.filter((c) => c.id !== id));
     } catch (err) {
       setError(err instanceof Error ? err : new Error("Failed to delete conversation"));
     }
   }, []);
 
+  // Auto-load on mount and whenever agentId changes
   useEffect(() => {
     if (autoLoad) {
       load();
     }
-  }, [autoLoad]);
+  }, [autoLoad, load]);
 
   return {
     conversations,

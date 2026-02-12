@@ -17,6 +17,7 @@ export interface Message {
   conversationId: string;
   role: "user" | "assistant" | "system" | "tool";
   content: string | ContentPart[];
+  citations?: Citation[];
   name?: string;
   toolCalls?: ToolCall[];
   toolCallId?: string;
@@ -39,6 +40,14 @@ export interface FileAttachment {
   size: number;
   url?: string;
   storageKey?: string;
+}
+
+export interface Citation {
+  id?: string;
+  title?: string;
+  image?: string;
+  description?: string;
+  link?: string;
 }
 
 // ============================================================================
@@ -134,6 +143,7 @@ export interface StreamDoneEvent extends StreamEventBase {
   conversationId: string;
   messageId: string;
   content: string;
+  citations?: Citation[];
   usage?: {
     inputTokens?: number;
     outputTokens?: number;
@@ -229,8 +239,9 @@ export const defaultLightTheme: ChatTheme = {
 export interface ChatConfig {
   /** Base URL for the agent server API */
   baseUrl: string;
-  /** Agent ID to use for conversations */
-  agentId: string;
+  /** Agent ID to use for conversations. When omitted, the Chat component will
+   *  auto-fetch agents via GET /agents and let the user pick one. */
+  agentId?: string;
   /** Authorization header value (e.g., "Bearer token") */
   authorization?: string;
   /** Custom headers to include in all requests */

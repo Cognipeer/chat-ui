@@ -4,6 +4,7 @@ import React, { useRef, useEffect } from "react";
 import { cn } from "../../utils";
 import type { Message, MessageActionProps } from "../../types";
 import { ChatMessage } from "./ChatMessage";
+import { ToolCalls } from "./ToolCall";
 
 export interface ChatMessageListProps {
   /** Messages to display */
@@ -12,6 +13,10 @@ export interface ChatMessageListProps {
   isStreaming?: boolean;
   /** Current streaming text */
   streamingText?: string;
+  /** Current progress/status message */
+  progressMessage?: string;
+  /** Active tool calls during streaming */
+  activeToolCalls?: Map<string, { name: string; args: Record<string, unknown>; result?: unknown; reasoning?: string; displayName?: string }>;
   /** Custom class name */
   className?: string;
   /** Auto-scroll to bottom on new messages */
@@ -26,6 +31,8 @@ export interface ChatMessageListProps {
   showTimestamps?: boolean;
   /** Empty state content */
   emptyState?: React.ReactNode;
+  /** Show citations section under assistant messages */
+  enableCitations?: boolean;
 }
 
 /**
@@ -35,6 +42,8 @@ export function ChatMessageList({
   messages,
   isStreaming = false,
   streamingText,
+  progressMessage,
+  activeToolCalls,
   className,
   autoScroll = true,
   renderActions,
@@ -42,6 +51,7 @@ export function ChatMessageList({
   showAvatars = true,
   showTimestamps = false,
   emptyState,
+  enableCitations = true,
 }: ChatMessageListProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -51,7 +61,7 @@ export function ChatMessageList({
     if (autoScroll && bottomRef.current) {
       bottomRef.current.scrollIntoView({ behavior: "smooth" });
     }
-  }, [messages, streamingText, autoScroll]);
+  }, [messages, streamingText, activeToolCalls, autoScroll]);
 
   if (messages.length === 0 && !isStreaming) {
     return (
@@ -88,6 +98,7 @@ export function ChatMessageList({
             renderAvatar={renderAvatar}
             showAvatar={showAvatars}
             showTimestamp={showTimestamps}
+            enableCitations={enableCitations}
           />
         ))}
 
@@ -106,7 +117,43 @@ export function ChatMessageList({
             streamingText={streamingText}
             renderAvatar={renderAvatar}
             showAvatar={showAvatars}
+            enableCitations={enableCitations}
           />
+        )}
+
+        {/* Thinking / loading indicator when streaming but no text yet */}
+        {isStreaming && !streamingText && (
+          <div className="flex gap-4 px-4 py-6 bg-chat-bg-secondary animate-fade-in">
+            {showAvatars && (
+              <div className="flex-shrink-0">
+                {renderAvatar ? renderAvatar("assistant") : (
+                  <div className="w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium bg-chat-bg-tertiary text-chat-text-primary">
+                    AI
+                  </div>
+                )}
+              </div>
+            )}
+            <div className="flex-1 min-w-0 flex flex-col gap-3 py-1">
+              {/* Active tool calls during streaming */}
+              {activeToolCalls && activeToolCalls.size > 0 && (
+                <ToolCalls
+                  toolCalls={activeToolCalls}
+                  isExecuting={true}
+                />
+              )}
+              {/* Show loading dots only when no tool calls are active */}
+              {(!activeToolCalls || activeToolCalls.size === 0) && (
+                <div className="flex items-center gap-1.5">
+                  <div className="w-2 h-2 bg-chat-text-tertiary rounded-full animate-pulse-dot" />
+                  <div className="w-2 h-2 bg-chat-text-tertiary rounded-full animate-pulse-dot animation-delay-200" />
+                  <div className="w-2 h-2 bg-chat-text-tertiary rounded-full animate-pulse-dot animation-delay-400" />
+                </div>
+              )}
+              {progressMessage && (
+                <div className="text-xs text-chat-text-tertiary">{progressMessage}</div>
+              )}
+            </div>
+          </div>
         )}
 
         <div ref={bottomRef} />
