@@ -4,6 +4,7 @@ import React, { useState, useRef, useCallback, useEffect, useImperativeHandle, f
 import { cn, formatFileSize } from "../../utils";
 import type { FileAttachment } from "../../types";
 import { SendIcon, PaperclipIcon, XIcon, StopIcon } from "./Icons";
+import { useI18n } from "../../hooks";
 
 export interface ChatInputHandle {
   /** Programmatically focus the textarea */
@@ -53,7 +54,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   onFileRemove,
   isLoading = false,
   pendingFiles = [],
-  placeholder = "Type a message...",
+  placeholder,
   enableFileUpload = true,
   allowedFileTypes,
   maxFiles = 10,
@@ -63,9 +64,12 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   renderStopButton,
   autoFocus = false,
 }, ref) {
+  const { t } = useI18n();
   const [value, setValue] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  
+  const defaultPlaceholder = placeholder ?? t("chat.input.placeholder");
 
   // Expose focus method to parent via ref
   useImperativeHandle(ref, () => ({
@@ -153,6 +157,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
                   <button
                     onClick={() => onFileRemove(file.id)}
                     className="p-0.5 hover:bg-chat-bg-hover rounded"
+                    title={t("chat.input.removeFile")}
                   >
                     <XIcon className="w-3.5 h-3.5 text-chat-text-tertiary" />
                   </button>
@@ -182,7 +187,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
                   "flex-shrink-0 p-3 text-chat-text-secondary hover:text-chat-text-primary transition-colors",
                   (disabled || pendingFiles.length >= maxFiles) && "opacity-50 cursor-not-allowed"
                 )}
-                title="Attach files"
+                title={t("chat.input.attachFiles")}
               >
                 <PaperclipIcon className="w-5 h-5" />
               </button>
@@ -195,7 +200,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
             value={value}
             onChange={handleChange}
             onKeyDown={handleKeyDown}
-            placeholder={placeholder}
+            placeholder={defaultPlaceholder}
             disabled={disabled}
             rows={1}
             className={cn(
@@ -213,7 +218,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
                 <button
                   onClick={onStop}
                   className="p-2 bg-chat-text-secondary hover:bg-chat-text-primary text-chat-bg-primary rounded-lg transition-colors"
-                  title="Stop generation"
+                  title={t("chat.input.stop")}
                 >
                   <StopIcon className="w-4 h-4" />
                 </button>
@@ -230,7 +235,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
                     ? "bg-chat-text-primary text-chat-bg-primary hover:bg-chat-text-secondary"
                     : "bg-chat-bg-hover text-chat-text-tertiary cursor-not-allowed"
                 )}
-                title="Send message"
+                title={t("chat.input.send")}
               >
                 <SendIcon className="w-4 h-4" />
               </button>
@@ -240,7 +245,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
 
         {/* Helper text */}
         <div className="text-center mt-2 text-xs text-chat-text-tertiary">
-          Press Enter to send, Shift+Enter for new line
+          {t("chat.input.helper")}
         </div>
       </div>
     </div>

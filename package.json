@@ -40,8 +40,10 @@
     "react-dom": ">=18.0.0"
   },
   "dependencies": {
+    "@formatjs/intl": "^2.10.0",
     "clsx": "^2.1.0",
     "lucide-react": "^0.312.0",
+    "react-intl": "^6.6.0",
     "react-markdown": "^9.0.1",
     "remark-gfm": "^4.0.0",
     "tailwind-merge": "^2.2.0"

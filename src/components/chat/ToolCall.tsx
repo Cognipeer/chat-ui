@@ -4,6 +4,7 @@ import React, { useState } from "react";
 import { cn } from "../../utils";
 import type { ToolCallDisplayProps } from "../../types";
 import { ChevronDownIcon, ChevronRightIcon, ToolIcon, LoadingIcon } from "./Icons";
+import { useI18n } from "../../hooks/useI18n";
 
 export interface ToolCallProps extends Omit<ToolCallDisplayProps, "onToggle" | "isExpanded"> {
   /** Custom class name */
@@ -82,6 +83,7 @@ export function ToolCalls({
   durationSeconds,
   defaultExpanded = false,
 }: ToolCallsProps) {
+  const { t } = useI18n();
   const [isExpanded, setIsExpanded] = useState(defaultExpanded);
 
   // Normalise to array
@@ -153,7 +155,7 @@ export function ToolCalls({
             )}
             <ToolIcon className="w-3 h-3" />
             <span>
-              {olderCalls.length} previous step{olderCalls.length !== 1 ? "s" : ""}
+              {t("chat.toolCall.previousSteps", { count: olderCalls.length })}
               {durationSeconds && !isExecuting ? ` · ${durationSeconds}s` : ""}
             </span>
           </button>
@@ -225,7 +227,7 @@ function CheckCircleIcon({ className }: { className?: string }) {
  * Format tool name for display
  */
 function formatToolName(name: string | undefined): string {
-  if (!name) return "Unknown Tool";
+  if (!name) return "Unknown Tool"; // Fallback - normally shouldn't happen
   return name
     .replace(/_/g, " ")
     .replace(/([a-z])([A-Z])/g, "$1 $2")

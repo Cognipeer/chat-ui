@@ -4,6 +4,7 @@ import React, { useMemo, useState } from "react";
 import { cn, formatRelativeTime } from "../../utils";
 import type { ConversationListItem } from "../../types";
 import { ChatIcon, TrashIcon, PlusIcon, SearchIcon, XIcon } from "./Icons";
+import { useI18n } from "../../hooks";
 
 export interface ChatHistoryProps {
   /** Conversations list */
@@ -55,6 +56,7 @@ export function ChatHistory({
   footer,
   enableSearch = false,
 }: ChatHistoryProps) {
+  const { t } = useI18n();
   const [searchQuery, setSearchQuery] = useState("");
 
   const normalizedQuery = searchQuery.trim().toLowerCase();
@@ -97,7 +99,7 @@ export function ChatHistory({
                 className="w-full flex items-center gap-2 px-3 py-2 text-sm bg-chat-bg-tertiary hover:bg-chat-bg-hover rounded-lg text-chat-text-primary transition-colors"
               >
                 <PlusIcon className="w-3 h-3" />
-                <span>New Chat</span>
+                <span>{t("chat.history.newChat")}</span>
               </button>
             )}
           </div>
@@ -111,7 +113,7 @@ export function ChatHistory({
                 type="text"
                 value={searchQuery}
                 onChange={(event) => setSearchQuery(event.target.value)}
-                placeholder="Search chats..."
+                placeholder={t("chat.history.searchPlaceholder")}
                 className="w-full bg-chat-bg-tertiary border border-chat-border-primary rounded-lg pl-9 pr-9 py-2 text-sm text-chat-text-primary placeholder:text-chat-text-tertiary focus:outline-none focus:border-chat-accent-primary"
               />
               {searchQuery && (
@@ -119,7 +121,7 @@ export function ChatHistory({
                   type="button"
                   onClick={() => setSearchQuery("")}
                   className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-chat-text-tertiary hover:text-chat-text-primary"
-                  aria-label="Clear search"
+                  aria-label={t("chat.history.clearSearch")}
                 >
                   <XIcon className="w-4 h-4" />
                 </button>
@@ -132,7 +134,7 @@ export function ChatHistory({
         <div className="flex-1 overflow-y-auto chat-scrollbar">
           {filteredConversations.length === 0 && !isLoading ? (
             <div className="p-4 text-center text-chat-text-tertiary text-sm">
-              {normalizedQuery ? "No matching conversations" : "No conversations yet"}
+              {normalizedQuery ? t("chat.history.noMatchingConversations") : t("chat.history.noConversations")}
             </div>
           ) : (
             <div className="p-2">
@@ -152,7 +154,7 @@ export function ChatHistory({
                   onClick={onLoadMore}
                   className="w-full py-2 text-sm text-chat-accent-primary hover:underline"
                 >
-                  Load more
+                  {t("chat.history.loadMore")}
                 </button>
               )}
 
@@ -193,6 +195,8 @@ function ConversationItem({
   onSelect,
   onDelete,
 }: ConversationItemProps) {
+  const { t } = useI18n();
+  
   return (
     <div
       className={cn(
@@ -219,7 +223,7 @@ function ConversationItem({
             onDelete();
           }}
           className="opacity-0 group-hover:opacity-100 p-1 hover:bg-chat-bg-hover rounded transition-all"
-          title="Delete conversation"
+          title={t("chat.history.deleteConversation")}
         >
           <TrashIcon className="w-4 h-4 text-chat-text-tertiary hover:text-red-400" />
         </button>

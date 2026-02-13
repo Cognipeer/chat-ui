@@ -4,6 +4,7 @@ import React, { useState } from "react";
 import { cn } from "../../utils";
 import type { MessageActionProps } from "../../types";
 import { ThumbsUpIcon, ThumbsDownIcon, CopyIcon, RefreshIcon, CheckIcon } from "./Icons";
+import { useI18n } from "../../hooks";
 
 export interface MessageActionsProps extends MessageActionProps {
   /** Callback when copy is clicked */
@@ -36,6 +37,7 @@ export function MessageActions({
   showFeedback = true,
   className,
 }: MessageActionsProps) {
+  const { t } = useI18n();
   const [copied, setCopied] = useState(false);
   const [feedback, setFeedback] = useState<"positive" | "negative" | null>(null);
 
@@ -52,7 +54,7 @@ export function MessageActions({
       onCopy?.(content);
       setTimeout(() => setCopied(false), 2000);
     } catch (error) {
-      console.error("Failed to copy:", error);
+      console.error(t("chat.actions.failedToCopy"), error);
     }
   };
 
@@ -66,7 +68,7 @@ export function MessageActions({
       {showCopy && (
         <ActionButton
           onClick={handleCopy}
-          title={copied ? "Copied!" : "Copy"}
+          title={copied ? t("chat.actions.copied") : t("chat.actions.copy")}
           active={copied}
         >
           {copied ? <CheckIcon className="w-4 h-4" /> : <CopyIcon className="w-4 h-4" />}
@@ -76,7 +78,7 @@ export function MessageActions({
       {showRegenerate && onRegenerate && (
         <ActionButton
           onClick={() => onRegenerate(message.id)}
-          title="Regenerate"
+          title={t("chat.actions.regenerate")}
         >
           <RefreshIcon className="w-4 h-4" />
         </ActionButton>
@@ -86,14 +88,14 @@ export function MessageActions({
         <>
           <ActionButton
             onClick={() => handleFeedback("positive")}
-            title="Good response"
+            title={t("chat.actions.goodResponse")}
             active={feedback === "positive"}
           >
             <ThumbsUpIcon className="w-4 h-4" />
           </ActionButton>
           <ActionButton
             onClick={() => handleFeedback("negative")}
-            title="Bad response"
+            title={t("chat.actions.badResponse")}
             active={feedback === "negative"}
           >
             <ThumbsDownIcon className="w-4 h-4" />

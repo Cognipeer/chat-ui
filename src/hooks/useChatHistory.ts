@@ -3,6 +3,7 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import type { ConversationListItem, ChatConfig } from "../types";
 import { AgentServerClient } from "../api";
+import { useI18n } from "./useI18n";
 
 export interface UseChatHistoryOptions extends Pick<ChatConfig, "baseUrl" | "agentId" | "authorization" | "headers"> {
   /** Enable auto-loading on mount */
@@ -34,6 +35,7 @@ export interface UseChatHistoryReturn {
  * Hook for managing chat history
  */
 export function useChatHistory(options: UseChatHistoryOptions): UseChatHistoryReturn {
+  const { t } = useI18n();
   const {
     baseUrl,
     agentId,
@@ -76,11 +78,11 @@ export function useChatHistory(options: UseChatHistoryOptions): UseChatHistoryRe
       setHasMore(response.hasMore);
       setOffset(pageSize);
     } catch (err) {
-      setError(err instanceof Error ? err : new Error("Failed to load conversations"));
+      setError(err instanceof Error ? err : new Error(t("chat.error.loadConversationsFailed")));
     } finally {
       setIsLoading(false);
     }
-  }, [agentId, pageSize]);
+  }, [t, agentId, pageSize]);
 
   const loadMore = useCallback(async () => {
     if (!clientRef.current || isLoading || !hasMore) return;
@@ -97,11 +99,11 @@ export function useChatHistory(options: UseChatHistoryOptions): UseChatHistoryRe
       setHasMore(response.hasMore);
       setOffset((prev) => prev + pageSize);
     } catch (err) {
-      setError(err instanceof Error ? err : new Error("Failed to load more conversations"));
+      setError(err instanceof Error ? err : new Error(t("chat.error.loadMoreFailed")));
     } finally {
       setIsLoading(false);
     }
-  }, [agentId, pageSize, offset, isLoading, hasMore]);
+  }, [t, agentId, pageSize, offset, isLoading, hasMore]);
 
   const refresh = useCallback(async () => {
     setOffset(0);
@@ -114,9 +116,9 @@ export function useChatHistory(options: UseChatHistoryOptions): UseChatHistoryRe
       await clientRef.current.deleteConversation(id);
       setConversations((prev) => prev.filter((c) => c.id !== id));
     } catch (err) {
-      setError(err instanceof Error ? err : new Error("Failed to delete conversation"));
+      setError(err instanceof Error ? err : new Error(t("chat.error.deleteConversationFailed")));
     }
-  }, []);
+  }, [t]);
 
   // Auto-load on mount and whenever agentId changes
   useEffect(() => {

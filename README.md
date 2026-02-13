@@ -10,6 +10,7 @@ A customizable React chat UI component library for AI agents. Features a ChatGPT
 - 🔧 **Tool Call UI** - Expandable tool call visualization
 - 💬 **Chat History** - Sidebar with conversation history
 - 🎯 **Customizable Actions** - Add feedback buttons or custom actions to messages
+- 🌍 **Internationalization** - Built-in i18n with English and Turkish support
 - ⚛️ **React 18+** - Modern React with hooks
 - 🎨 **Tailwind CSS** - Utility-first styling
 
@@ -108,6 +109,121 @@ function App() {
 }
 ```
 
+## Internationalization (i18n)
+
+The library includes built-in internationalization support with English and Turkish translations. Language is detected from the URL query parameter (`?lang=en` or `?lang=tr`). If no query parameter is provided, it defaults to English (or the specified `defaultLocale`).
+
+### Auto-detect from URL Query Parameter
+
+```tsx
+// URL: https://example.com/chat?lang=tr
+<Chat
+  baseUrl="http://localhost:3000/api"
+  agentId="my-agent"
+/>
+// Will automatically use Turkish
+
+// URL: https://example.com/chat (no query parameter)
+<Chat
+  baseUrl="http://localhost:3000/api"
+  agentId="my-agent"
+/>
+// Will use English (default)
+```
+
+### Set Default Locale
+
+```tsx
+<Chat
+  baseUrl="http://localhost:3000/api"
+  agentId="my-agent"
+  defaultLocale="tr"
+/>
+```
+
+### Controlled Locale
+
+```tsx
+import { useState } from "react";
+import { Chat, type SupportedLocale } from "@cognipeer/chat-ui";
+
+function App() {
+  const [locale, setLocale] = useState<SupportedLocale>("en");
+  
+  return (
+    <>
+      <button onClick={() => setLocale(locale === "en" ? "tr" : "en")}>
+        Switch Language
+      </button>
+      <Chat
+        baseUrl="http://localhost:3000/api"
+        agentId="my-agent"
+        locale={locale}
+        onLocaleChange={setLocale}
+      />
+    </>
+  );
+}
+```
+
+### Using i18n Hook
+
+```tsx
+import { useI18n } from "@cognipeer/chat-ui";
+
+function MyComponent() {
+  const { t, locale, setLocale } = useI18n();
+  
+  return (
+    <div>
+      <p>{t("chat.input.placeholder")}</p>
+      <p>Current language: {locale}</p>
+      <button onClick={() => setLocale(locale === "en" ? "tr" : "en")}>
+        {locale === "en" ? "Türkçe" : "English"}
+      </button>
+    </div>
+  );
+}
+```
+
+### Custom Messages
+
+You can provide custom translations:
+
+```tsx
+import { ChatI18nProvider } from "@cognipeer/chat-ui";
+
+<ChatI18nProvider
+  defaultLocale="en"
+  customMessages={{
+    en: {
+      "chat.input.placeholder": "Write your message here...",
+    },
+    tr: {
+      "chat.input.placeholder": "Mesajınızı buraya yazın...",
+    },
+  }}
+>
+  <Chat baseUrl="..." agentId="..." />
+</ChatI18nProvider>
+```
+
+### Supported Locales
+
+- `en` - English (default)
+- `tr` - Turkish
+
+**Language Detection:**
+1. URL query parameter (`?lang=en` or `?lang=tr`)
+2. Falls back to `defaultLocale` prop (default: `en`)
+
+All UI strings are automatically translated including:
+- Input placeholders
+- Button labels
+- Messages
+- Tooltips
+- Error messages
+
 ## Custom Message Actions (Feedback)
 
 ```tsx
@@ -157,7 +273,10 @@ function CustomChat() {
   const chat = useChat({
     baseUrl: "http://localhost:3000/api",
     agentId: "my-agent",
-    streaming: true,
+   locale` | `"en" \| "tr"` | - | Override locale (auto-detect if not set) |
+| `defaultLocale` | `"en" \| "tr"` | `"en"` | Default locale |
+| `onLocaleChange` | `function` | - | Callback when locale changes |
+| ` streaming: true,
     onMessageReceived: (message) => {
       console.log("New message:", message);
     },
@@ -323,6 +442,18 @@ Returns:
 - `isLoading` - Loading state
 - `hasMore` - Has more items
 - `load()` - Load conversations
+
+### `useI18n()`
+
+Internationalization hook.
+
+Returns:
+- `t(key, values?)` - Translate a key
+- `locale` - Current locale (`"en"` or `"tr"`)
+- `setLocale(locale)` - Change locale (also updates URL query param)
+- `formatNumber(value, options?)` - Format a number
+- `formatDate(value, options?)` - Format a date
+- `formatRelativeTime(value, unit)` - Format relative time
 - `loadMore()` - Load more
 - `refresh()` - Refresh list
 - `deleteConversation(id)` - Delete conversation

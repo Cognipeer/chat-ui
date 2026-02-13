@@ -10,10 +10,12 @@ export { MessageActions, type MessageActionsProps } from "./components/chat";
 // Hooks
 export { useChat, type UseChatOptions, type UseChatReturn } from "./hooks";
 export { useChatHistory, type UseChatHistoryOptions, type UseChatHistoryReturn } from "./hooks";
+export { useI18n, type UseI18nReturn } from "./hooks";
 
 // Providers
 export { ChatThemeProvider, useChatTheme, useChatThemeOptional } from "./providers";
 export { ChatProvider, useChatContext, useChatContextOptional, type ChatProviderProps } from "./providers";
+export { ChatI18nProvider, useI18nContext, useI18nContextOptional, type ChatI18nProviderProps, type SupportedLocale } from "./providers";
 
 // API Client
 export { AgentServerClient } from "./api";

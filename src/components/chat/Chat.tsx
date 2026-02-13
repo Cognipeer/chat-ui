@@ -11,9 +11,9 @@ import type {
   ChatCallbacks,
   MessageActionProps,
 } from "../../types";
-import { ChatThemeProvider } from "../../providers";
+import { ChatThemeProvider, ChatI18nProvider, type SupportedLocale } from "../../providers";
 import { AgentServerClient } from "../../api";
-import { useChat, useChatHistory } from "../../hooks";
+import { useChat, useChatHistory, useI18n } from "../../hooks";
 import { ChatMessageList } from "./ChatMessageList";
 import { ChatInput } from "./ChatInput";
 import type { ChatInputHandle } from "./ChatInput";
@@ -70,6 +70,12 @@ export interface ChatProps extends ChatConfig, ChatCallbacks {
   enableCitations?: boolean;
   /** Called when selected agent changes (multi-agent mode) */
   onAgentChange?: (agentId: string) => void;
+  /** Language/locale (auto-detected from ?lang query param if not provided) */
+  locale?: SupportedLocale;
+  /** Default locale when no query parameter is found */
+  defaultLocale?: SupportedLocale;
+  /** Callback when locale changes */
+  onLocaleChange?: (locale: SupportedLocale) => void;
 }
 
 /**
@@ -120,7 +126,12 @@ export function Chat({
   autoFocusInput = false,
   enableMessageSearch = false,
   enableCitations = true,
+  // I18n
+  locale,
+  defaultLocale = "en",
+  onLocaleChange,
 }: ChatProps) {
+  const { t } = useI18n();
   const [historyOpen, setHistoryOpen] = useState(defaultHistoryOpen);
 
   // Ref for the ChatInput so we can focus it programmatically
@@ -276,13 +287,18 @@ export function Chat({
   const showAgentSelector = !chat.isLoadingConversation && chat.messages.length === 0;
 
   return (
-    <ChatThemeProvider
-      defaultMode={theme}
-      theme={{
-        mode: theme,
-        colors: themeColors,
-      }}
+    <ChatI18nProvider
+      locale={locale}
+      defaultLocale={defaultLocale}
+      onLocaleChange={onLocaleChange}
     >
+      <ChatThemeProvider
+        defaultMode={theme}
+        theme={{
+          mode: theme,
+          colors: themeColors,
+        }}
+      >
       <div
         className={cn(
           "chat-container flex h-full bg-chat-bg-primary text-chat-text-primary",
@@ -322,7 +338,7 @@ export function Chat({
             <DefaultHeader
               showMenuButton={showHistory}
               onMenuClick={() => setHistoryOpen(true)}
-              title={chat.conversation?.title || "New Chat"}
+              title={chat.conversation?.title || t("chat.history.newChat")}
               agents={agents}
               selectedAgentId={effectiveAgentId}
               onAgentChange={handleAgentChange}
@@ -339,7 +355,7 @@ export function Chat({
                   <div className="w-2.5 h-2.5 bg-chat-text-tertiary rounded-full animate-pulse-dot animation-delay-200" />
                   <div className="w-2.5 h-2.5 bg-chat-text-tertiary rounded-full animate-pulse-dot animation-delay-400" />
                 </div>
-                <span className="text-sm text-chat-text-tertiary">Loading conversation...</span>
+                <span className="text-sm text-chat-text-tertiary">{t("chat.loading.conversation")}</span>
               </div>
             </div>
           ) : (
@@ -369,7 +385,7 @@ export function Chat({
                     onClick={() => chat.setError(null)}
                     className="text-red-400 hover:text-red-300"
                   >
-                    Dismiss
+                    {t("chat.error.dismiss")}
                   </button>
                 </div>
               </div>
@@ -393,7 +409,8 @@ export function Chat({
           />
         </div>
       </div>
-    </ChatThemeProvider>
+      </ChatThemeProvider>
+    </ChatI18nProvider>
   );
 }
 
@@ -414,6 +431,7 @@ interface DefaultHeaderProps {
 const CHAT_HEADER_HEIGHT = "h-[58px]";
 
 function DefaultHeader({ showMenuButton, onMenuClick, title, agents = [], selectedAgentId, onAgentChange, showAgentSelector = true }: DefaultHeaderProps) {
+  const { t } = useI18n();
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const showAgentPicker = agents.length > 1 && showAgentSelector;
@@ -451,7 +469,7 @@ function DefaultHeader({ showMenuButton, onMenuClick, title, agents = [], select
           >
             <BotIcon className="w-4 h-4 text-chat-accent-primary flex-shrink-0" />
             <span className="text-sm font-medium truncate">
-              {selectedAgent?.name || "Select Agent"}
+              {selectedAgent?.name || t("chat.header.selectAgent")}
             </span>
             <ChevronDownIcon className={cn("w-3 h-3 text-chat-text-tertiary transition-transform flex-shrink-0", dropdownOpen && "rotate-180")} />
           </button>

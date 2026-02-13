@@ -1,6 +1,24 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 
+// Type definition for i18n function
+type I18nFunction = (key: string, values?: Record<string, string | number>) => string;
+
+// Global i18n function reference (set by I18nProvider)
+let globalI18n: I18nFunction | null = null;
+
+export function setGlobalI18n(i18n: I18nFunction) {
+  globalI18n = i18n;
+}
+
+function getI18n(): I18nFunction {
+  if (!globalI18n) {
+    // Fallback: return key as-is if i18n not initialized
+    return (key: string) => key;
+  }
+  return globalI18n;
+}
+
 /**
  * Merge Tailwind CSS classes with clsx
  */
@@ -23,16 +41,17 @@ export function formatFileSize(bytes: number): string {
  * Format date to relative time string
  */
 export function formatRelativeTime(date: Date): string {
+  const t = getI18n();
   const now = new Date();
   const diffMs = now.getTime() - date.getTime();
   const diffMins = Math.floor(diffMs / 60000);
   const diffHours = Math.floor(diffMs / 3600000);
   const diffDays = Math.floor(diffMs / 86400000);
 
-  if (diffMins < 1) return "Just now";
-  if (diffMins < 60) return `${diffMins}m ago`;
-  if (diffHours < 24) return `${diffHours}h ago`;
-  if (diffDays < 7) return `${diffDays}d ago`;
+  if (diffMins < 1) return t("chat.time.justNow");
+  if (diffMins < 60) return t("chat.time.minutesAgo", { minutes: diffMins });
+  if (diffHours < 24) return t("chat.time.hoursAgo", { hours: diffHours });
+  if (diffDays < 7) return t("chat.time.daysAgo", { days: diffDays });
 
   return date.toLocaleDateString();
 }

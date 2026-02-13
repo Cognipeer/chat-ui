@@ -7,6 +7,7 @@ import { cn } from "../../utils";
 import type { Message, MessageActionProps, FileAttachment, Citation } from "../../types";
 import { FileIcon } from "./Icons";
 import { ToolCalls } from "./ToolCall";
+import { useI18n } from "../../hooks";
 
 export interface ChatMessageProps {
   /** The message to display */
@@ -113,6 +114,7 @@ export function ChatMessage({
  * Default avatar component
  */
 function DefaultAvatar({ role }: { role: Message["role"] }) {
+  const { t } = useI18n();
   const isUser = role === "user";
 
   return (
@@ -124,7 +126,7 @@ function DefaultAvatar({ role }: { role: Message["role"] }) {
           : "bg-chat-bg-tertiary text-chat-text-primary"
       )}
     >
-      {isUser ? "U" : "AI"}
+      {isUser ? t("chat.message.user") : t("chat.message.ai")}
     </div>
   );
 }
@@ -142,6 +144,8 @@ function StreamingCursor() {
  * File attachments display
  */
 function FileAttachments({ files }: { files: FileAttachment[] }) {
+  const { t } = useI18n();
+  
   return (
     <div className="flex flex-wrap gap-2 mt-2">
       {files.map((file) => (
@@ -160,7 +164,7 @@ function FileAttachments({ files }: { files: FileAttachment[] }) {
               rel="noopener noreferrer"
               className="text-chat-accent-primary hover:underline"
             >
-              Download
+              {t("chat.file.download")}
             </a>
           )}
         </div>
@@ -170,6 +174,7 @@ function FileAttachments({ files }: { files: FileAttachment[] }) {
 }
 
 function MessageCitations({ citations }: { citations: Citation[] }) {
+  const { t } = useI18n();
   const DEFAULT_VISIBLE_CITATIONS = 5;
   const [showAll, setShowAll] = React.useState(false);
 
@@ -178,10 +183,10 @@ function MessageCitations({ citations }: { citations: Citation[] }) {
 
   return (
     <div className="mt-3">
-      <div className="text-xs font-medium text-chat-text-secondary mb-2">Sources</div>
+      <div className="text-xs font-medium text-chat-text-secondary mb-2">{t("chat.message.sources")}</div>
       <div className="space-y-2">
         {visibleCitations.map((citation, index) => {
-          const title = citation.title?.trim() || `Source ${index + 1}`;
+          const title = citation.title?.trim() || t("chat.message.source", { index: index + 1 });
           
           return (
             <div
@@ -224,7 +229,7 @@ function MessageCitations({ citations }: { citations: Citation[] }) {
             className="text-xs text-chat-accent-primary hover:underline"
             onClick={() => setShowAll((current) => !current)}
           >
-            {showAll ? "Show Less" : `Show All (${citations.length})`}
+            {showAll ? t("chat.message.showLess") : t("chat.message.showAll", { count: citations.length })}
           </button>
         </div>
       )}

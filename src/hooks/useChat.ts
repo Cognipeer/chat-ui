@@ -5,6 +5,7 @@ import { flushSync } from "react-dom";
 import { generateId } from "../utils";
 import type { Message, FileAttachment, ChatConfig, ChatCallbacks, Conversation } from "../types";
 import { AgentServerClient } from "../api";
+import { useI18n } from "./useI18n";
 
 export interface UseChatOptions extends ChatConfig, ChatCallbacks {
   /** Initial conversation ID */
@@ -72,6 +73,7 @@ export interface UseChatReturn {
  * Hook for managing chat state and interactions
  */
 export function useChat(options: UseChatOptions): UseChatReturn {
+  const { t } = useI18n();
   const {
     baseUrl,
     agentId,
@@ -140,17 +142,17 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       setConversation(data.conversation);
       setMessages(data.messages);
     } catch (err) {
-      const error = err instanceof Error ? err : new Error("Failed to load conversation");
+      const error = err instanceof Error ? err : new Error(t("chat.error.loadConversationFailed"));
       setError(error);
       onError?.(error);
     } finally {
       setIsLoadingConversation(false);
     }
-  }, [onError]);
+  }, [t, onError]);
 
   const createConversation = useCallback(async (title?: string, overrideAgentId?: string): Promise<Conversation> => {
     if (!clientRef.current) {
-      throw new Error("API client not initialized");
+      throw new Error(t("chat.error.clientNotInitialized"));
     }
 
     const conv = await clientRef.current.createConversation({
@@ -161,7 +163,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     setMessages([]);
     onConversationCreated?.(conv);
     return conv;
-  }, [agentId, onConversationCreated]);
+  }, [t, agentId, onConversationCreated]);
 
   const sendMessage = useCallback(async (content: string) => {
     if (!clientRef.current || !content.trim()) return;
@@ -366,7 +368,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         onMessageReceived?.(response.response);
       }
     } catch (err) {
-      const error = err instanceof Error ? err : new Error("Failed to send message");
+      const error = err instanceof Error ? err : new Error(t("chat.error.sendFailed"));
       setError(error);
       onError?.(error);
     } finally {
@@ -374,6 +376,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       abortControllerRef.current = null;
     }
   }, [
+    t,
     conversation,
     createConversation,
     pendingFiles,
@@ -394,13 +397,13 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     for (const file of files) {
       // Check file count
       if (pendingFiles.length + validFiles.length >= maxFiles) {
-        onError?.(new Error(`Maximum ${maxFiles} files allowed`));
+        onError?.(new Error(t("chat.file.tooMany", { maxFiles })));
         break;
       }
 
       // Check file size
       if (file.size > maxFileSize) {
-        onError?.(new Error(`File ${file.name} exceeds maximum size`));
+        onError?.(new Error(t("chat.file.tooLarge", { fileName: file.name })));
         continue;
       }
 
@@ -410,7 +413,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
           (type) => file.type === type || file.name.endsWith(type.replace("*", ""))
         );
         if (!isAllowed) {
-          onError?.(new Error(`File type ${file.type} not allowed`));
+          onError?.(new Error(t("chat.file.invalidType", { fileType: file.type })));
           continue;
         }
       }
@@ -429,7 +432,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     }
 
     setPendingFiles((prev) => [...prev, ...validFiles]);
-  }, [enableFileUpload, pendingFiles, maxFiles, maxFileSize, allowedFileTypes, onError]);
+  }, [t, enableFileUpload, pendingFiles, maxFiles, maxFileSize, allowedFileTypes, onError]);
 
   const removeFile = useCallback((fileId: string) => {
     rawFilesRef.current.delete(fileId);

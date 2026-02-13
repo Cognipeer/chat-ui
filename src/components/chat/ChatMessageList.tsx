@@ -5,6 +5,7 @@ import { cn } from "../../utils";
 import type { Message, MessageActionProps } from "../../types";
 import { ChatMessage } from "./ChatMessage";
 import { ToolCalls } from "./ToolCall";
+import { useI18n } from "../../hooks/useI18n";
 
 export interface ChatMessageListProps {
   /** Messages to display */
@@ -53,6 +54,7 @@ export function ChatMessageList({
   emptyState,
   enableCitations = true,
 }: ChatMessageListProps) {
+  const { t } = useI18n();
   const containerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -128,7 +130,7 @@ export function ChatMessageList({
               <div className="flex-shrink-0">
                 {renderAvatar ? renderAvatar("assistant") : (
                   <div className="w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium bg-chat-bg-tertiary text-chat-text-primary">
-                    AI
+                    {t("chat.message.ai")}
                   </div>
                 )}
               </div>
@@ -166,13 +168,15 @@ export function ChatMessageList({
  * Default empty state
  */
 function DefaultEmptyState() {
+  const { t } = useI18n();
+  
   return (
     <div className="text-center">
       <div className="text-chat-text-secondary text-lg mb-2">
-        Start a conversation
+        {t("chat.empty.subtitle")}
       </div>
       <div className="text-chat-text-tertiary text-sm">
-        Type a message below to begin chatting
+        {t("chat.empty.startTyping")}
       </div>
     </div>
   );
