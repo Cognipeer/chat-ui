@@ -1,6 +1,6 @@
 {
   "name": "@cognipeer/chat-ui",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A customizable React chat UI component for AI agents",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
@@ -21,8 +21,12 @@
   ],
   "scripts": {
     "dev": "tsup --watch",
-    "build": "tsup && npm run build:css",
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "npm run clean && tsup && npm run build:css",
     "build:css": "tailwindcss -i ./src/styles/globals.css -o ./dist/styles.css --minify",
+    "verify:dist": "node scripts/verify-dist.js",
+    "prepack": "npm run build && npm run verify:dist",
+    "prepublishOnly": "npm run prepack",
     "lint": "eslint src/",
     "typecheck": "tsc --noEmit",
     "storybook": "storybook dev -p 6006",
