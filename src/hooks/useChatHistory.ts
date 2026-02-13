@@ -5,6 +5,13 @@ import type { ConversationListItem, ChatConfig } from "../types";
 import { AgentServerClient } from "../api";
 import { useI18n } from "./useI18n";
 
+// Survives Strict Mode remount so we only ever fire one initial load per config
+const initialLoadDoneKeys = new Set<string>();
+
+function getLoadKey(baseUrl: string, agentId?: string): string {
+  return `${baseUrl}|${agentId ?? ""}`;
+}
+
 export interface UseChatHistoryOptions extends Pick<ChatConfig, "baseUrl" | "agentId" | "authorization" | "headers"> {
   /** Enable auto-loading on mount */
   autoLoad?: boolean;
@@ -21,11 +28,11 @@ export interface UseChatHistoryReturn {
   error: Error | null;
   /** Has more items */
   hasMore: boolean;
-  /** Load conversations */
-  load: () => Promise<void>;
+  /** Load conversations (showLoading: false for silent refresh, e.g. after new message) */
+  load: (options?: { showLoading?: boolean }) => Promise<void>;
   /** Load more conversations */
   loadMore: () => Promise<void>;
-  /** Refresh the list */
+  /** Refresh the list (silent: no loading indicator) */
   refresh: () => Promise<void>;
   /** Delete a conversation */
   deleteConversation: (id: string) => Promise<void>;
@@ -62,10 +69,11 @@ export function useChatHistory(options: UseChatHistoryOptions): UseChatHistoryRe
     });
   }, [baseUrl, agentId, authorization, headers]);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (options?: { showLoading?: boolean }) => {
     if (!clientRef.current) return;
+    const showLoading = options?.showLoading !== false;
     try {
-      setIsLoading(true);
+      if (showLoading) setIsLoading(true);
       setError(null);
       // When agentId is undefined/empty, don't filter — return all conversations
       const params: { agentId?: string; limit: number; offset: number } = {
@@ -80,7 +88,7 @@ export function useChatHistory(options: UseChatHistoryOptions): UseChatHistoryRe
     } catch (err) {
       setError(err instanceof Error ? err : new Error(t("chat.error.loadConversationsFailed")));
     } finally {
-      setIsLoading(false);
+      if (showLoading) setIsLoading(false);
     }
   }, [t, agentId, pageSize]);
 
@@ -107,7 +115,7 @@ export function useChatHistory(options: UseChatHistoryOptions): UseChatHistoryRe
 
   const refresh = useCallback(async () => {
     setOffset(0);
-    await load();
+    await load({ showLoading: false });
   }, [load]);
 
   const deleteConversation = useCallback(async (id: string) => {
@@ -120,12 +128,19 @@ export function useChatHistory(options: UseChatHistoryOptions): UseChatHistoryRe
     }
   }, [t]);
 
-  // Auto-load on mount and whenever agentId changes
+  const prevKeyRef = useRef(getLoadKey(baseUrl, agentId));
+
   useEffect(() => {
-    if (autoLoad) {
+    const key = getLoadKey(baseUrl, agentId);
+    if (prevKeyRef.current !== key) {
+      initialLoadDoneKeys.delete(prevKeyRef.current);
+      prevKeyRef.current = key;
+    }
+    if (autoLoad && !initialLoadDoneKeys.has(key)) {
+      initialLoadDoneKeys.add(key);
       load();
     }
-  }, [autoLoad, load]);
+  }, [autoLoad, load, baseUrl, agentId]);
 
   return {
     conversations,
