@@ -36,6 +36,8 @@ export interface UseChatHistoryReturn {
   refresh: () => Promise<void>;
   /** Delete a conversation */
   deleteConversation: (id: string) => Promise<void>;
+  /** Update a conversation in the list (e.g. title change). Local-only, no API call. */
+  updateConversation: (id: string, data: Partial<ConversationListItem>) => void;
 }
 
 /**
@@ -128,6 +130,12 @@ export function useChatHistory(options: UseChatHistoryOptions): UseChatHistoryRe
     }
   }, [t]);
 
+  const updateConversation = useCallback((id: string, data: Partial<ConversationListItem>) => {
+    setConversations((prev) =>
+      prev.map((c) => (c.id === id ? { ...c, ...data } : c))
+    );
+  }, []);
+
   const prevKeyRef = useRef(getLoadKey(baseUrl, agentId));
 
   useEffect(() => {
@@ -151,5 +159,6 @@ export function useChatHistory(options: UseChatHistoryOptions): UseChatHistoryRe
     loadMore,
     refresh,
     deleteConversation,
+    updateConversation,
   };
 }

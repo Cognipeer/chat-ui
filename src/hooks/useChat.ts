@@ -93,6 +93,8 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     onToolResult,
     onError,
     onConversationCreated,
+    onConversationTitleGenerated,
+    onBackgroundStreamCompleted,
   } = options;
 
   const [messages, setMessages] = useState<Message[]>(initialMessages);
@@ -115,6 +117,11 @@ export function useChat(options: UseChatOptions): UseChatReturn {
   // Map file attachment IDs to raw File objects so we can read base64 later
   const rawFilesRef = useRef<Map<string, File>>(new Map());
 
+  // Session counter — incremented on every navigation (new chat, load conversation).
+  // Async stream callbacks capture the value at call-time; if it differs from the
+  // current ref value the callback is stale and must not touch component state.
+  const sessionRef = useRef(0);
+
   // Keep a stable client reference that updates synchronously when config changes
   useMemo(() => {
     clientRef.current = new AgentServerClient({
@@ -124,6 +131,22 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       headers,
     });
   }, [baseUrl, agentId, authorization, headers]);
+
+  /**
+   * Reset transient streaming UI state without aborting the HTTP request.
+   * The in-flight stream continues in the background so the server can
+   * finish processing and persist the assistant message. The `isStale()`
+   * guards inside `sendMessage` callbacks prevent the old stream from
+   * polluting the new session's state.
+   */
+  const resetStreamingState = useCallback(() => {
+    setStreamingText("");
+    activeToolCallsRef.current = new Map();
+    toolCallStartTimeRef.current = null;
+    setActiveToolCalls(new Map());
+    setProgressMessage("");
+    setIsStreaming(false);
+  }, []);
 
   // Load initial conversation if provided
   useEffect(() => {
@@ -135,20 +158,35 @@ export function useChat(options: UseChatOptions): UseChatReturn {
   const loadConversation = useCallback(async (conversationId: string) => {
     if (!clientRef.current) return;
 
+    // Detach from any in-flight stream (don't abort — let it complete in
+    // the background so the server persists the response). Session counter
+    // invalidates all stale callbacks.
+    resetStreamingState();
+    sessionRef.current += 1;
+    const capturedSession = sessionRef.current;
+
     try {
       setIsLoadingConversation(true);
+      setMessages([]);
+      setConversation(null);
       setError(null);
       const data = await clientRef.current.getConversation(conversationId);
+      // If user navigated away while we were loading, discard the result
+      if (sessionRef.current !== capturedSession) return;
       setConversation(data.conversation);
       setMessages(data.messages);
     } catch (err) {
+      if (sessionRef.current !== capturedSession) return;
+      if (err instanceof DOMException && err.name === 'AbortError') return;
       const error = err instanceof Error ? err : new Error(t("chat.error.loadConversationFailed"));
       setError(error);
       onError?.(error);
     } finally {
-      setIsLoadingConversation(false);
+      if (sessionRef.current === capturedSession) {
+        setIsLoadingConversation(false);
+      }
     }
-  }, [t, onError]);
+  }, [t, onError, resetStreamingState]);
 
   const createConversation = useCallback(async (title?: string, overrideAgentId?: string): Promise<Conversation> => {
     if (!clientRef.current) {
@@ -168,6 +206,10 @@ export function useChat(options: UseChatOptions): UseChatReturn {
   const sendMessage = useCallback(async (content: string) => {
     if (!clientRef.current || !content.trim()) return;
 
+    // Capture the current session so async callbacks can detect staleness
+    const capturedSession = sessionRef.current;
+    const isStale = () => sessionRef.current !== capturedSession;
+
     setError(null);
     setIsStreaming(true);
     lastUserMessageRef.current = content;
@@ -177,6 +219,11 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       let currentConversation = conversation;
       if (!currentConversation) {
         currentConversation = await createConversation();
+        // User navigated while we were creating the conversation
+        if (isStale()) {
+          setConversation(null);
+          return;
+        }
       }
 
       // Read base64 content from raw File objects for each pending file
@@ -207,6 +254,9 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       for (const f of pendingFiles) {
         rawFilesRef.current.delete(f.id);
       }
+
+      // If user navigated away while we were reading files, bail out
+      if (isStale()) return;
 
       // Create optimistic user message
       const userMessage: Message = {
@@ -245,6 +295,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
               // Stream started
             },
             onText: (text, fullText) => {
+              if (isStale()) return;
               // Use flushSync to force immediate render during streaming
               setProgressMessage(""); // Clear progress when text arrives
               flushSync(() => {
@@ -253,11 +304,13 @@ export function useChat(options: UseChatOptions): UseChatReturn {
               onStreamText?.(text, fullText);
             },
             onProgress: (event) => {
+              if (isStale()) return;
               if (event.type === "stream.progress") {
                 setProgressMessage((event as any).message || "");
               }
             },
             onToolCall: (event) => {
+              if (isStale()) return;
               if (event.type === "stream.tool_call") {
                 // Track when the first tool call starts
                 if (toolCallStartTimeRef.current === null) {
@@ -280,6 +333,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
               }
             },
             onToolResult: (event) => {
+              if (isStale()) return;
               if (event.type === "stream.tool_result") {
                 flushSync(() => {
                   setActiveToolCalls((prev) => {
@@ -296,12 +350,20 @@ export function useChat(options: UseChatOptions): UseChatReturn {
               }
             },
             onError: (err) => {
+              if (isStale()) return;
               setError(err);
               setIsStreaming(false);
               onError?.(err);
             },
             onDone: (event) => {
               if (event.type === "stream.done") {
+                // If user navigated away, the server has already persisted the
+                // assistant message. Notify the host so it can refresh the
+                // sidebar, but do NOT touch component state.
+                if (isStale()) {
+                  onBackgroundStreamCompleted?.(event.conversationId);
+                  return;
+                }
                 // Snapshot tool calls before clearing
                 const currentToolCalls = activeToolCallsRef.current;
                 const toolCallsForMessage = currentToolCalls.size > 0
@@ -345,6 +407,11 @@ export function useChat(options: UseChatOptions): UseChatReturn {
                 setActiveToolCalls(new Map());
                 setProgressMessage("");
                 setIsStreaming(false);
+                // Update conversation title if server generated one
+                if (event.title) {
+                  setConversation((prev) => prev ? { ...prev, title: event.title } : prev);
+                  onConversationTitleGenerated?.(event.conversationId, event.title);
+                }
                 setMessages((prev) => [...prev, assistantMessage]);
                 onMessageReceived?.(assistantMessage);
               }
@@ -360,20 +427,38 @@ export function useChat(options: UseChatOptions): UseChatReturn {
           stream: false,
         });
 
+        if (isStale()) {
+          // Server already persisted the response — notify sidebar refresh
+          onBackgroundStreamCompleted?.(currentConversation!.id);
+          return;
+        }
+
         setMessages((prev) => {
           // Replace optimistic user message with actual
           const filtered = prev.filter((m) => m.id !== userMessage.id);
           return [...filtered, response.message, response.response];
         });
+        // Update conversation title if server generated one
+        if (response.conversationTitle) {
+          setConversation((prev) => prev ? { ...prev, title: response.conversationTitle } : prev);
+          if (currentConversation) {
+            onConversationTitleGenerated?.(currentConversation.id, response.conversationTitle);
+          }
+        }
         onMessageReceived?.(response.response);
       }
     } catch (err) {
+      // Ignore stale sessions (user navigated away) and abort errors (user stopped)
+      if (isStale()) return;
+      if (err instanceof DOMException && err.name === 'AbortError') return;
       const error = err instanceof Error ? err : new Error(t("chat.error.sendFailed"));
       setError(error);
       onError?.(error);
     } finally {
-      setIsStreaming(false);
-      abortControllerRef.current = null;
+      if (!isStale()) {
+        setIsStreaming(false);
+        abortControllerRef.current = null;
+      }
     }
   }, [
     t,
@@ -387,6 +472,8 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     onToolCall,
     onToolResult,
     onError,
+    onConversationTitleGenerated,
+    onBackgroundStreamCompleted,
   ]);
 
   const addFiles = useCallback(async (files: File[]) => {
@@ -440,10 +527,15 @@ export function useChat(options: UseChatOptions): UseChatReturn {
   }, []);
 
   const clearMessages = useCallback(() => {
+    resetStreamingState();
+    sessionRef.current += 1;
     setMessages([]);
     setConversation(null);
     setError(null);
-  }, []);
+    setPendingFiles([]);
+    rawFilesRef.current.clear();
+    lastUserMessageRef.current = "";
+  }, [resetStreamingState]);
 
   const retry = useCallback(async () => {
     if (lastUserMessageRef.current) {

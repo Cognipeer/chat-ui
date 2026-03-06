@@ -68,6 +68,13 @@ export interface ChatProps extends ChatConfig, ChatCallbacks {
   enableMessageSearch?: boolean;
   /** Show citations section under assistant messages */
   enableCitations?: boolean;
+  /**
+   * Show agent name below the conversation title in the history sidebar.
+   * - `true`  → always show
+   * - `false` → never show
+   * - `undefined` (default) → show only when there are multiple agents
+   */
+  showAgentName?: boolean;
   /** Called when selected agent changes (multi-agent mode) */
   onAgentChange?: (agentId: string) => void;
   /** Language/locale (auto-detected from ?lang query param if not provided) */
@@ -104,6 +111,7 @@ export function Chat({
   onError,
   onConversationCreated,
   onConversationSelected,
+  onConversationTitleGenerated,
   onAgentChange,
   // UI options
   className,
@@ -126,6 +134,7 @@ export function Chat({
   autoFocusInput = false,
   enableMessageSearch = false,
   enableCitations = true,
+  showAgentName,
   // I18n
   locale,
   defaultLocale = "en",
@@ -201,6 +210,8 @@ export function Chat({
   onMessageReceivedRef.current = onMessageReceived;
   const onConversationCreatedRef = useRef(onConversationCreated);
   onConversationCreatedRef.current = onConversationCreated;
+  const onConversationTitleGeneratedRef = useRef(onConversationTitleGenerated);
+  onConversationTitleGeneratedRef.current = onConversationTitleGenerated;
   const historyRef = useRef<ReturnType<typeof useChatHistory> | null>(null);
 
   const wrappedOnMessageReceived = useCallback((message: Message) => {
@@ -212,6 +223,21 @@ export function Chat({
 
   const wrappedOnConversationCreated = useCallback((conv: Conversation) => {
     onConversationCreatedRef.current?.(conv);
+    if (showHistory) {
+      historyRef.current?.refresh();
+    }
+  }, [showHistory]);
+
+  const wrappedOnConversationTitleGenerated = useCallback((conversationId: string, title: string) => {
+    onConversationTitleGeneratedRef.current?.(conversationId, title);
+    if (showHistory) {
+      historyRef.current?.updateConversation(conversationId, { title });
+    }
+  }, [showHistory]);
+
+  // When a background stream completes (user navigated away), refresh sidebar
+  // so the conversation entry reflects the latest server state.
+  const wrappedOnBackgroundStreamCompleted = useCallback((_conversationId: string) => {
     if (showHistory) {
       historyRef.current?.refresh();
     }
@@ -237,6 +263,8 @@ export function Chat({
     onToolResult,
     onError,
     onConversationCreated: wrappedOnConversationCreated,
+    onConversationTitleGenerated: wrappedOnConversationTitleGenerated,
+    onBackgroundStreamCompleted: wrappedOnBackgroundStreamCompleted,
   });
 
   // History state — when there are multiple agents, don't filter by agentId
@@ -321,6 +349,7 @@ export function Chat({
             header={renderHistoryHeader?.()}
             footer={renderHistoryFooter?.()}
             enableSearch={enableMessageSearch}
+            showAgentName={showAgentName ?? false}
           />
         )}
 

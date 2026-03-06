@@ -30,6 +30,8 @@ interface SendMessageOptions {
 interface SendMessageResponse {
   message: Message;
   response: Message;
+  /** Auto-generated title (only on first message, when server has titleGeneration configured) */
+  conversationTitle?: string;
   usage?: {
     inputTokens?: number;
     outputTokens?: number;
@@ -67,6 +69,11 @@ export class AgentServerClient {
     if (!response.ok) {
       const error = await response.json().catch(() => ({ message: "Request failed" }));
       throw new Error(error.error?.message || error.message || "Request failed");
+    }
+
+    // 204 No Content — no body to parse
+    if (response.status === 204) {
+      return undefined as T;
     }
 
     return response.json();

@@ -68,6 +68,8 @@ export interface Conversation {
 export interface ConversationListItem {
   id: string;
   title?: string;
+  /** Agent display name, populated by the server */
+  agentName?: string;
   agentId: string;
   createdAt: Date;
   updatedAt: Date;
@@ -144,6 +146,8 @@ export interface StreamDoneEvent extends StreamEventBase {
   messageId: string;
   content: string;
   citations?: Citation[];
+  /** Auto-generated title from the server (only on first message) */
+  title?: string;
   usage?: {
     inputTokens?: number;
     outputTokens?: number;
@@ -275,6 +279,11 @@ export interface ChatCallbacks {
   onConversationCreated?: (conversation: Conversation) => void;
   /** Called when a conversation is selected from history */
   onConversationSelected?: (conversation: ConversationListItem) => void;
+  /** Called when the server auto-generates a conversation title (first message) */
+  onConversationTitleGenerated?: (conversationId: string, title: string) => void;
+  /** Called when a background stream completes after the user navigated away.
+   *  Receives the conversationId so the host can refresh sidebar / state. */
+  onBackgroundStreamCompleted?: (conversationId: string) => void;
 }
 
 export interface MessageActionProps {

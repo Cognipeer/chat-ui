@@ -35,6 +35,11 @@ export interface ChatHistoryProps {
   footer?: React.ReactNode;
   /** Enable search input for filtering conversation history */
   enableSearch?: boolean;
+  /**
+   * Show agent name below the conversation title.
+   * Defaults to true when not specified.
+   */
+  showAgentName?: boolean;
 }
 
 /**
@@ -55,6 +60,7 @@ export function ChatHistory({
   header,
   footer,
   enableSearch = false,
+  showAgentName = false,
 }: ChatHistoryProps) {
   const { t } = useI18n();
   const [searchQuery, setSearchQuery] = useState("");
@@ -66,7 +72,7 @@ export function ChatHistory({
     }
 
     return conversations.filter((conversation) => {
-      const title = (conversation.title || "New Chat").toLowerCase();
+      const title = (conversation.title || t("chat.history.newChat")).toLowerCase();
       return title.includes(normalizedQuery);
     });
   }, [conversations, normalizedQuery]);
@@ -145,6 +151,7 @@ export function ChatHistory({
                   isSelected={conversation.id === selectedId}
                   onSelect={() => onSelect(conversation)}
                   onDelete={onDelete ? () => onDelete(conversation.id) : undefined}
+                  showAgentName={showAgentName}
                 />
               ))}
 
@@ -187,6 +194,7 @@ interface ConversationItemProps {
   isSelected: boolean;
   onSelect: () => void;
   onDelete?: () => void;
+  showAgentName?: boolean;
 }
 
 function ConversationItem({
@@ -194,6 +202,7 @@ function ConversationItem({
   isSelected,
   onSelect,
   onDelete,
+  showAgentName = false,
 }: ConversationItemProps) {
   const { t } = useI18n();
   
@@ -210,10 +219,16 @@ function ConversationItem({
       <ChatIcon className="w-4 h-4 text-chat-text-tertiary flex-shrink-0" />
       <div className="flex-1 min-w-0">
         <div className="text-sm text-chat-text-primary truncate">
-          {conversation.title || "New Chat"}
+          {conversation.title || t("chat.history.newChat")}
         </div>
-        <div className="text-xs text-chat-text-tertiary">
-          {formatRelativeTime(new Date(conversation.updatedAt))}
+        <div className="text-xs text-chat-text-tertiary flex items-center gap-1 min-w-0">
+          {conversation.agentName && showAgentName && (
+            <>
+              <span className="truncate">{conversation.agentName}</span>
+              <span className="flex-shrink-0 opacity-50">·</span>
+            </>
+          )}
+          <span className="flex-shrink-0">{formatRelativeTime(new Date(conversation.updatedAt))}</span>
         </div>
       </div>
       {onDelete && (
