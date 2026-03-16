@@ -3,45 +3,41 @@ layout: home
 
 hero:
   name: Chat UI
-  text: React Chat Components for AI Agents
-  tagline: Customizable, streaming-ready chat UI with dark/light themes, file uploads, and tool visualization
+  text: Ship Polished Chat Surfaces For AI Agents
+  tagline: A production-ready React chat UI with streaming, tool-call rendering, history, uploads, and theme controls for real product integrations.
   image:
-    src: /logo.svg
+    src: /ChatUI.svg
     alt: Chat UI
   actions:
     - theme: brand
       text: Get Started
       link: /guide/getting-started
     - theme: alt
-      text: View on GitHub
-      link: https://github.com/Cognipeer/chat-ui
+      text: Study Architecture
+      link: /guide/architecture
 
 features:
-  - icon: 🎨
-    title: Customizable Theme
-    details: Dark and light modes with full color customization via CSS variables or props.
-  - icon: 📡
-    title: Streaming Support
-    details: Real-time SSE streaming with text updates and tool call visualization.
-  - icon: 📁
-    title: File Uploads
-    details: Built-in file attachment support with drag-and-drop and preview.
-  - icon: 🔧
-    title: Tool Call UI
-    details: Expandable tool call visualization with arguments and results.
-  - icon: 💬
-    title: Chat History
-    details: Sidebar with conversation history, search, and management.
-  - icon: 🎯
-    title: Customizable Actions
-    details: Add feedback buttons, copy, or custom actions to messages.
-  - icon: ⚛️
-    title: React 18+
-    details: Modern React with hooks, TypeScript support, and server components ready.
-  - icon: 🎨
-    title: Tailwind CSS
-    details: Utility-first styling with easy customization.
+  - title: Streaming That Feels Product Ready
+    details: Render partial assistant output, tool-call activity, and follow-up UI without stitching together a chat surface from low-level primitives.
+  - title: Tool Calls With Inspectable State
+    details: Show arguments, results, and expandable tool traces in a way that fits operational agent workflows instead of generic message bubbles.
+  - title: History, Sessions, And Workspace Chat
+    details: Move from a minimal single-thread chat to a full sidebar-based conversation experience without changing your application model.
+  - title: Theming Without Forking The UI
+    details: Tune dark and light surfaces, accent colors, spacing, and overrides through tokens and props while keeping the core interaction model intact.
+  - title: Uploads, Feedback, And Product Hooks
+    details: Add file attachments, custom message actions, and integration hooks where teams usually end up rebuilding the chat stack by hand.
+  - title: React Integration That Scales
+    details: Use the full `Chat` surface, `ChatMinimal`, lower-level hooks, or component composition patterns depending on how much control your product needs.
 ---
+
+## Start Here
+
+If you are integrating `chat-ui` for the first time, read the docs in this order:
+
+1. [Getting Started](/guide/getting-started) to get a working chat surface on screen quickly.
+2. [Core Concepts](/guide/core-concepts) to understand the message model, streaming flow, and session behavior.
+3. [Architecture](/guide/architecture) to see how components, hooks, and the agent client fit together.
 
 ## Quick Start
 
@@ -61,8 +57,6 @@ pnpm add @cognipeer/chat-ui
 
 :::
 
-## Basic Usage
-
 ```tsx
 import { Chat } from "@cognipeer/chat-ui";
 import "@cognipeer/chat-ui/styles.css";
@@ -80,59 +74,9 @@ function App() {
 }
 ```
 
-## Features at a Glance
+## What This Site Covers
 
-### Dark Theme (Default)
-
-```tsx
-<Chat
-  baseUrl="/api/agents"
-  agentId="assistant"
-  theme="dark"
-/>
-```
-
-### Light Theme
-
-```tsx
-<Chat
-  baseUrl="/api/agents"
-  agentId="assistant"
-  theme="light"
-/>
-```
-
-### With Authentication
-
-```tsx
-<Chat
-  baseUrl="/api/agents"
-  agentId="assistant"
-  authorization="Bearer your-token"
-/>
-```
-
-### Minimal (No History)
-
-```tsx
-import { ChatMinimal } from "@cognipeer/chat-ui";
-
-<ChatMinimal
-  baseUrl="/api/agents"
-  agentId="assistant"
-/>
-```
-
-### Custom Theme Colors
-
-```tsx
-<Chat
-  baseUrl="/api/agents"
-  agentId="assistant"
-  themeColors={{
-    bgPrimary: "#1a1a2e",
-    bgSecondary: "#16213e",
-    accentPrimary: "#e94560",
-  }}
-/>
-```
+- A fast path from install to production-ready chat UI without rebuilding assistant surfaces from scratch.
+- Clear guidance for when to use the full workspace chat, `ChatMinimal`, or lower-level hooks and building blocks.
+- Practical documentation for streaming, theming, uploads, history, custom actions, and agent-server integration.
+- A product-led docs surface that keeps `chat-ui` branding while using the same presentation shell as the broader Cognipeer docs stack.

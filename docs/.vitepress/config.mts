@@ -2,17 +2,20 @@ import { defineConfig } from 'vitepress';
 
 export default defineConfig({
   title: 'Chat UI',
-  description: 'Production-ready React chat UI components for AI applications',
+  description: 'A production-grade React chat surface for AI agents with streaming, tool-call rendering, uploads, and theming.',
   base: '/chat-ui/',
   ignoreDeadLinks: true,
+  appearance: false,
   themeConfig: {
-    logo: '/logo.svg',
+    logo: '/ChatUI.svg',
+    siteTitle: 'Chat UI',
     nav: [
       { text: 'Guide', link: '/guide/getting-started' },
-      { text: 'API Reference', link: '/api/hooks' },
+      { text: 'Architecture', link: '/guide/architecture' },
+      { text: 'API Reference', link: '/api/' },
       { text: 'Examples', link: '/examples/' },
       {
-        text: 'v0.1.0',
+        text: 'v0.1.3',
         items: [
           { text: 'Changelog', link: '/changelog' },
           { text: 'Contributing', link: '/contributing' },
@@ -104,16 +107,19 @@ export default defineConfig({
       { icon: 'github', link: 'https://github.com/Cognipeer/chat-ui' },
     ],
     footer: {
-      message: 'Released under the MIT License.',
-      copyright: 'Copyright © 2025 CognipeerAI',
+      message: 'Chat UI is part of the Cognipeer platform.',
+      copyright: 'Copyright © 2026 Cognipeer',
     },
     search: {
       provider: 'local',
     },
   },
   head: [
-    ['link', { rel: 'icon', type: 'image/svg+xml', href: '/favicon.svg' }],
-    ['meta', { name: 'theme-color', content: '#10a37f' }],
+    ['link', { rel: 'preconnect', href: 'https://fonts.googleapis.com' }],
+    ['link', { rel: 'preconnect', href: 'https://fonts.gstatic.com', crossorigin: '' }],
+    ['link', { rel: 'stylesheet', href: 'https://fonts.googleapis.com/css2?family=Lexend+Deca:wght@400;500;600;700;800&display=swap' }],
+    ['link', { rel: 'icon', type: 'image/svg+xml', href: '/chat-ui/favicon.svg' }],
+    ['meta', { name: 'theme-color', content: '#00b5a5' }],
     ['meta', { name: 'og:type', content: 'website' }],
     ['meta', { name: 'og:locale', content: 'en' }],
     ['meta', { name: 'og:site_name', content: 'Chat UI Documentation' }],
