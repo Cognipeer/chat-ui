@@ -118,7 +118,7 @@ export default defineConfig({
     ['link', { rel: 'preconnect', href: 'https://fonts.googleapis.com' }],
     ['link', { rel: 'preconnect', href: 'https://fonts.gstatic.com', crossorigin: '' }],
     ['link', { rel: 'stylesheet', href: 'https://fonts.googleapis.com/css2?family=Lexend+Deca:wght@400;500;600;700;800&display=swap' }],
-    ['link', { rel: 'icon', type: 'image/svg+xml', href: '/chat-ui/favicon.svg' }],
+    ['link', { rel: 'icon', type: 'image/svg+xml', href: '/chat-ui/ChatUI.svg' }],
     ['meta', { name: 'theme-color', content: '#00b5a5' }],
     ['meta', { name: 'og:type', content: 'website' }],
     ['meta', { name: 'og:locale', content: 'en' }],
