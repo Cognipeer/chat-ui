@@ -1,5 +1,9 @@
 # Debugging
 
-For integration troubleshooting, runtime diagnostics, and common issue fixes, see:
+The main troubleshooting guide now lives here:
+
+- [Debugging & Tracing](/guide/debugging-tracing)
+
+For the broader reference-style troubleshooting section, see:
 
 - [Debugging Guide](/debugging/)

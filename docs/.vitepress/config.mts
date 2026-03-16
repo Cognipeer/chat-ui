@@ -36,18 +36,25 @@ export default defineConfig({
         {
           text: 'Features',
           items: [
+            { text: 'Runtime Profiles', link: '/guide/runtime-profiles' },
             { text: 'State Management', link: '/guide/state-management' },
             { text: 'Theming', link: '/guide/theming' },
             { text: 'Streaming', link: '/guide/streaming' },
             { text: 'File Uploads', link: '/guide/file-uploads' },
             { text: 'Tool Calls', link: '/guide/tool-calls' },
+            { text: 'Structured Output', link: '/guide/structured-output' },
+            { text: 'Guardrails', link: '/guide/guardrails' },
             { text: 'History Sidebar', link: '/guide/history' },
+            { text: 'MCP Integration', link: '/guide/mcp-integration' },
             { text: 'Custom Actions', link: '/guide/custom-actions' },
           ],
         },
         {
           text: 'Integration',
           items: [
+            { text: 'Auth & Headers', link: '/guide/auth-and-headers' },
+            { text: 'Router Sync', link: '/guide/router-sync' },
+            { text: 'Custom Layout Composition', link: '/guide/custom-layout-composition' },
             { text: 'Next.js', link: '/guide/nextjs' },
             { text: 'Vite', link: '/guide/vite' },
             { text: 'Agent Server', link: '/guide/agent-server' },
@@ -56,7 +63,8 @@ export default defineConfig({
         {
           text: 'Advanced',
           items: [
-            { text: 'Debugging', link: '/guide/debugging' },
+            { text: 'Limits & Tokens', link: '/guide/limits-and-tokens' },
+            { text: 'Debugging & Tracing', link: '/guide/debugging-tracing' },
             { text: 'FAQ', link: '/guide/faq' },
           ],
         },

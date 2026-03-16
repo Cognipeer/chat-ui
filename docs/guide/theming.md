@@ -1,6 +1,15 @@
 # Theming
 
-Customize the appearance of your chat UI with themes and colors.
+Customize the appearance of your chat UI without forking the interaction model or rewriting the components.
+
+## Choose The Right Theming Level
+
+| Tool | Best for | Scope |
+| --- | --- | --- |
+| `theme` prop | Simple dark/light switching | One `Chat` or `ChatMinimal` instance |
+| `themeColors` prop | Quick brand alignment on the top-level chat surface | One `Chat` or `ChatMinimal` instance |
+| `ChatThemeProvider` | Shared theme state across multiple chat-related components | A composed React subtree |
+| CSS variables | Product-wide design system integration and host-app styling | Any container where the CSS variables are applied |
 
 ## Theme Modes
 
@@ -24,7 +33,7 @@ Chat UI supports dark and light themes:
 
 ## Custom Colors
 
-Override specific colors using `themeColors`:
+Override a focused set of top-level colors using `themeColors`:
 
 ```tsx
 <Chat
@@ -42,26 +51,26 @@ Override specific colors using `themeColors`:
 />
 ```
 
-### Available Color Properties
+Use `themeColors` when you want a faster brand pass but do not need a full custom theme management model.
+
+### `themeColors` Keys
 
 | Property | Description | Default (Dark) |
 |----------|-------------|----------------|
 | `bgPrimary` | Main background | `#212121` |
 | `bgSecondary` | Secondary background | `#171717` |
 | `bgTertiary` | Tertiary background | `#2f2f2f` |
-| `bgHover` | Hover state background | `#3f3f3f` |
 | `textPrimary` | Primary text | `#ececec` |
 | `textSecondary` | Secondary text | `#b4b4b4` |
-| `textTertiary` | Tertiary text | `#8e8e8e` |
-| `textInverse` | Inverse text | `#171717` |
-| `borderPrimary` | Primary border | `#3f3f3f` |
-| `borderSecondary` | Secondary border | `#2f2f2f` |
 | `accentPrimary` | Primary accent (buttons) | `#10a37f` |
-| `accentSecondary` | Secondary accent | `#1a7f64` |
+
+If you need to override the full token set, use `ChatThemeProvider` or CSS variables instead of `themeColors`.
 
 ## CSS Variables
 
-The library uses CSS variables for theming. Override them in your CSS:
+The library uses CSS variables internally. This is the best entry point when your host app already has its own theming system or when multiple chat-related components need to inherit the same tokens.
+
+Override them in your CSS:
 
 ```css
 :root {
@@ -83,7 +92,7 @@ The library uses CSS variables for theming. Override them in your CSS:
 ### Light Theme Variables
 
 ```css
-.light {
+.chat-theme-light {
   --chat-bg-primary: #ffffff;
   --chat-bg-secondary: #f7f7f8;
   --chat-bg-tertiary: #ececec;
@@ -98,6 +107,8 @@ The library uses CSS variables for theming. Override them in your CSS:
   --chat-accent-secondary: #1a7f64;
 }
 ```
+
+These CSS variables support the full token surface, including hover, border, and secondary accent colors.
 
 ## Theme Provider
 
@@ -122,8 +133,10 @@ function App() {
   return (
     <ChatThemeProvider
       defaultMode="dark"
-      colors={{
-        accentPrimary: "#e94560",
+      theme={{
+        colors: {
+          accentPrimary: "#e94560",
+        },
       }}
     >
       <ThemeToggle />
@@ -135,6 +148,8 @@ function App() {
   );
 }
 ```
+
+Use the provider when you have more than one chat component in the same React subtree or when theme state needs to be controlled from custom UI outside the built-in `Chat` shell.
 
 ## Dynamic Theme Switching
 
@@ -172,7 +187,7 @@ Example with brand colors:
   agentId="assistant"
   themeColors={{
     accentPrimary: "#3b82f6",
-    accentSecondary: "#2563eb",
+    bgTertiary: "#dbeafe",
   }}
 />
 
@@ -182,7 +197,7 @@ Example with brand colors:
   agentId="assistant"
   themeColors={{
     accentPrimary: "#8b5cf6",
-    accentSecondary: "#7c3aed",
+    bgTertiary: "#ede9fe",
   }}
 />
 
@@ -194,10 +209,27 @@ Example with brand colors:
     bgPrimary: "#1a1a2e",
     bgSecondary: "#16213e",
     accentPrimary: "#e94560",
-    accentSecondary: "#c73e54",
   }}
 />
 ```
+
+## Recommended Override Order
+
+1. Start with `theme="light"` or `theme="dark"` to choose the base mode.
+2. Add `themeColors` if you only need a small set of brand color changes.
+3. Move to `ChatThemeProvider` when multiple components need shared theme state.
+4. Use CSS variables when the chat surface must inherit from a broader application theme system.
+
+Following this order keeps your styling resilient and avoids unnecessary component-level CSS overrides.
+
+## Brand Adaptation Workflow
+
+For most teams, the cleanest approach is:
+
+1. Pick the base mode that matches the product surface.
+2. Set `accentPrimary` and the background tokens to align with brand color.
+3. Check message contrast, input affordances, and hover states before adding any custom selectors.
+4. Only add custom CSS once the token-based result is clearly insufficient.
 
 ## Component-Level Styling
 
@@ -221,6 +253,8 @@ Override styles for specific components:
   border-radius: 24px;
 }
 ```
+
+Use component-level CSS for layout polish or host-page fit, not as the first tool for recoloring the interface.
 
 ## Tailwind CSS Integration
 
@@ -246,6 +280,13 @@ module.exports = {
   },
 };
 ```
+
+## Common Mistakes
+
+- Overriding deep internal selectors before trying `themeColors` or CSS variables.
+- Mixing hard-coded brand colors with token-based backgrounds, resulting in low contrast.
+- Applying custom container backgrounds without adjusting border and hover tokens.
+- Managing shared theme state manually when `ChatThemeProvider` already fits the job.
 
 ## Next Steps
 

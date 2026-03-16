@@ -4,12 +4,30 @@ Manage conversation history with the built-in sidebar.
 
 ## Overview
 
-The `Chat` component includes a history sidebar that shows:
+The `Chat` component includes a built-in history sidebar for products that want a workspace-style chat experience without building session management UI from scratch.
+
+It can show:
 
 - List of past conversations
 - Create new conversation button
 - Delete conversation option
 - Conversation titles and dates
+
+## When Built-In History Is Enough
+
+Use the default history behavior when:
+
+- one sidebar is enough for your product
+- conversations come from a single backend contract
+- you want creation, selection, and deletion built in
+- your product does not need router-driven history UI yet
+
+Reach for custom history composition when:
+
+- the conversation list must sync with the URL or another app router
+- history lives in a custom workspace layout
+- you need to mix chat sessions with other product entities in one navigation surface
+- you want search, filters, or access rules beyond the built-in sidebar behavior
 
 ## Enable/Disable History
 
@@ -37,7 +55,9 @@ import { ChatMinimal } from "@cognipeer/chat-ui";
 />
 ```
 
-## History Callbacks
+## Conversation Lifecycle Callbacks
+
+Use callbacks when the host app needs to react to session changes:
 
 ```tsx
 <Chat
@@ -50,11 +70,16 @@ import { ChatMinimal } from "@cognipeer/chat-ui";
     console.log("Selected:", conversation.id);
     // Update URL, analytics, etc.
   }}
-  onConversationDeleted={(conversationId) => {
-    console.log("Deleted:", conversationId);
+  onConversationTitleGenerated={(conversationId, title) => {
+    console.log("Title updated:", conversationId, title);
+  }}
+  onBackgroundStreamCompleted={(conversationId) => {
+    console.log("Refresh after background stream:", conversationId);
   }}
 />
 ```
+
+These hooks are useful for analytics, routing, or keeping other parts of your app synchronized with the active conversation.
 
 ## useChatHistory Hook
 
@@ -97,6 +122,8 @@ function CustomHistory() {
 }
 ```
 
+`useChatHistory` is the right abstraction when you want to keep server-backed conversation state but render your own layout.
+
 ## ChatHistory Component
 
 Use the standalone component:
@@ -119,10 +146,14 @@ function CustomLayout() {
     <div className="flex">
       <ChatHistory
         conversations={history.conversations}
-        currentConversationId={chat.conversation?.id}
-        onSelect={(conv) => chat.loadConversation(conv.id)}
+        selectedId={chat.conversation?.id}
+        isLoading={history.isLoading}
+        hasMore={history.hasMore}
+        onSelect={(conversation) => chat.loadConversation(conversation.id)}
         onDelete={history.deleteConversation}
-        onNew={() => chat.createConversation()}
+        onNewChat={() => chat.createConversation()}
+        onLoadMore={history.loadMore}
+        enableSearch
       />
       
       <div className="flex-1">
@@ -133,123 +164,32 @@ function CustomLayout() {
 }
 ```
 
-## Custom History Rendering
+## URL Sync And Conversation Identity
 
-```tsx
-<Chat
-  baseUrl="/api/agents"
-  agentId="assistant"
-  renderHistoryItem={({ conversation, isActive, onSelect, onDelete }) => (
-    <div
-      className={`history-item ${isActive ? 'active' : ''}`}
-      onClick={onSelect}
-    >
-      <div className="title">
-        {conversation.title || "New Chat"}
-      </div>
-      <div className="date">
-        {new Date(conversation.updatedAt).toLocaleDateString()}
-      </div>
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          onDelete();
-        }}
-      >
-        🗑️
-      </button>
-    </div>
-  )}
-/>
-```
+If your app uses router state, keep the conversation ID as the source of truth and treat the sidebar as a selector for that ID. The common pattern is:
 
-## Collapsible Sidebar
+1. Read a conversation ID from the URL.
+2. Call `loadConversation(id)` when it changes.
+3. Update the URL when `onConversationSelected` fires.
+4. Refresh history when background streams complete or titles change.
 
-The sidebar can be collapsed on mobile:
+That keeps deep linking and browser navigation consistent with the conversation list.
 
-```tsx
-// Built-in behavior handles responsive collapse
-// The Chat component manages this automatically
-```
+## Pagination And Longer Histories
 
-Custom collapse control:
+`useChatHistory` supports pagination through `hasMore` and `loadMore`. Keep that behavior in mind if your users can accumulate many threads.
 
-```tsx
-import { useState } from "react";
+For long-lived workspaces:
 
-function ResponsiveChat() {
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+- avoid assuming the first page contains every conversation
+- refresh silently after message activity instead of forcing full loading spinners
+- make deletion and creation flows explicit so users do not lose track of the active thread
 
-  return (
-    <div className="flex">
-      <button onClick={() => setSidebarOpen(!sidebarOpen)}>
-        {sidebarOpen ? "←" : "→"}
-      </button>
-      
-      {sidebarOpen && (
-        <div className="sidebar">
-          <ChatHistory {...historyProps} />
-        </div>
-      )}
-      
-      <div className="flex-1">
-        <ChatMinimal {...chatProps} />
-      </div>
-    </div>
-  );
-}
-```
+## Operational Notes
 
-## Conversation Titles
-
-Conversations can have titles:
-
-```tsx
-// Create with title
-const conversation = await chat.createConversation("My Important Chat");
-
-// Update title
-await updateConversation(conversation.id, {
-  title: "Updated Title",
-});
-```
-
-## Search/Filter History
-
-```tsx
-import { useChatHistory } from "@cognipeer/chat-ui";
-import { useState, useMemo } from "react";
-
-function SearchableHistory() {
-  const [search, setSearch] = useState("");
-  const { conversations } = useChatHistory({
-    baseUrl: "/api/agents",
-    agentId: "assistant",
-  });
-
-  const filtered = useMemo(() => {
-    if (!search) return conversations;
-    return conversations.filter(c =>
-      c.title?.toLowerCase().includes(search.toLowerCase())
-    );
-  }, [conversations, search]);
-
-  return (
-    <div>
-      <input
-        type="text"
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        placeholder="Search conversations..."
-      />
-      
-      {filtered.map(conv => (
-        <div key={conv.id}>{conv.title}</div>
-      ))}
-    </div>
-  );
-}
-```
+- The built-in `Chat` sidebar already handles responsive open/close behavior on smaller screens.
+- Auto-generated conversation titles can arrive after the first message, so the history list should be treated as live metadata.
+- Deleting a conversation is a server-side action when you use the built-in hook and client model. Make sure the UX reflects that permanence.
 
 ## Styling
 

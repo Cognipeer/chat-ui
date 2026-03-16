@@ -6,6 +6,11 @@ Integrate Chat UI with `@cognipeer/agent-server`.
 
 Chat UI is designed to work seamlessly with `@cognipeer/agent-server`. The API endpoints match exactly.
 
+The clean boundary is:
+
+- `agent-server` owns auth, persistence, conversation APIs, and tool execution
+- `chat-ui` owns the frontend chat surface, streaming UI, and interaction flow
+
 ## Architecture
 
 ```
@@ -116,6 +121,8 @@ const agentServer = createAgentServer({
 />
 ```
 
+For frontend request-shaping guidance beyond the basic example, continue with [Auth & Headers](/guide/auth-and-headers).
+
 ## With JWT Authentication
 
 ### Server
@@ -155,6 +162,8 @@ function ChatPage() {
   );
 }
 ```
+
+This is the common production path when your host app already resolves user identity and just needs to forward the effective access token into the chat layer.
 
 ## Next.js Full Stack
 
@@ -249,6 +258,8 @@ function AgentSelector() {
 }
 ```
 
+Start with the built-in agent selection behavior first. Only move to a custom layout if agent choice affects routing or broader page structure.
+
 ## Custom Headers
 
 ```tsx
@@ -261,6 +272,8 @@ function AgentSelector() {
   }}
 />
 ```
+
+Custom headers are useful for multi-tenant products, request tracing, and workspace context. Read [Auth & Headers](/guide/auth-and-headers) for the integration model on the frontend side.
 
 ## Direct API Client Usage
 
@@ -276,27 +289,30 @@ const client = new AgentServerClient({
 });
 
 // List conversations
-const { conversations } = await client.listConversations();
+const { conversations } = await client.getConversations({ agentId: "assistant" });
 
 // Create conversation
-const { conversation } = await client.createConversation({ title: "New Chat" });
-
-// Send message
-const { message } = await client.sendMessage(conversation.id, {
-  message: "Hello!",
-  streaming: true,
+const conversation = await client.createConversation({
+  agentId: "assistant",
+  title: "New Chat",
 });
 
-// Stream response
-for await (const event of client.streamMessage(conversation.id, {
-  message: "Hello!",
-})) {
-  console.log(event);
-}
+// Send message
+await client.sendMessageStream(
+  conversation.id,
+  { message: "Hello!" },
+  {
+    onText: (chunk, fullText) => console.log(chunk, fullText),
+    onDone: (event) => console.log(event),
+  }
+);
 ```
 
 ## Next Steps
 
+- [Auth & Headers](/guide/auth-and-headers)
+- [MCP Integration](/guide/mcp-integration)
+- [Tool Calls](/guide/tool-calls)
 - [Examples](/examples/)
 - [useChat Hook](/api/use-chat)
 - [API Client](/api/client)
