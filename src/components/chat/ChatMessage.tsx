@@ -141,34 +141,60 @@ function StreamingCursor() {
 }
 
 /**
+ * Splits a file name into its base name and extension (extension includes
+ * the leading dot, e.g. ".docx"). Used so truncation never hides the
+ * extension — otherwise multiple export formats of the same document (e.g.
+ * "Report.md", "Report.docx", "Report.pdf") become visually indistinguishable
+ * once the shared long base name gets cut off.
+ */
+function splitFileName(name: string): { base: string; ext: string } {
+  const idx = name.lastIndexOf(".");
+  if (idx <= 0 || idx === name.length - 1) {
+    return { base: name, ext: "" };
+  }
+  return { base: name.slice(0, idx), ext: name.slice(idx) };
+}
+
+/**
  * File attachments display
  */
 function FileAttachments({ files }: { files: FileAttachment[] }) {
   const { t } = useI18n();
-  
+
   return (
     <div className="flex flex-wrap gap-2 mt-2">
-      {files.map((file) => (
-        <div
-          key={file.id}
-          className="flex items-center gap-2 px-3 py-2 bg-chat-bg-tertiary rounded-lg text-sm"
-        >
-          <FileIcon className="w-4 h-4 text-chat-text-secondary" />
-          <span className="text-chat-text-primary truncate max-w-[200px]">
-            {file.name}
-          </span>
-          {file.url && (
-            <a
-              href={file.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-chat-accent-primary hover:underline"
+      {files.map((file) => {
+        const { base, ext } = splitFileName(file.name);
+        return (
+          <div
+            key={file.id}
+            className="flex items-center gap-2 px-3 py-2 bg-chat-bg-tertiary rounded-lg text-sm"
+          >
+            <FileIcon className="w-4 h-4 text-chat-text-secondary flex-shrink-0" />
+            <span
+              className="text-chat-text-primary truncate max-w-[160px]"
+              title={file.name}
             >
-              {t("chat.file.download")}
-            </a>
-          )}
-        </div>
-      ))}
+              {base}
+            </span>
+            {ext && (
+              <span className="text-chat-text-secondary flex-shrink-0">
+                {ext}
+              </span>
+            )}
+            {file.url && (
+              <a
+                href={file.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-chat-accent-primary hover:underline flex-shrink-0"
+              >
+                {t("chat.file.download")}
+              </a>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
