@@ -2,6 +2,8 @@
 
 A customizable React chat UI component library for AI agents. Features a ChatGPT-like dark theme, streaming support, file uploads, tool call visualization, and seamless integration with `@cognipeer/agent-server`.
 
+
+Documentation: <https://docs.cognipeer.com/chat-ui/guide/getting-started>
 ## Features
 
 - 🎨 **Customizable Theme** - Dark/light modes with full color customization
