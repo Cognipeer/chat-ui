@@ -2,6 +2,24 @@
 
 All notable changes to Chat UI will be documented here.
 
+## [0.1.5] - 2026-08-25
+
+### Added
+
+- Inline citation markers. `Message.citationMarks` carries `{ offset, citationId }` pairs pointing into the answer text, and `ChatMessage` renders a small numbered marker at each offset linking to the source it names. The number matches the source's position in the list below, so a marker can be traced back to its document
+- `StreamDoneEvent.citationMarks`, so markers appear on a streamed answer without waiting for a refetch
+- `insertCitationMarkers`, `parseCitationHref`, `safeExternalHref` and `citationUrlTransform` are exported for hosts that render answers through their own markdown pipeline. `citationUrlTransform` is required there: react-markdown blanks out URL schemes it does not know, which erases the marker before it can be rendered
+
+### Changed
+
+- The source list shows the document name as its title, with the innermost folders as a muted second line. Synced documents are titled with their full path, so several sources from one folder repeated the same lines and pushed the filename out of view
+- The whole source row is the link target rather than only the title text
+- Source links are restricted to absolute `http(s)` URLs before being placed in an `href`
+
+### Note
+
+- Markers are styled by `.chat-citation` in the shipped stylesheet. Applications that do not import `@cognipeer/chat-ui/styles.css` will see unstyled markers
+
 ## [0.1.4] - 2026-07-10
 
 ### Fixed

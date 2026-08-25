@@ -4,6 +4,12 @@ import React from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { cn } from "../../utils";
+import {
+  insertCitationMarkers,
+  parseCitationHref,
+  safeExternalHref,
+  citationUrlTransform,
+} from "../../utils/citations";
 import type { Message, MessageActionProps, FileAttachment, Citation } from "../../types";
 import { FileIcon } from "./Icons";
 import { ToolCalls } from "./ToolCall";
@@ -48,6 +54,23 @@ export function ChatMessage({
   const isAssistant = message.role === "assistant";
   const content = isStreaming && streamingText ? streamingText : getTextContent(message.content);
 
+  // Offsets index the finished answer, so markers only go in once it is whole.
+  const showInlineCitations = enableCitations && isAssistant && !isStreaming;
+  const renderedContent = React.useMemo(
+    () =>
+      showInlineCitations
+        ? insertCitationMarkers(content, message.citationMarks, message.citations)
+        : content,
+    [showInlineCitations, content, message.citationMarks, message.citations]
+  );
+
+  const markdownComponents = React.useMemo(
+    () => ({
+      a: makeCitationAwareLink(message.citations),
+    }),
+    [message.citations]
+  );
+
   return (
     <div
       className={cn(
@@ -76,8 +99,12 @@ export function ChatMessage({
 
         {/* Message content */}
         <div className="chat-markdown">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>
-            {content}
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            components={markdownComponents}
+            urlTransform={citationUrlTransform}
+          >
+            {renderedContent}
           </ReactMarkdown>
           {isStreaming && <StreamingCursor />}
         </div>
@@ -199,6 +226,83 @@ function FileAttachments({ files }: { files: FileAttachment[] }) {
   );
 }
 
+/**
+ * Markdown links carrying the `cite:` scheme are the inline citation markers;
+ * everything else is left as an ordinary link.
+ */
+function makeCitationAwareLink(citations: Citation[] | undefined) {
+  return function MarkdownLink({
+    href,
+    children,
+    ...props
+  }: React.AnchorHTMLAttributes<HTMLAnchorElement>) {
+    const citationId = parseCitationHref(href);
+    if (!citationId) {
+      return (
+        <a href={href} target="_blank" rel="noopener noreferrer" {...props}>
+          {children}
+        </a>
+      );
+    }
+
+    const citation = citations?.find((c) => String(c.id) === citationId);
+    return <CitationChip citation={citation} label={children} />;
+  };
+}
+
+function CitationChip({
+  citation,
+  label,
+}: {
+  citation: Citation | undefined;
+  label: React.ReactNode;
+}) {
+  const href = safeExternalHref(citation?.link);
+  const title = citation?.title?.trim();
+
+  // Sources without a resolvable link still get a marker, so the reader can see
+  // the statement is supported even when the document cannot be opened.
+  if (!href) {
+    return (
+      <span className="chat-citation" title={title}>
+        {label}
+      </span>
+    );
+  }
+
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="chat-citation"
+      title={title}
+    >
+      {label}
+    </a>
+  );
+}
+
+/**
+ * Synced documents are titled with their full path, so six sources from one
+ * folder repeated the same two lines six times and buried the filename at the
+ * end. The name is the thing being cited; the folder is context.
+ *
+ * Only the innermost folders are kept: sources of one answer usually share a
+ * long common prefix, which truncated away the part that told them apart. The
+ * full path stays on the element's title.
+ */
+const FOLDER_SEGMENTS_SHOWN = 2;
+
+function splitDocumentTitle(title: string): { name: string; folder: string | null } {
+  const parts = title.split("/").map((p) => p.trim()).filter(Boolean);
+  if (parts.length < 2) return { name: title, folder: null };
+  const name = parts.pop() as string;
+  const tail = parts.slice(-FOLDER_SEGMENTS_SHOWN).join(" / ");
+  const folder = parts.length > FOLDER_SEGMENTS_SHOWN ? `… / ${tail}` : tail;
+  return { name, folder };
+}
+
 function MessageCitations({ citations }: { citations: Citation[] }) {
   const { t } = useI18n();
   const DEFAULT_VISIBLE_CITATIONS = 5;
@@ -208,51 +312,78 @@ function MessageCitations({ citations }: { citations: Citation[] }) {
   const visibleCitations = showAll ? citations : citations.slice(0, DEFAULT_VISIBLE_CITATIONS);
 
   return (
-    <div className="mt-3">
-      <div className="text-xs font-medium text-chat-text-secondary mb-2">{t("chat.message.sources")}</div>
-      <div className="space-y-2">
+    <div className="mt-4">
+      <div className="text-xs font-medium text-chat-text-tertiary mb-2">
+        {t("chat.message.sources")}
+      </div>
+      <div className="space-y-1">
         {visibleCitations.map((citation, index) => {
-          const title = citation.title?.trim() || t("chat.message.source", { index: index + 1 });
-          
-          return (
-            <div
-              key={citation.id || `${title}-${index}`}
-              className="rounded-lg border border-chat-border-primary bg-chat-bg-tertiary/50 p-3"
+          const rawTitle = citation.title?.trim() || t("chat.message.source", { index: index + 1 });
+          const { name, folder } = splitDocumentTitle(rawTitle);
+          const href = safeExternalHref(citation.link);
+
+          const body = (
+            <>
+              {/* Same number the inline marker carries, and the same shape, so a
+                  marker in the answer reads as pointing here. */}
+              <span className="inline-flex items-center justify-center flex-shrink-0 min-w-[1.25rem] h-[1.25rem] mt-px px-1 rounded-[0.3rem] bg-chat-bg-tertiary text-[0.6875rem] font-medium leading-none text-chat-text-tertiary tabular-nums">
+                {index + 1}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm text-chat-text-primary" title={name}>
+                  {name}
+                </span>
+                {folder && (
+                  <span className="block truncate text-xs text-chat-text-tertiary" title={rawTitle}>
+                    {folder}
+                  </span>
+                )}
+                {citation.description && (
+                  <span className="mt-1 block text-xs text-chat-text-secondary leading-relaxed">
+                    {citation.description}
+                  </span>
+                )}
+                {citation.image && (
+                  <img
+                    src={citation.image}
+                    alt={name}
+                    className="mt-2 max-h-40 w-full rounded-md object-cover"
+                  />
+                )}
+              </span>
+            </>
+          );
+
+          const shared = "flex items-start gap-2.5 rounded-lg px-2.5 py-2 border border-transparent";
+
+          // The whole row is the target, not just the title text - a one-line
+          // filename made a very small thing to hit.
+          return href ? (
+            <a
+              key={citation.id || `${name}-${index}`}
+              href={href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={cn(
+                shared,
+                "no-underline transition-colors hover:border-chat-border-primary hover:bg-chat-bg-tertiary/60"
+              )}
             >
-              {citation.link ? (
-                <a
-                  href={citation.link}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-sm font-medium text-chat-accent-primary hover:underline"
-                >
-                  {title}
-                </a>
-              ) : (
-                <div className="text-sm font-medium text-chat-text-primary">{title}</div>
-              )}
-
-              {citation.image && (
-                <img
-                  src={citation.image}
-                  alt={title}
-                  className="mt-2 max-h-40 w-full rounded-md object-cover"
-                />
-              )}
-
-              {citation.description && (
-                <p className="mt-2 text-xs text-chat-text-secondary leading-relaxed">{citation.description}</p>
-              )}
+              {body}
+            </a>
+          ) : (
+            <div key={citation.id || `${name}-${index}`} className={shared}>
+              {body}
             </div>
           );
         })}
       </div>
 
       {hasMoreThanDefault && (
-        <div className="mt-2">
+        <div className="mt-1 pl-2.5">
           <button
             type="button"
-            className="text-xs text-chat-accent-primary hover:underline"
+            className="text-xs text-chat-text-tertiary hover:text-chat-text-secondary transition-colors"
             onClick={() => setShowAll((current) => !current)}
           >
             {showAll ? t("chat.message.showLess") : t("chat.message.showAll", { count: citations.length })}

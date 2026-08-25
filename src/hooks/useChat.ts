@@ -385,6 +385,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
                   role: "assistant",
                   content: event.content,
                   citations: event.citations,
+                  citationMarks: event.citationMarks,
                   files: event.files,
                   toolCalls: toolCallsForMessage,
                   metadata: currentToolCalls.size > 0
