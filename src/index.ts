@@ -42,6 +42,8 @@ export type {
   ChatCallbacks,
   MessageActionProps,
   ToolCallDisplayProps,
+  Citation,
+  CitationMark,
 } from "./types";
 
 // Icons
@@ -68,6 +70,12 @@ export {
 
 // Utils
 export { cn, formatFileSize, formatRelativeTime, generateId } from "./utils";
+export {
+  insertCitationMarkers,
+  parseCitationHref,
+  safeExternalHref,
+  citationUrlTransform,
+} from "./utils/citations";
 
 // Theme Presets
 export {

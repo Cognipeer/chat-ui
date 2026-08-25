@@ -112,6 +112,46 @@
   @apply text-chat-accent-primary hover:underline;
 }
 
+/*
+ * Inline citation marker.
+ *
+ * Raised with `top` on a baseline-aligned box rather than `vertical-align:
+ * super`, which grows the line box and visibly loosens the paragraph it is
+ * meant to annotate. Sized in `em` so it tracks the text it follows.
+ *
+ * The selectors are scoped under .chat-markdown as well so the generic link
+ * rule above cannot repaint the marker or underline it on hover.
+ */
+.chat-citation,
+.chat-markdown a.chat-citation {
+  display: inline-block;
+  position: relative;
+  top: -0.35em;
+  min-width: 1.15em;
+  margin-left: 0.15em;
+  padding: 0 0.32em;
+  border-radius: 0.35em;
+  background-color: var(--chat-bg-tertiary);
+  color: var(--chat-text-tertiary);
+  font-size: 0.7em;
+  font-weight: 500;
+  line-height: 1.55;
+  text-align: center;
+  text-decoration: none;
+  font-variant-numeric: tabular-nums;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
+}
+
+.chat-markdown a.chat-citation:hover {
+  /* Fallback first: color-mix keeps the hover a tint rather than a solid block. */
+  background-color: var(--chat-accent-primary);
+  background-color: color-mix(in srgb, var(--chat-accent-primary) 18%, transparent);
+  color: var(--chat-accent-primary);
+  text-decoration: none;
+}
+
 .chat-markdown table {
   @apply w-full border-collapse mb-4;
 }
