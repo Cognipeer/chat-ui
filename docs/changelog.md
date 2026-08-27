@@ -2,6 +2,12 @@
 
 All notable changes to Chat UI will be documented here.
 
+## [0.2.0] - 2026-08-27
+
+### Changed
+
+- Package publication is now validated through the CRM-managed npm Trusted Publishing workflow
+
 ## [0.1.5] - 2026-08-25
 
 ### Added
