@@ -4,29 +4,39 @@ Visualize AI tool calls in your chat UI.
 
 ## Overview
 
-When AI agents use tools, Chat UI displays them with:
+When an agent uses tools, Chat UI can surface that activity as part of the assistant turn instead of hiding it behind raw text. The built-in display is useful for operator-facing products, multi-step workflows, and debugging assistant behavior in production.
 
-- Tool name and arguments
-- Loading state during execution
-- Results after completion
-- Expandable/collapsible UI
+Tool calls are typically shown with:
 
-## Default Tool Call Display
+- tool identity
+- loading or executing state
+- compact grouping for multi-step workflows
+- expandable details through the standalone tool-call components
 
-Tool calls are automatically displayed:
+## Default Inline Display
+
+The top-level `Chat` surface renders tool activity inline with assistant messages automatically. In many products, this is enough and does not require any extra UI code.
 
 ```tsx
 <Chat
   baseUrl="/api/agents"
   agentId="assistant"
 />
-
-// When agent calls a tool, it appears like:
-// 🔧 get_weather({ location: "New York" })
-// ✓ { temperature: 72, conditions: "Sunny" }
 ```
 
-## Tool Call Callbacks
+## Tool Call Lifecycle
+
+A typical tool-assisted turn looks like this:
+
+1. The assistant begins responding.
+2. The backend emits one or more tool-call events.
+3. The UI tracks those calls as active work.
+4. Tool results arrive and the active entries are updated.
+5. The assistant finishes the turn and the final message state is rendered.
+
+This matters because tool activity is not a separate screen. It is part of the same conversational turn and often needs to stay understandable at a glance.
+
+## Callbacks For Observability And Product Logic
 
 Track tool calls programmatically:
 
@@ -48,154 +58,120 @@ Track tool calls programmatically:
 />
 ```
 
-## Custom Tool Call Rendering
+Use callbacks when you need analytics, audit trails, or app-side reactions. If you only need the default inline UI, you can skip them.
 
-Customize how tool calls appear:
+## When The Default UI Is Enough
 
-```tsx
-<Chat
-  baseUrl="/api/agents"
-  agentId="assistant"
-  renderToolCall={({ toolCall, isLoading, result }) => (
-    <div className="custom-tool-call">
-      <div className="tool-header">
-        {isLoading ? "⏳" : "✓"} {toolCall.name}
-      </div>
-      
-      <div className="tool-args">
-        <pre>{JSON.stringify(JSON.parse(toolCall.arguments), null, 2)}</pre>
-      </div>
-      
-      {result && (
-        <div className="tool-result">
-          <pre>{JSON.stringify(result, null, 2)}</pre>
-        </div>
-      )}
-    </div>
-  )}
-/>
-```
+Stick with the built-in display when:
 
-## ToolCall Component
+- tool activity is only supportive context for the user
+- you want a lightweight product timeline without building a separate operations panel
+- you mainly need callbacks for logging rather than custom presentation
 
-Use the built-in component directly:
+Consider a custom layout when:
+
+- tool activity is a first-class operator workflow
+- you need a separate side panel or inspection area
+- you want to group tool status outside the assistant message thread
+
+There is no top-level `renderToolCall` prop on `Chat` today. For custom layouts, compose from the hooks and standalone tool-call components.
+
+## Standalone ToolCall Component
+
+Use the built-in component directly when you are composing your own UI:
 
 ```tsx
 import { ToolCall, ToolCalls } from "@cognipeer/chat-ui";
 
 // Single tool call
 <ToolCall
-  toolCall={{
-    id: "call_123",
-    name: "get_weather",
-    arguments: '{"location": "NYC"}',
-  }}
+  toolName="get_weather"
+  toolCallId="call_123"
+  args={{ location: "NYC" }}
   result={{ temperature: 72 }}
-  isLoading={false}
+  isExecuting={false}
 />
 
 // Multiple tool calls
 <ToolCalls
-  toolCalls={[
-    { id: "1", name: "search", arguments: '{"query": "..."}' },
-    { id: "2", name: "calculate", arguments: '{"expression": "..."}' },
-  ]}
-  results={{
-    "1": { results: [...] },
-    "2": { result: 42 },
-  }}
+  toolCalls={new Map([
+    ["1", { name: "search", args: { query: "pricing page" }, result: { hits: 3 } }],
+    ["2", { name: "summarize", args: { source: "search" } }],
+  ])}
+  isExecuting={true}
 />
 ```
 
-## Tool-Specific Icons
+## Hook-Driven Custom Layouts
 
-Show different icons for different tools:
-
-```tsx
-const toolIcons = {
-  get_weather: "🌤️",
-  search: "🔍",
-  calculate: "🧮",
-  send_email: "📧",
-};
-
-<Chat
-  baseUrl="/api/agents"
-  agentId="assistant"
-  renderToolCall={({ toolCall, isLoading, result }) => (
-    <div className="tool-call">
-      <span className="icon">
-        {toolIcons[toolCall.name] || "🔧"}
-      </span>
-      <span className="name">{toolCall.name}</span>
-      {isLoading && <span className="loading">...</span>}
-    </div>
-  )}
-/>
-```
-
-## Expandable Tool Calls
-
-The default UI supports expand/collapse:
+If tool activity needs a dedicated area, use `useChat` and read `activeToolCalls` directly:
 
 ```tsx
-// Built-in behavior
-// Click on a tool call to expand/collapse arguments and results
-```
+import { ToolCalls, useChat } from "@cognipeer/chat-ui";
 
-Custom expandable implementation:
-
-```tsx
-import { useState } from "react";
-
-function ExpandableToolCall({ toolCall, result }) {
-  const [expanded, setExpanded] = useState(false);
-  
-  return (
-    <div className="tool-call">
-      <button onClick={() => setExpanded(!expanded)}>
-        {expanded ? "▼" : "▶"} {toolCall.name}
-      </button>
-      
-      {expanded && (
-        <div className="tool-details">
-          <div>Arguments: {toolCall.arguments}</div>
-          {result && <div>Result: {JSON.stringify(result)}</div>}
-        </div>
-      )}
-    </div>
-  );
-}
-```
-
-## Active Tool Calls
-
-Track in-progress tool calls:
-
-```tsx
-import { useChat } from "@cognipeer/chat-ui";
-
-function CustomChat() {
-  const { activeToolCalls } = useChat({
+function ChatWithToolPanel() {
+  const chat = useChat({
     baseUrl: "/api/agents",
     agentId: "assistant",
   });
 
-  // activeToolCalls is a Map<string, { name, args, result? }>
-  
   return (
-    <div>
-      {activeToolCalls.size > 0 && (
-        <div className="active-tools">
-          Running: {Array.from(activeToolCalls.values())
-            .map(t => t.name)
-            .join(", ")}
-        </div>
-      )}
+    <div className="grid grid-cols-[1fr_320px] h-screen">
+      <div>{/* your chat surface */}</div>
+      <aside className="border-l p-4">
+        <ToolCalls
+          toolCalls={chat.activeToolCalls}
+          isExecuting={chat.isLoading}
+        />
+      </aside>
     </div>
   );
 }
 ```
+
+## Safer Argument And Result Rendering
+
+Tool arguments from callbacks already arrive as parsed objects. Prefer rendering them with `JSON.stringify` rather than assuming a custom schema:
+
+```tsx
+function JsonBlock({ value }: { value: unknown }) {
+  return (
+    <pre>{JSON.stringify(value, null, 2)}</pre>
+  );
+}
+```
+
+If your product expects very large payloads, avoid dumping raw objects into the main chat column. Show summaries first and make deep inspection an explicit user action.
+
+## Tool-Specific Signals
+
+Show different icons for different tools:
+
+```tsx
+const labels = {
+  search_docs: "Docs Search",
+  lookup_customer: "Customer Lookup",
+  create_ticket: "Create Ticket",
+};
+```
+
+The principle is the same whether you are rendering inline or in a side panel: show concise labels first, then expose raw details only when the user actually needs them.
+
+## Product Use Cases
+
+Tool-call visibility is especially helpful when your product needs:
+
+- customer-support traceability
+- agent debugging in staging or production
+- operator oversight for multi-step actions
+- trust-building UI for actions that read or write external systems
+
+## Where To Go Next
+
+- Read [Structured Output](/guide/structured-output) if tool traces are only part of a richer result surface.
+- Read [Guardrails](/guide/guardrails) if users need confirmation or clearer trust signals around tool behavior.
+- Read [MCP Integration](/guide/mcp-integration) if your backend is exposing MCP-backed tool workflows.
+- Read [Custom Layout Composition](/guide/custom-layout-composition) if tool activity belongs in a side panel or custom workspace shell.
 
 ## Styling Tool Calls
 
@@ -227,5 +203,8 @@ function CustomChat() {
 ## Next Steps
 
 - [History Sidebar](/guide/history)
+- [Structured Output](/guide/structured-output)
+- [Guardrails](/guide/guardrails)
+- [MCP Integration](/guide/mcp-integration)
 - [Custom Actions](/guide/custom-actions)
 - [ToolCall Component](/components/tool-call)

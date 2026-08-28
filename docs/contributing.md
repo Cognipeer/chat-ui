@@ -2,11 +2,14 @@
 
 Thank you for your interest in contributing to Chat UI!
 
+Chat UI docs live under `docs/` and are rendered with VitePress using the custom Cognipeer docs shell.
+
 ## Development Setup
 
 1. Clone the repository
 2. Install dependencies: `npm install`
 3. Start development: `npm run dev`
+4. Run docs locally with `npm run docs:dev`
 
 ## Project Structure
 
@@ -32,6 +35,13 @@ chat-ui/
 - `npm run lint` - Run linter
 - `npm run docs:dev` - Documentation development
 - `npm run docs:build` - Build documentation
+
+## Documentation
+
+- Docs source: `docs/`
+- Theme config: `docs/.vitepress/config.mts`
+- Theme styling: `docs/.vitepress/theme/`
+- Public docs assets: `docs/.vitepress/public/`
 
 ## Pull Request Process
 

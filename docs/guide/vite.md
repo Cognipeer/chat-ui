@@ -2,6 +2,8 @@
 
 Integrate Chat UI with Vite applications.
 
+Vite is the most direct path when your frontend and backend are separate services and you want full control over proxying, routing, and the host-app shell.
+
 ## Setup
 
 ### 1. Create Vite Project
@@ -38,6 +40,8 @@ function App() {
 
 export default App;
 ```
+
+This is the cleanest baseline for local development against a separate agent backend.
 
 ## With Tailwind CSS
 
@@ -142,6 +146,8 @@ VITE_API_URL=http://localhost:3000/api/agents
 />
 ```
 
+Use environment variables when the backend base URL changes between local, staging, and production.
+
 ## API Proxy
 
 For development, proxy API requests:
@@ -172,6 +178,8 @@ Then use relative URLs:
   agentId="assistant"
 />
 ```
+
+This is usually the best local-development setup because your app code can keep using a stable relative `baseUrl`.
 
 ## React Router
 
@@ -206,6 +214,8 @@ function App() {
 
 export default App;
 ```
+
+Once the router owns a conversation path, read [Router Sync](/guide/router-sync) so selection and deep-link behavior stay coherent.
 
 ## TypeScript Path Aliases
 
@@ -243,8 +253,19 @@ npm run build
 npm run preview
 ```
 
+## Recommended Reading Order For Vite Teams
+
+1. Start with the base integration here.
+2. Add proxy or environment configuration depending on your backend setup.
+3. Read [Auth & Headers](/guide/auth-and-headers) if requests need auth or tenant context.
+4. Read [Router Sync](/guide/router-sync) if the URL should own the conversation.
+5. Move to [Custom Layout Composition](/guide/custom-layout-composition) if you outgrow the default shell.
+
 ## Next Steps
 
+- [Auth & Headers](/guide/auth-and-headers)
+- [Router Sync](/guide/router-sync)
+- [Custom Layout Composition](/guide/custom-layout-composition)
 - [Agent Server Integration](/guide/agent-server)
 - [Theming](/guide/theming)
 - [Examples](/examples/)

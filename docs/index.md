@@ -3,45 +3,52 @@ layout: home
 
 hero:
   name: Chat UI
-  text: React Chat Components for AI Agents
-  tagline: Customizable, streaming-ready chat UI with dark/light themes, file uploads, and tool visualization
-  image:
-    src: /logo.svg
-    alt: Chat UI
+  text: Ship Polished Chat Surfaces For AI Agents
+  tagline: A production-ready React chat UI with streaming, tool-call rendering, history, uploads, and theme controls for real product integrations.
   actions:
     - theme: brand
       text: Get Started
       link: /guide/getting-started
     - theme: alt
-      text: View on GitHub
-      link: https://github.com/Cognipeer/chat-ui
+      text: Study Architecture
+      link: /guide/architecture
 
 features:
-  - icon: 🎨
-    title: Customizable Theme
-    details: Dark and light modes with full color customization via CSS variables or props.
-  - icon: 📡
-    title: Streaming Support
-    details: Real-time SSE streaming with text updates and tool call visualization.
-  - icon: 📁
-    title: File Uploads
-    details: Built-in file attachment support with drag-and-drop and preview.
-  - icon: 🔧
-    title: Tool Call UI
-    details: Expandable tool call visualization with arguments and results.
-  - icon: 💬
-    title: Chat History
-    details: Sidebar with conversation history, search, and management.
-  - icon: 🎯
-    title: Customizable Actions
-    details: Add feedback buttons, copy, or custom actions to messages.
-  - icon: ⚛️
-    title: React 18+
-    details: Modern React with hooks, TypeScript support, and server components ready.
-  - icon: 🎨
-    title: Tailwind CSS
-    details: Utility-first styling with easy customization.
+  - title: Streaming That Feels Product Ready
+    details: Render partial assistant output, tool-call activity, and follow-up UI without stitching together a chat surface from low-level primitives.
+  - title: Tool Calls With Inspectable State
+    details: Show arguments, results, and expandable tool traces in a way that fits operational agent workflows instead of generic message bubbles.
+  - title: History, Sessions, And Workspace Chat
+    details: Move from a minimal single-thread chat to a full sidebar-based conversation experience without changing your application model.
+  - title: Theming Without Forking The UI
+    details: Tune dark and light surfaces, accent colors, spacing, and overrides through tokens and props while keeping the core interaction model intact.
+  - title: Uploads, Feedback, And Product Hooks
+    details: Add file attachments, custom message actions, and integration hooks where teams usually end up rebuilding the chat stack by hand.
+  - title: React Integration That Scales
+    details: Use the full `Chat` surface, `ChatMinimal`, lower-level hooks, or component composition patterns depending on how much control your product needs.
 ---
+
+## Start Here
+
+If you are integrating `chat-ui` for the first time, this is the shortest useful reading order:
+
+1. [Getting Started](/guide/getting-started) to get a working chat surface on screen quickly.
+2. [Core Concepts](/guide/core-concepts) to understand the message model, streaming flow, and session behavior.
+3. [Architecture](/guide/architecture) to see how components, hooks, and the agent client fit together.
+
+If you already know the basics, jump directly to the section that matches your task:
+
+- Need a full-screen product surface with built-in history? Start with [Chat](/components/chat) and [History](/guide/history).
+- Need a compact embed or support panel? Start with [ChatMinimal](/components/chat-minimal) and [Theming](/guide/theming).
+- Need to own the layout yourself? Start with [API Reference](/api/) and [Architecture](/guide/architecture).
+
+## Choose Your Integration Path
+
+| Start with | Best for | What you get |
+| --- | --- | --- |
+| `Chat` | Product teams that want the fastest path to a complete workspace chat | Built-in message list, input, history sidebar, streaming, uploads, and conversation management |
+| `ChatMinimal` | Embedded assistants, widgets, and narrow layouts | The same chat loop without the workspace-style history shell |
+| Hooks + components | Teams that need custom chrome, app-specific panels, or cross-page orchestration | Control over layout and state ownership while reusing the library's networking and rendering primitives |
 
 ## Quick Start
 
@@ -61,8 +68,6 @@ pnpm add @cognipeer/chat-ui
 
 :::
 
-## Basic Usage
-
 ```tsx
 import { Chat } from "@cognipeer/chat-ui";
 import "@cognipeer/chat-ui/styles.css";
@@ -80,59 +85,26 @@ function App() {
 }
 ```
 
-## Features at a Glance
+## Docs Map
 
-### Dark Theme (Default)
+- [Guide](/guide/getting-started): task-focused setup, concepts, theming, uploads, history, and integration guidance.
+- [Architecture](/guide/architecture): how the library is layered, where state lives, and what to customize at each level.
+- [API Reference](/api/): hooks, providers, client utilities, and shared types for custom implementations.
+- [Examples](/examples/): compact patterns you can copy into a product integration.
+- [Components](/components/): surface-level component details once you know which entry point you need.
 
-```tsx
-<Chat
-  baseUrl="/api/agents"
-  agentId="assistant"
-  theme="dark"
-/>
-```
+## Production Checklist
 
-### Light Theme
+- Confirm your backend can accept messages, stream assistant output, and return conversation metadata if you plan to use history.
+- Give the parent container an explicit height so the chat shell can size correctly.
+- Decide early whether you want the full `Chat` surface, `ChatMinimal`, or a custom hook-driven layout.
+- Set theme tokens before writing brittle CSS overrides. Start with [Theming](/guide/theming).
+- Decide how tool calls should appear in your product and whether the default inline rendering is enough.
+- If you need persistent sessions, define your history strategy up front with [History](/guide/history).
 
-```tsx
-<Chat
-  baseUrl="/api/agents"
-  agentId="assistant"
-  theme="light"
-/>
-```
+## What This Site Covers
 
-### With Authentication
-
-```tsx
-<Chat
-  baseUrl="/api/agents"
-  agentId="assistant"
-  authorization="Bearer your-token"
-/>
-```
-
-### Minimal (No History)
-
-```tsx
-import { ChatMinimal } from "@cognipeer/chat-ui";
-
-<ChatMinimal
-  baseUrl="/api/agents"
-  agentId="assistant"
-/>
-```
-
-### Custom Theme Colors
-
-```tsx
-<Chat
-  baseUrl="/api/agents"
-  agentId="assistant"
-  themeColors={{
-    bgPrimary: "#1a1a2e",
-    bgSecondary: "#16213e",
-    accentPrimary: "#e94560",
-  }}
-/>
-```
+- A fast path from install to production-ready chat UI without rebuilding assistant surfaces from scratch.
+- Clear guidance for when to use the full workspace chat, `ChatMinimal`, or lower-level hooks and building blocks.
+- Practical documentation for streaming, theming, uploads, history, custom actions, and agent-server integration.
+- A product-led docs surface that keeps `chat-ui` branding while using the same presentation shell as the broader Cognipeer docs stack.

@@ -1,0 +1,14 @@
+<svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="chatUiFavGradient" x1="11" y1="8" x2="54" y2="58" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#07E3D0" />
+      <stop offset="0.58" stop-color="#00B5A5" />
+      <stop offset="1" stop-color="#007C70" />
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="url(#chatUiFavGradient)"/>
+  <path d="M16 22C16 18.6863 18.6863 16 22 16H42C45.3137 16 48 18.6863 48 22V36C48 39.3137 45.3137 42 42 42H30L22 48V42C18.6863 42 16 39.3137 16 36V22Z" fill="white"/>
+  <circle cx="24" cy="29" r="3.3" fill="#009689"/>
+  <circle cx="32" cy="29" r="3.3" fill="#009689"/>
+  <circle cx="40" cy="29" r="3.3" fill="#009689"/>
+</svg>

@@ -2,7 +2,11 @@
 
 Integrate Chat UI with Next.js applications.
 
+Next.js is a strong fit when your product wants route-driven conversations, session-aware requests, and a client chat surface inside a broader server-rendered application shell.
+
 ## App Router (Recommended)
+
+For most new apps, App Router should be your default path.
 
 ### Basic Setup
 
@@ -78,6 +82,8 @@ export default function ChatPage() {
 }
 ```
 
+If the app already owns the session, keep auth resolution in the host application and pass the final request credential into `Chat`. For the broader model, read [Auth & Headers](/guide/auth-and-headers).
+
 ### With Server-Side Data
 
 ```tsx
@@ -114,6 +120,8 @@ export default function ChatClient({ agent }) {
   );
 }
 ```
+
+This split works well when server components fetch page context and a client component owns the interactive chat runtime.
 
 ## Pages Router
 
@@ -195,6 +203,8 @@ export default function ConversationPage() {
 }
 ```
 
+This is the simplest deep-link pattern. If users should also push conversation changes back into the URL from the chat surface, continue with [Router Sync](/guide/router-sync).
+
 ## SSR Considerations
 
 Chat UI is a client component. Always use `"use client"` directive:
@@ -204,6 +214,11 @@ Chat UI is a client component. Always use `"use client"` directive:
 
 import { Chat } from "@cognipeer/chat-ui";
 ```
+
+In practice:
+
+- keep auth gates, page data fetching, and layout decisions in the host app
+- keep the chat runtime inside a client boundary
 
 ## Environment Variables
 
@@ -248,6 +263,13 @@ export default function ChatPage() {
 }
 ```
 
+## Recommended Reading Order For Next.js Teams
+
+1. Set up the basic client shell here.
+2. Add [Auth & Headers](/guide/auth-and-headers) if requests need credentials or tenant context.
+3. Add [Router Sync](/guide/router-sync) if the URL should represent the active conversation.
+4. Move to [Custom Layout Composition](/guide/custom-layout-composition) if the built-in shell no longer matches your app.
+
 ## Tailwind Configuration
 
 ```javascript
@@ -266,6 +288,9 @@ module.exports = {
 
 ## Next Steps
 
+- [Auth & Headers](/guide/auth-and-headers)
+- [Router Sync](/guide/router-sync)
+- [Custom Layout Composition](/guide/custom-layout-composition)
 - [Vite Integration](/guide/vite)
 - [Agent Server Integration](/guide/agent-server)
 - [Examples](/examples/)
