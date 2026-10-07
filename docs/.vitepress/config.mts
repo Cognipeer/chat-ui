@@ -48,6 +48,7 @@ export default defineConfig({
             { text: 'Next.js', link: '/guide/nextjs' },
             { text: 'Vite', link: '/guide/vite' },
             { text: 'Agent Server', link: '/guide/agent-server' },
+            { text: 'Transports', link: '/guide/transports' },
           ],
         },
         {

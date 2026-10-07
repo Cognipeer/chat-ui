@@ -12,7 +12,7 @@ import type {
   MessageActionProps,
 } from "../../types";
 import { ChatThemeProvider, ChatI18nProvider, type SupportedLocale } from "../../providers";
-import { AgentServerClient } from "../../api";
+import { AgentServerClient, type ChatTransport } from "../../api";
 import { useChat, useChatHistory, useI18n } from "../../hooks";
 import { ChatMessageList } from "./ChatMessageList";
 import { ChatInput } from "./ChatInput";
@@ -94,9 +94,12 @@ export interface ChatProps extends ChatConfig, ChatCallbacks {
 export function Chat({
   // Config
   baseUrl,
+  transport,
   agentId: externalAgentId,
   authorization,
   headers,
+  getHeaders,
+  fetch: customFetch,
   streaming = true,
   enableFileUpload = true,
   allowedFileTypes,
@@ -151,15 +154,17 @@ export function Chat({
   const [selectedAgentId, setSelectedAgentId] = useState<string | undefined>(externalAgentId);
 
   // Keep a ref-based client for agent fetching
-  const agentClientRef = useRef<AgentServerClient | null>(null);
+  const agentClientRef = useRef<ChatTransport | null>(null);
   useMemo(() => {
-    agentClientRef.current = new AgentServerClient({
+    agentClientRef.current = transport ?? new AgentServerClient({
       baseUrl,
       agentId: selectedAgentId || "",
       authorization,
       headers,
+      getHeaders,
+      fetch: customFetch,
     });
-  }, [baseUrl, authorization, headers, selectedAgentId]);
+  }, [transport, baseUrl, authorization, headers, getHeaders, customFetch, selectedAgentId]);
 
   // Sync external agentId prop
   useEffect(() => {
@@ -189,7 +194,7 @@ export function Chat({
     })();
 
     return () => { cancelled = true; };
-  }, [baseUrl, authorization]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [transport, baseUrl, authorization]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleAgentChange = useCallback((newAgentId: string) => {
     setSelectedAgentId(newAgentId);
@@ -246,9 +251,12 @@ export function Chat({
   // Chat state
   const chat = useChat({
     baseUrl,
+    transport,
     agentId: effectiveAgentId,
     authorization,
     headers,
+    getHeaders,
+    fetch: customFetch,
     streaming,
     enableFileUpload: effectiveFileUpload,
     allowedFileTypes,
@@ -271,9 +279,12 @@ export function Chat({
   // so we can see all portal conversations
   const history = useChatHistory({
     baseUrl,
+    transport,
     agentId: agents.length > 1 ? undefined : effectiveAgentId,
     authorization,
     headers,
+    getHeaders,
+    fetch: customFetch,
     autoLoad: showHistory,
   });
 
