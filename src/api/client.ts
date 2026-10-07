@@ -7,51 +7,38 @@ import type {
   StreamEvent,
   ChatConfig,
 } from "../types";
-
-interface PaginatedResponse<T> {
-  data?: T[];
-  total: number;
-  limit: number;
-  offset: number;
-  hasMore: boolean;
-}
-
-interface SendMessageOptions {
-  message: string;
-  files?: Array<{
-    name: string;
-    content: string; // base64
-    mimeType: string;
-  }>;
-  metadata?: Record<string, unknown>;
-  stream?: boolean;
-}
-
-interface SendMessageResponse {
-  message: Message;
-  response: Message;
-  /** Auto-generated title (only on first message, when server has titleGeneration configured) */
-  conversationTitle?: string;
-  usage?: {
-    inputTokens?: number;
-    outputTokens?: number;
-    totalTokens?: number;
-  };
-}
+import type {
+  ChatTransport,
+  PaginatedResponse,
+  SendMessageOptions,
+  SendMessageResponse,
+  StreamCallbacks,
+} from "./transport";
+import {
+  buildHeaders,
+  errorFromResponse,
+  httpFetch,
+  readSSE,
+  type HttpOptions,
+} from "./http";
 
 /**
  * Agent Server API client
  */
-export class AgentServerClient {
+export class AgentServerClient implements ChatTransport {
   private baseUrl: string;
-  private headers: Record<string, string>;
+  private http: HttpOptions;
 
-  constructor(config: ChatConfig) {
+  constructor(config: Pick<ChatConfig, "baseUrl" | "authorization" | "headers" | "getHeaders" | "fetch"> & { agentId?: string }) {
+    if (!config.baseUrl) {
+      throw new Error("AgentServerClient requires a baseUrl");
+    }
     this.baseUrl = config.baseUrl.replace(/\/$/, "");
-    this.headers = {
-      "Content-Type": "application/json",
-      ...(config.authorization ? { Authorization: config.authorization } : {}),
-      ...config.headers,
+    this.http = {
+      authorization: config.authorization,
+      headers: config.headers,
+      getHeaders: config.getHeaders,
+      fetch: config.fetch,
     };
   }
 
@@ -60,15 +47,14 @@ export class AgentServerClient {
     path: string,
     body?: unknown
   ): Promise<T> {
-    const response = await fetch(`${this.baseUrl}${path}`, {
+    const response = await httpFetch(this.http, `${this.baseUrl}${path}`, {
       method,
-      headers: this.headers,
+      headers: await buildHeaders(this.http),
       body: body ? JSON.stringify(body) : undefined,
     });
 
     if (!response.ok) {
-      const error = await response.json().catch(() => ({ message: "Request failed" }));
-      throw new Error(error.error?.message || error.message || "Request failed");
+      throw await errorFromResponse(response);
     }
 
     // 204 No Content — no body to parse
@@ -181,96 +167,66 @@ export class AgentServerClient {
   async sendMessageStream(
     conversationId: string,
     options: Omit<SendMessageOptions, "stream">,
-    callbacks: {
-      onStart?: (event: StreamEvent) => void;
-      onText?: (text: string, fullText: string) => void;
-      onToolCall?: (event: StreamEvent) => void;
-      onToolResult?: (event: StreamEvent) => void;
-      onProgress?: (event: StreamEvent) => void;
-      onError?: (error: Error) => void;
-      onDone?: (event: StreamEvent) => void;
-    },
+    callbacks: StreamCallbacks,
     signal?: AbortSignal
   ): Promise<void> {
-    const response = await fetch(
+    const response = await httpFetch(
+      this.http,
       `${this.baseUrl}/conversations/${conversationId}/messages`,
       {
         method: "POST",
-        headers: this.headers,
+        headers: await buildHeaders(this.http),
         body: JSON.stringify({ ...options, stream: true }),
         signal,
       }
     );
 
     if (!response.ok) {
-      const error = await response.json().catch(() => ({ message: "Request failed" }));
-      throw new Error(error.error?.message || error.message || "Request failed");
+      throw await errorFromResponse(response);
     }
 
-    if (!response.body) {
-      throw new Error("No response body");
-    }
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
     let fullText = "";
 
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+    await readSSE(response, ({ data: raw }) => {
+      const data = raw.trim();
+      if (!data) return;
 
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
+      try {
+        const event = JSON.parse(data) as StreamEvent;
 
-        for (const line of lines) {
-          if (line.startsWith("data: ")) {
-            const data = line.slice(6).trim();
-            if (!data) continue;
-
-            try {
-              const event = JSON.parse(data) as StreamEvent;
-
-              switch (event.type) {
-                case "stream.start":
-                  callbacks.onStart?.(event);
-                  break;
-                case "stream.text":
-                  fullText += event.text;
-                  callbacks.onText?.(event.text, fullText);
-                  break;
-                case "stream.thinking":
-                  // Treat thinking as text for now
-                  fullText += (event as any).thinking;
-                  callbacks.onText?.((event as any).thinking, fullText);
-                  break;
-                case "stream.tool_call":
-                  callbacks.onToolCall?.(event);
-                  break;
-                case "stream.tool_result":
-                  callbacks.onToolResult?.(event);
-                  break;
-                case "stream.progress":
-                  callbacks.onProgress?.(event);
-                  break;
-                case "stream.error":
-                  callbacks.onError?.(new Error(event.error));
-                  break;
-                case "stream.done":
-                  callbacks.onDone?.(event);
-                  break;
-              }
-            } catch {
-              // Ignore parse errors
-            }
-          }
+        switch (event.type) {
+          case "stream.start":
+            callbacks.onStart?.(event);
+            break;
+          case "stream.text":
+            fullText += event.text;
+            callbacks.onText?.(event.text, fullText);
+            break;
+          case "stream.thinking":
+            // Treat thinking as text for now
+            fullText += (event as any).thinking;
+            callbacks.onText?.((event as any).thinking, fullText);
+            break;
+          case "stream.tool_call":
+            callbacks.onToolCall?.(event);
+            break;
+          case "stream.tool_result":
+            callbacks.onToolResult?.(event);
+            break;
+          case "stream.progress":
+            callbacks.onProgress?.(event);
+            break;
+          case "stream.error":
+            callbacks.onError?.(new Error(event.error));
+            break;
+          case "stream.done":
+            callbacks.onDone?.(event);
+            break;
         }
+      } catch {
+        // Ignore parse errors
       }
-    } finally {
-      reader.releaseLock();
-    }
+    });
   }
 
   // ============================================================================

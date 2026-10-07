@@ -2,17 +2,17 @@
 
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import type { ConversationListItem, ChatConfig } from "../types";
-import { AgentServerClient } from "../api";
+import { AgentServerClient, type ChatTransport } from "../api";
 import { useI18n } from "./useI18n";
 
 // Survives Strict Mode remount so we only ever fire one initial load per config
 const initialLoadDoneKeys = new Set<string>();
 
-function getLoadKey(baseUrl: string, agentId?: string): string {
+function getLoadKey(baseUrl: string | undefined, agentId?: string): string {
   return `${baseUrl}|${agentId ?? ""}`;
 }
 
-export interface UseChatHistoryOptions extends Pick<ChatConfig, "baseUrl" | "agentId" | "authorization" | "headers"> {
+export interface UseChatHistoryOptions extends Pick<ChatConfig, "baseUrl" | "agentId" | "authorization" | "headers" | "getHeaders" | "fetch" | "transport"> {
   /** Enable auto-loading on mount */
   autoLoad?: boolean;
   /** Items per page */
@@ -50,6 +50,9 @@ export function useChatHistory(options: UseChatHistoryOptions): UseChatHistoryRe
     agentId,
     authorization,
     headers,
+    getHeaders,
+    fetch: customFetch,
+    transport,
     autoLoad = true,
     pageSize = 20,
   } = options;
@@ -61,15 +64,17 @@ export function useChatHistory(options: UseChatHistoryOptions): UseChatHistoryRe
   const [offset, setOffset] = useState(0);
 
   // Keep a stable client reference that updates when config changes
-  const clientRef = useRef<AgentServerClient | null>(null);
+  const clientRef = useRef<ChatTransport | null>(null);
   useMemo(() => {
-    clientRef.current = new AgentServerClient({
+    clientRef.current = transport ?? new AgentServerClient({
       baseUrl,
       agentId: agentId || "",
       authorization,
       headers,
+      getHeaders,
+      fetch: customFetch,
     });
-  }, [baseUrl, agentId, authorization, headers]);
+  }, [transport, baseUrl, agentId, authorization, headers, getHeaders, customFetch]);
 
   const load = useCallback(async (options?: { showLoading?: boolean }) => {
     if (!clientRef.current) return;

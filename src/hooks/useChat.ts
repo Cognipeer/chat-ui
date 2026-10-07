@@ -4,7 +4,7 @@ import { useState, useCallback, useRef, useEffect, useMemo, type Dispatch, type 
 import { flushSync } from "react-dom";
 import { generateId } from "../utils";
 import type { Message, FileAttachment, ChatConfig, ChatCallbacks, Conversation } from "../types";
-import { AgentServerClient } from "../api";
+import { AgentServerClient, type ChatTransport } from "../api";
 import { useI18n } from "./useI18n";
 
 export interface UseChatOptions extends ChatConfig, ChatCallbacks {
@@ -79,6 +79,9 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     agentId,
     authorization,
     headers,
+    getHeaders,
+    fetch: customFetch,
+    transport,
     streaming = true,
     enableFileUpload = true,
     allowedFileTypes,
@@ -111,7 +114,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const lastUserMessageRef = useRef<string>("");
-  const clientRef = useRef<AgentServerClient | null>(null);
+  const clientRef = useRef<ChatTransport | null>(null);
   const activeToolCallsRef = useRef<Map<string, { name: string; args: Record<string, unknown>; result?: unknown; reasoning?: string; displayName?: string }>>(new Map());
   const toolCallStartTimeRef = useRef<number | null>(null);
   // Map file attachment IDs to raw File objects so we can read base64 later
@@ -124,13 +127,15 @@ export function useChat(options: UseChatOptions): UseChatReturn {
 
   // Keep a stable client reference that updates synchronously when config changes
   useMemo(() => {
-    clientRef.current = new AgentServerClient({
+    clientRef.current = transport ?? new AgentServerClient({
       baseUrl,
       agentId: agentId || "",
       authorization,
       headers,
+      getHeaders,
+      fetch: customFetch,
     });
-  }, [baseUrl, agentId, authorization, headers]);
+  }, [transport, baseUrl, agentId, authorization, headers, getHeaders, customFetch]);
 
   /**
    * Reset transient streaming UI state without aborting the HTTP request.

@@ -2,6 +2,20 @@
 
 All notable changes to Chat UI will be documented here.
 
+## [0.3.0] - 2026-10-07
+
+### Added
+
+- `ChatTransport` interface and a `transport` prop on `Chat`, `useChat` and `useChatHistory`, so the chat can talk to backends other than `@cognipeer/agent-server`
+- Transports for agent-sdk (`AgentSdkTransport`), OpenAI Chat Completions (`ChatCompletionsTransport`), the Responses API (`ResponsesTransport`) and A2A (`A2ATransport`). See [Transports](/guide/transports)
+- `ThreadStore` with `MemoryThreadStore` and `LocalStorageThreadStore`, used by the transports whose backend keeps no conversations
+- `getHeaders` (async, called before every request) and `fetch` options, so a token can be renewed between requests and cookie or proxy setups work
+
+### Changed
+
+- `baseUrl` is optional when `transport` is given
+- The SSE reader accepts `event:` lines, CRLF line endings and multi-line `data:`
+
 ## [0.2.0] - 2026-08-27
 
 ### Changed

@@ -18,7 +18,35 @@ export { ChatProvider, useChatContext, useChatContextOptional, type ChatProvider
 export { ChatI18nProvider, useI18nContext, useI18nContextOptional, type ChatI18nProviderProps, type SupportedLocale } from "./providers";
 
 // API Client
-export { AgentServerClient } from "./api";
+export {
+  AgentServerClient,
+  ChatCompletionsTransport,
+  ResponsesTransport,
+  A2ATransport,
+  AgentSdkTransport,
+  StatelessTransport,
+  MemoryThreadStore,
+  LocalStorageThreadStore,
+} from "./api";
+export type {
+  ChatTransport,
+  SendMessageOptions,
+  SendMessageResponse,
+  StreamCallbacks,
+  HttpOptions,
+  ThreadStore,
+  StoredThread,
+  ChatCompletionsTransportOptions,
+  ResponsesTransportOptions,
+  A2ATransportOptions,
+  AgentSdkTransportOptions,
+  AgentSdkAgent,
+  AgentSdkEntry,
+  RunInput,
+  RunResult,
+  RunEmit,
+  StatelessTransportOptions,
+} from "./api";
 
 // Types
 export type {

@@ -2,6 +2,8 @@
  * Type definitions for chat-ui
  */
 
+import type { ChatTransport } from "./api/transport";
+
 // ============================================================================
 // Message Types
 // ============================================================================
@@ -255,8 +257,15 @@ export const defaultLightTheme: ChatTheme = {
 // ============================================================================
 
 export interface ChatConfig {
-  /** Base URL for the agent server API */
-  baseUrl: string;
+  /** Base URL for the agent server API. Not needed when `transport` is given. */
+  baseUrl?: string;
+  /**
+   * Custom backend. When set, `baseUrl`, `authorization`, `headers`,
+   * `getHeaders` and `fetch` are ignored and the transport is used for every
+   * call. See the adapters (`AgentSdkTransport`, `ChatCompletionsTransport`,
+   * `ResponsesTransport`, `A2ATransport`) or implement `ChatTransport`.
+   */
+  transport?: ChatTransport;
   /** Agent ID to use for conversations. When omitted, the Chat component will
    *  auto-fetch agents via GET /agents and let the user pick one. */
   agentId?: string;
@@ -264,6 +273,10 @@ export interface ChatConfig {
   authorization?: string;
   /** Custom headers to include in all requests */
   headers?: Record<string, string>;
+  /** Called before each request; return fresh headers (e.g. a renewed token) */
+  getHeaders?: () => Record<string, string> | Promise<Record<string, string>>;
+  /** Replacement for `fetch` (proxies, cookie auth, tests) */
+  fetch?: typeof fetch;
   /** Enable streaming responses */
   streaming?: boolean;
   /** Enable file uploads */
