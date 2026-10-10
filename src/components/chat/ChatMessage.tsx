@@ -13,6 +13,7 @@ import {
 import type { Message, MessageActionProps, FileAttachment, Citation } from "../../types";
 import { FileIcon } from "./Icons";
 import { ToolCalls } from "./ToolCall";
+import { MessageActionCards, type ChatActionsConfig } from "./ActionCards";
 import { useI18n } from "../../hooks";
 
 export interface ChatMessageProps {
@@ -34,6 +35,8 @@ export interface ChatMessageProps {
   showTimestamp?: boolean;
   /** Show sources section for assistant messages */
   enableCitations?: boolean;
+  /** How approval / question cards behave under this message */
+  actions?: ChatActionsConfig;
 }
 
 /**
@@ -49,6 +52,7 @@ export function ChatMessage({
   showAvatar = true,
   showTimestamp = false,
   enableCitations = true,
+  actions,
 }: ChatMessageProps) {
   const isUser = message.role === "user";
   const isAssistant = message.role === "assistant";
@@ -97,17 +101,22 @@ export function ChatMessage({
           <MessageToolCalls message={message} />
         )}
 
-        {/* Message content */}
-        <div className="chat-markdown">
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
-            components={markdownComponents}
-            urlTransform={citationUrlTransform}
-          >
-            {renderedContent}
-          </ReactMarkdown>
-          {isStreaming && <StreamingCursor />}
-        </div>
+        {/* Message content (a turn that only paused for an answer has none) */}
+        {(renderedContent || isStreaming || !isAssistant || !message.pendingActions?.length) && (
+          <div className="chat-markdown">
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              components={markdownComponents}
+              urlTransform={citationUrlTransform}
+            >
+              {renderedContent}
+            </ReactMarkdown>
+            {isStreaming && <StreamingCursor />}
+          </div>
+        )}
+
+        {/* Approvals and questions the assistant is waiting on */}
+        {isAssistant && !isStreaming && <MessageActionCards message={message} config={actions} />}
 
         {/* File attachments */}
         {message.files && message.files.length > 0 && (

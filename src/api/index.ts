@@ -4,6 +4,7 @@ export type {
   SendMessageOptions,
   SendMessageResponse,
   StreamCallbacks,
+  ResolveActionOptions,
   PaginatedResponse,
 } from "./transport";
 export type { HttpOptions } from "./http";

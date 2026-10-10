@@ -2,6 +2,21 @@
 
 All notable changes to Chat UI will be documented here.
 
+## [0.4.0] - 2026-10-10
+
+### Added
+
+- Approvals and questions. When the agent pauses (agent-server 0.3.0+), `ToolApprovalCard` and `QuestionCard` render under the assistant message and the answer is sent with `resolveAction`. See [Approvals and Questions](/guide/approvals)
+- `Chat` props `enableToolApprovals`, `enableQuestions`, `renderToolApproval`, `renderQuestion`, `pendingActionComposerMode` and `onActionResolved`
+- `useChat` returns `pendingActions`, `awaitingAction`, `isResolvingAction`, `canResolveActions`, `answerableQuestion` and `resolveAction`
+- Types `PendingAction`, `ActionResolution`, `UserQuestion`, `MessageStatus`, `StreamActionRequiredEvent`, `StreamActionResolvedEvent`; `ChatTransport.resolveAction` (optional) and `AgentServerClient.resolveAction`
+- Pending actions are restored when a conversation is loaded
+- `ChatInput` `pendingMode` prop; English and Turkish strings for the new UI
+
+### Changed
+
+- Errors thrown for failed requests now carry `status` and `code` when the server sends them
+
 ## [0.3.0] - 2026-10-07
 
 ### Added

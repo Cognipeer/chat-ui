@@ -6,6 +6,14 @@ export { ChatInput, type ChatInputProps, type ChatInputHandle } from "./componen
 export { ChatHistory, type ChatHistoryProps } from "./components/chat";
 export { ToolCall, ToolCalls, type ToolCallProps, type ToolCallsProps } from "./components/chat";
 export { MessageActions, type MessageActionsProps } from "./components/chat";
+export {
+  ToolApprovalCard,
+  QuestionCard,
+  MessageActionCards,
+  type ToolApprovalCardProps,
+  type QuestionCardProps,
+  type ChatActionsConfig,
+} from "./components/chat";
 
 // Hooks
 export { useChat, type UseChatOptions, type UseChatReturn } from "./hooks";
@@ -33,6 +41,7 @@ export type {
   SendMessageOptions,
   SendMessageResponse,
   StreamCallbacks,
+  ResolveActionOptions,
   HttpOptions,
   ThreadStore,
   StoredThread,
@@ -64,7 +73,18 @@ export type {
   StreamToolResultEvent,
   StreamProgressEvent,
   StreamErrorEvent,
+  StreamActionRequiredEvent,
+  StreamActionResolvedEvent,
   StreamDoneEvent,
+  UserQuestionOption,
+  UserQuestion,
+  PendingAction,
+  ActionResolution,
+  ActionState,
+  ActionStatus,
+  MessageStatus,
+  ToolApprovalRenderProps,
+  QuestionRenderProps,
   ChatTheme,
   ChatConfig,
   ChatCallbacks,
@@ -98,6 +118,11 @@ export {
 
 // Utils
 export { cn, formatFileSize, formatRelativeTime, generateId } from "./utils";
+export {
+  restorePendingActions,
+  collectPendingActions,
+  type PendingActionEntry,
+} from "./utils/actions";
 export {
   insertCitationMarkers,
   parseCitationHref,

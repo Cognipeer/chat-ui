@@ -6,10 +6,13 @@ import type {
   FileAttachment,
   StreamEvent,
   ChatConfig,
+  PendingAction,
+  ActionResolution,
 } from "../types";
 import type {
   ChatTransport,
   PaginatedResponse,
+  ResolveActionOptions,
   SendMessageOptions,
   SendMessageResponse,
   StreamCallbacks,
@@ -115,6 +118,7 @@ export class AgentServerClient implements ChatTransport {
   async getConversation(conversationId: string): Promise<{
     conversation: Conversation;
     messages: Message[];
+    pendingActions?: PendingAction[];
   }> {
     return this.request("GET", `/conversations/${conversationId}`);
   }
@@ -185,6 +189,42 @@ export class AgentServerClient implements ChatTransport {
       throw await errorFromResponse(response);
     }
 
+    await this.readStream(response, callbacks);
+  }
+
+  /**
+   * Answer a pending approval or question
+   * (`POST /conversations/:id/actions/:actionId`). With `stream: true` the
+   * continuation is delivered through `options.callbacks`.
+   */
+  async resolveAction(
+    conversationId: string,
+    actionId: string,
+    resolution: ActionResolution,
+    options: ResolveActionOptions = {}
+  ): Promise<SendMessageResponse | undefined> {
+    const path = `/conversations/${conversationId}/actions/${actionId}`;
+
+    if (!options.stream) {
+      return this.request("POST", path, { resolution });
+    }
+
+    const response = await httpFetch(this.http, `${this.baseUrl}${path}`, {
+      method: "POST",
+      headers: await buildHeaders(this.http),
+      body: JSON.stringify({ resolution, stream: true }),
+      signal: options.signal,
+    });
+
+    if (!response.ok) {
+      throw await errorFromResponse(response);
+    }
+
+    await this.readStream(response, options.callbacks ?? {});
+    return undefined;
+  }
+
+  private async readStream(response: Response, callbacks: StreamCallbacks): Promise<void> {
     let fullText = "";
 
     await readSSE(response, ({ data: raw }) => {
@@ -218,6 +258,12 @@ export class AgentServerClient implements ChatTransport {
             break;
           case "stream.error":
             callbacks.onError?.(new Error(event.error));
+            break;
+          case "stream.action_required":
+            callbacks.onActionRequired?.(event);
+            break;
+          case "stream.action_resolved":
+            callbacks.onActionResolved?.(event);
             break;
           case "stream.done":
             callbacks.onDone?.(event);

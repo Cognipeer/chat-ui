@@ -42,6 +42,12 @@ export interface ChatInputProps {
   renderStopButton?: (props: { onClick: () => void }) => React.ReactNode;
   /** Auto-focus the textarea on mount */
   autoFocus?: boolean;
+  /**
+   * What the composer does while the assistant waits for an approval or answer.
+   * `blocked` disables input, `cancel` allows a message that cancels the request,
+   * `answer` sends the text as the answer to the open question.
+   */
+  pendingMode?: "blocked" | "cancel" | "answer";
 }
 
 /**
@@ -63,13 +69,25 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   renderSendButton,
   renderStopButton,
   autoFocus = false,
+  pendingMode,
 }, ref) {
   const { t } = useI18n();
   const [value, setValue] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   
-  const defaultPlaceholder = placeholder ?? t("chat.input.placeholder");
+  const blocked = pendingMode === "blocked";
+  const defaultPlaceholder = blocked
+    ? t("chat.input.waitingPlaceholder")
+    : placeholder ?? t("chat.input.placeholder");
+  const pendingNotice =
+    pendingMode === "blocked"
+      ? t("chat.input.waitingNotice")
+      : pendingMode === "cancel"
+        ? t("chat.input.cancelNotice")
+        : pendingMode === "answer"
+          ? t("chat.input.answerNotice")
+          : null;
 
   // Expose focus method to parent via ref
   useImperativeHandle(ref, () => ({
@@ -88,7 +106,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   }, [autoFocus]);
 
   const handleSend = useCallback(() => {
-    if (value.trim() && !isLoading && !disabled) {
+    if (value.trim() && !isLoading && !disabled && !blocked) {
       onSend(value.trim());
       setValue("");
       // Reset textarea height
@@ -96,7 +114,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
         textareaRef.current.style.height = "auto";
       }
     }
-  }, [value, isLoading, disabled, onSend]);
+  }, [value, isLoading, disabled, blocked, onSend]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -134,11 +152,21 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     [onFilesAdd]
   );
 
-  const canSend = value.trim().length > 0 && !isLoading && !disabled;
+  const canSend = value.trim().length > 0 && !isLoading && !disabled && !blocked;
 
   return (
     <div className={cn("border-t border-chat-border-primary bg-chat-bg-primary p-4", className)}>
       <div className="max-w-3xl mx-auto">
+        {/* Waiting on an approval or answer */}
+        {pendingNotice && (
+          <div
+            role="status"
+            className="mb-2 rounded-lg border border-chat-border-primary bg-chat-bg-secondary px-3 py-2 text-xs text-chat-text-secondary"
+          >
+            {pendingNotice}
+          </div>
+        )}
+
         {/* Pending files */}
         {pendingFiles.length > 0 && (
           <div className="flex flex-wrap gap-2 mb-3">
@@ -201,7 +229,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
             onChange={handleChange}
             onKeyDown={handleKeyDown}
             placeholder={defaultPlaceholder}
-            disabled={disabled}
+            disabled={disabled || blocked}
             rows={1}
             className={cn(
               "flex-1 bg-transparent border-none outline-none resize-none py-3 text-chat-text-primary placeholder:text-chat-text-tertiary",

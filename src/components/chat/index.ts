@@ -5,4 +5,12 @@ export { ChatInput, type ChatInputProps, type ChatInputHandle } from "./ChatInpu
 export { ChatHistory, type ChatHistoryProps } from "./ChatHistory";
 export { ToolCall, ToolCalls, type ToolCallProps, type ToolCallsProps } from "./ToolCall";
 export { MessageActions, type MessageActionsProps } from "./MessageActions";
+export {
+  ToolApprovalCard,
+  QuestionCard,
+  MessageActionCards,
+  type ToolApprovalCardProps,
+  type QuestionCardProps,
+  type ChatActionsConfig,
+} from "./ActionCards";
 export * from "./Icons";

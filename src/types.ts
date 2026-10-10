@@ -26,6 +26,15 @@ export interface Message {
   toolCallId?: string;
   files?: FileAttachment[];
   metadata?: Record<string, unknown>;
+  /**
+   * Approvals / questions the assistant is waiting on. Set when the turn paused
+   * (`status: "requires_action"`); the cards render from this list.
+   */
+  pendingActions?: PendingAction[];
+  /** How the turn ended. Absent means a normal, completed answer. */
+  status?: MessageStatus;
+  /** Client-side state of each action in `pendingActions`, keyed by action id */
+  actionStates?: Record<string, ActionState>;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -64,6 +73,69 @@ export interface CitationMark {
 }
 
 // ============================================================================
+// Human-in-the-loop Types (mirror @cognipeer/agent-server >= 0.3.0)
+// ============================================================================
+
+export interface UserQuestionOption {
+  label: string;
+  value?: string;
+  description?: string;
+}
+
+export interface UserQuestion {
+  question: string;
+  header?: string;
+  multiSelect?: boolean;
+  placeholder?: string;
+  required?: boolean;
+  options?: UserQuestionOption[];
+}
+
+export type PendingAction =
+  | {
+      id: string;
+      type: "tool_approval";
+      toolName: string;
+      toolCallId?: string;
+      title?: string;
+      summary?: string;
+      args?: Record<string, unknown>;
+      expiresAt?: string;
+    }
+  | {
+      id: string;
+      type: "user_question";
+      questions: UserQuestion[];
+      allowFreeText?: boolean;
+      expiresAt?: string;
+    };
+
+export type ActionResolution =
+  | {
+      type: "tool_approval";
+      decision: "allow" | "deny";
+      comment?: string;
+      approvedArgs?: Record<string, unknown>;
+      rememberForSession?: boolean;
+    }
+  | {
+      type: "user_question";
+      answers: Record<string, string | string[]>;
+      cancelled?: boolean;
+    };
+
+export type MessageStatus = "completed" | "requires_action" | "incomplete" | "cancelled";
+
+/** Where an action card is in its life, as tracked by the UI. */
+export type ActionStatus = "pending" | "resolving" | "resolved" | "cancelled" | "expired";
+
+export interface ActionState {
+  status: ActionStatus;
+  /** What was answered; absent when it was resolved somewhere else */
+  resolution?: ActionResolution;
+}
+
+// ============================================================================
 // Conversation Types
 // ============================================================================
 
@@ -74,6 +146,8 @@ export interface Conversation {
   title?: string;
   metadata?: Record<string, unknown>;
   state?: Record<string, unknown>;
+  /** Actions still waiting for an answer (set by agent-server >= 0.3.0) */
+  pendingActions?: PendingAction[];
   createdAt: Date;
   updatedAt: Date;
 }
@@ -98,6 +172,11 @@ export interface AgentInfo {
   description?: string;
   version?: string;
   metadata?: Record<string, unknown>;
+  /** What the agent can pause for; absent when the server does not say */
+  capabilities?: {
+    toolApproval?: boolean;
+    askUser?: boolean;
+  };
 }
 
 // ============================================================================
@@ -153,6 +232,24 @@ export interface StreamErrorEvent extends StreamEventBase {
   code?: string;
 }
 
+export interface StreamActionRequiredEvent extends StreamEventBase {
+  type: "stream.action_required";
+  conversationId: string;
+  messageId: string;
+  actions: PendingAction[];
+}
+
+export interface StreamActionResolvedEvent extends StreamEventBase {
+  type: "stream.action_resolved";
+  conversationId: string;
+  actionId: string;
+  resolution: {
+    type: "tool_approval" | "user_question";
+    decision?: "allow" | "deny";
+    cancelled?: boolean;
+  };
+}
+
 export interface StreamDoneEvent extends StreamEventBase {
   type: "stream.done";
   conversationId: string;
@@ -169,6 +266,9 @@ export interface StreamDoneEvent extends StreamEventBase {
     outputTokens?: number;
     totalTokens?: number;
   };
+  /** `requires_action` when the turn paused for an approval or an answer */
+  status?: MessageStatus;
+  pendingActions?: PendingAction[];
 }
 
 export type StreamEvent =
@@ -179,6 +279,8 @@ export type StreamEvent =
   | StreamToolResultEvent
   | StreamProgressEvent
   | StreamErrorEvent
+  | StreamActionRequiredEvent
+  | StreamActionResolvedEvent
   | StreamDoneEvent;
 
 // ============================================================================
@@ -311,11 +413,35 @@ export interface ChatCallbacks {
   /** Called when a background stream completes after the user navigated away.
    *  Receives the conversationId so the host can refresh sidebar / state. */
   onBackgroundStreamCompleted?: (conversationId: string) => void;
+  /** Called after the user's answer to an approval or question was accepted */
+  onActionResolved?: (info: {
+    conversationId: string;
+    actionId: string;
+    action?: PendingAction;
+    resolution: ActionResolution;
+  }) => void;
 }
 
 export interface MessageActionProps {
   message: Message;
   isStreaming: boolean;
+}
+
+/** Props handed to `renderToolApproval` */
+export interface ToolApprovalRenderProps {
+  action: Extract<PendingAction, { type: "tool_approval" }>;
+  state?: ActionState;
+  /** True when this app cannot answer (feature off or transport unsupported) */
+  readOnly: boolean;
+  resolve: (resolution: Extract<ActionResolution, { type: "tool_approval" }>) => void;
+}
+
+/** Props handed to `renderQuestion` */
+export interface QuestionRenderProps {
+  action: Extract<PendingAction, { type: "user_question" }>;
+  state?: ActionState;
+  readOnly: boolean;
+  resolve: (resolution: Extract<ActionResolution, { type: "user_question" }>) => void;
 }
 
 export interface ToolCallDisplayProps {

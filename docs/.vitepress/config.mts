@@ -38,6 +38,7 @@ export default defineConfig({
             { text: 'Streaming', link: '/guide/streaming' },
             { text: 'File Uploads', link: '/guide/file-uploads' },
             { text: 'Tool Calls', link: '/guide/tool-calls' },
+            { text: 'Approvals and Questions', link: '/guide/approvals' },
             { text: 'History Sidebar', link: '/guide/history' },
             { text: 'Custom Actions', link: '/guide/custom-actions' },
           ],

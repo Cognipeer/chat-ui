@@ -10,6 +10,7 @@ Documentation: <https://docs.cognipeer.com/chat-ui/guide/getting-started>
 - 📡 **Streaming Support** - Real-time SSE streaming with text updates
 - 📁 **File Uploads** - Built-in file attachment support
 - 🔧 **Tool Call UI** - Expandable tool call visualization
+- ✅ **Approvals and Questions** - Approve tool calls and answer agent questions inline (agent-server 0.3.0+, see `docs/guide/approvals.md`)
 - 💬 **Chat History** - Sidebar with conversation history
 - 🎯 **Customizable Actions** - Add feedback buttons or custom actions to messages
 - 🌍 **Internationalization** - Built-in i18n with English and Turkish support

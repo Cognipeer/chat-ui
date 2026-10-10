@@ -46,7 +46,12 @@ export async function errorFromResponse(response: Response): Promise<Error> {
     (typeof body?.error === "string" ? body.error : undefined) ||
     body?.message ||
     `Request failed (${response.status})`;
-  return new Error(message);
+  const error = new Error(message) as Error & { status?: number; code?: string };
+  error.status = response.status;
+  if (typeof body?.error?.code === "string") error.code = body.error.code;
+  else if (typeof body?.error?.type === "string") error.code = body.error.type;
+  else if (typeof body?.code === "string") error.code = body.code;
+  return error;
 }
 
 export interface SSEMessage {

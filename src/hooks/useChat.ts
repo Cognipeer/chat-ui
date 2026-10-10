@@ -2,9 +2,29 @@
 
 import { useState, useCallback, useRef, useEffect, useMemo, type Dispatch, type SetStateAction } from "react";
 import { flushSync } from "react-dom";
-import { generateId } from "../utils";
-import type { Message, FileAttachment, ChatConfig, ChatCallbacks, Conversation } from "../types";
-import { AgentServerClient, type ChatTransport } from "../api";
+import {
+  generateId,
+  normalizeActions,
+  collectPendingActions,
+  singleFreeTextQuestion,
+  restorePendingActions,
+  setActionStates,
+  stateForResolution,
+  type PendingActionEntry,
+} from "../utils";
+import type {
+  Message,
+  FileAttachment,
+  ChatConfig,
+  ChatCallbacks,
+  Conversation,
+  PendingAction,
+  ActionResolution,
+  ActionState,
+  StreamEvent,
+  UserQuestion,
+} from "../types";
+import { AgentServerClient, type ChatTransport, type StreamCallbacks } from "../api";
 import { useI18n } from "./useI18n";
 
 export interface UseChatOptions extends ChatConfig, ChatCallbacks {
@@ -12,6 +32,12 @@ export interface UseChatOptions extends ChatConfig, ChatCallbacks {
   conversationId?: string;
   /** Initial messages */
   initialMessages?: Message[];
+  /**
+   * What the composer does while an approval or question is waiting.
+   * `block` (default) expects the user to answer the card; `cancel` lets a new
+   * message through, which cancels the pending request on the server.
+   */
+  pendingActionComposerMode?: "block" | "cancel";
 }
 
 export interface UseChatReturn {
@@ -51,6 +77,21 @@ export interface UseChatReturn {
   retry: () => Promise<void>;
   /** Stop the current stream */
   stop: () => void;
+  /** Approvals / questions waiting for an answer, oldest first */
+  pendingActions: PendingActionEntry[];
+  /** True while at least one approval or question is waiting */
+  awaitingAction: boolean;
+  /** True while an answer is being sent and the turn continues */
+  isResolvingAction: boolean;
+  /** Whether the transport can answer approvals / questions at all */
+  canResolveActions: boolean;
+  /** The single free-text question the composer can answer, if that is the only thing pending */
+  answerableQuestion: { actionId: string; question: UserQuestion } | null;
+  /**
+   * Answer a pending approval or question. The continuation streams into a new
+   * assistant message and the card switches to its resolved state.
+   */
+  resolveAction: (actionId: string, resolution: ActionResolution) => Promise<void>;
   /** Set error */
   setError: (error: Error | null) => void;
   /** Directly override message state */
@@ -67,6 +108,16 @@ export interface UseChatReturn {
   setPendingFiles: Dispatch<SetStateAction<FileAttachment[]>>;
   /** Directly override active tool calls */
   setActiveToolCalls: Dispatch<SetStateAction<Map<string, { name: string; args: Record<string, unknown>; result?: unknown; reasoning?: string; displayName?: string }>>>;
+}
+
+/** Attaches the pause info a non-streaming response carries next to the message. */
+function withActions(
+  message: Message,
+  response: { status?: Message["status"]; pendingActions?: PendingAction[] }
+): Message {
+  const actions = normalizeActions(response.pendingActions ?? message.pendingActions);
+  if (actions.length === 0) return message;
+  return { ...message, pendingActions: actions, status: response.status ?? message.status ?? "requires_action" };
 }
 
 /**
@@ -89,6 +140,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     maxFiles = 10,
     conversationId: initialConversationId,
     initialMessages = [],
+    pendingActionComposerMode = "block",
     onMessageSent,
     onMessageReceived,
     onStreamText,
@@ -98,6 +150,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     onConversationCreated,
     onConversationTitleGenerated,
     onBackgroundStreamCompleted,
+    onActionResolved,
   } = options;
 
   const [messages, setMessages] = useState<Message[]>(initialMessages);
@@ -111,6 +164,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     Map<string, { name: string; args: Record<string, unknown>; result?: unknown; reasoning?: string; displayName?: string }>
   >(new Map());
   const [progressMessage, setProgressMessage] = useState<string>("");
+  const [isResolvingAction, setIsResolvingAction] = useState(false);
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const lastUserMessageRef = useRef<string>("");
@@ -124,6 +178,12 @@ export function useChat(options: UseChatOptions): UseChatReturn {
   // Async stream callbacks capture the value at call-time; if it differs from the
   // current ref value the callback is stale and must not touch component state.
   const sessionRef = useRef(0);
+
+  // Latest messages for async callbacks (stream handlers outlive the render that made them)
+  const messagesRef = useRef<Message[]>(messages);
+  messagesRef.current = messages;
+  // Actions announced by `stream.action_required` during the current turn
+  const streamActionsRef = useRef<PendingAction[]>([]);
 
   // Keep a stable client reference that updates synchronously when config changes
   useMemo(() => {
@@ -179,7 +239,12 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       // If user navigated away while we were loading, discard the result
       if (sessionRef.current !== capturedSession) return;
       setConversation(data.conversation);
-      setMessages(data.messages);
+      setMessages(
+        restorePendingActions(
+          data.messages,
+          data.pendingActions ?? data.conversation?.pendingActions
+        )
+      );
     } catch (err) {
       if (sessionRef.current !== capturedSession) return;
       if (err instanceof DOMException && err.name === 'AbortError') return;
@@ -208,94 +273,13 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     return conv;
   }, [t, agentId, onConversationCreated]);
 
-  const sendMessage = useCallback(async (content: string) => {
-    if (!clientRef.current || !content.trim()) return;
-
-    // Capture the current session so async callbacks can detect staleness
-    const capturedSession = sessionRef.current;
-    const isStale = () => sessionRef.current !== capturedSession;
-
-    setError(null);
-    setIsStreaming(true);
-    lastUserMessageRef.current = content;
-
-    try {
-      // Create conversation if needed
-      let currentConversation = conversation;
-      if (!currentConversation) {
-        currentConversation = await createConversation();
-        // User navigated while we were creating the conversation
-        if (isStale()) {
-          setConversation(null);
-          return;
-        }
-      }
-
-      // Read base64 content from raw File objects for each pending file
-      const filesToSend: Array<{ name: string; content: string; mimeType: string }> = [];
-      for (const f of pendingFiles) {
-        const rawFile = rawFilesRef.current.get(f.id);
-        if (rawFile) {
-          const base64 = await new Promise<string>((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = () => {
-              // result is "data:<mime>;base64,<data>" — extract just the base64 part
-              const result = reader.result as string;
-              const commaIdx = result.indexOf(",");
-              resolve(commaIdx >= 0 ? result.slice(commaIdx + 1) : result);
-            };
-            reader.onerror = () => reject(reader.error);
-            reader.readAsDataURL(rawFile);
-          });
-          filesToSend.push({
-            name: f.name,
-            content: base64,
-            mimeType: f.mimeType,
-          });
-        }
-      }
-
-      // Clean up raw file references
-      for (const f of pendingFiles) {
-        rawFilesRef.current.delete(f.id);
-      }
-
-      // If user navigated away while we were reading files, bail out
-      if (isStale()) return;
-
-      // Create optimistic user message
-      const userMessage: Message = {
-        id: generateId(),
-        conversationId: currentConversation.id,
-        role: "user",
-        content,
-        files: pendingFiles.length > 0 ? pendingFiles : undefined,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
-
-      setMessages((prev) => [...prev, userMessage]);
-      setPendingFiles([]);
-      onMessageSent?.(userMessage);
-
-      if (streaming) {
-        // Streaming mode
-        setStreamingText("");
-        setActiveToolCalls(new Map());
-        setProgressMessage("");
-        toolCallStartTimeRef.current = null;
-
-        // Create an AbortController so the stop() function can cancel the stream
-        const abortController = new AbortController();
-        abortControllerRef.current = abortController;
-
-        await clientRef.current.sendMessageStream(
-          currentConversation.id,
-          {
-            message: content,
-            files: filesToSend.length > 0 ? filesToSend : undefined,
-          },
-          {
+  // Handlers shared by sendMessage and resolveAction: both stream a turn into the
+  // transcript. Kept in a ref so they always see the latest callback props.
+  const createStreamCallbacksRef = useRef<(isStale: () => boolean) => StreamCallbacks>(
+    () => ({})
+  );
+  createStreamCallbacksRef.current = (isStale: () => boolean): StreamCallbacks => (
+    {
             onStart: () => {
               // Stream started
             },
@@ -384,6 +368,20 @@ export function useChat(options: UseChatOptions): UseChatReturn {
                   ? Math.round((Date.now() - toolCallStartTimeRef.current) / 1000)
                   : undefined;
 
+                // Approvals / questions this turn paused for. When resolving one of
+                // several actions the server repeats the rest; those already have a card.
+                const announced = new Map<string, PendingAction>();
+                for (const a of [...streamActionsRef.current, ...normalizeActions(event.pendingActions)]) {
+                  announced.set(a.id, a);
+                }
+                streamActionsRef.current = [];
+                const shown = new Set(
+                  collectPendingActions(messagesRef.current).map((e) => e.action.id)
+                );
+                const freshActions = Array.from(announced.values()).filter((a) => !shown.has(a.id));
+                const paused = event.status === "requires_action" || announced.size > 0;
+                const hasBody = Boolean(event.content) || currentToolCalls.size > 0 || Boolean(event.files?.length);
+
                 const assistantMessage: Message = {
                   id: event.messageId,
                   conversationId: event.conversationId,
@@ -393,6 +391,11 @@ export function useChat(options: UseChatOptions): UseChatReturn {
                   citationMarks: event.citationMarks,
                   files: event.files,
                   toolCalls: toolCallsForMessage,
+                  ...(paused && freshActions.length > 0
+                    ? { pendingActions: freshActions, status: "requires_action" as const }
+                    : event.status && event.status !== "completed" && event.status !== "requires_action"
+                      ? { status: event.status }
+                      : {}),
                   metadata: currentToolCalls.size > 0
                     ? {
                         toolCallDetails: Array.from(currentToolCalls.entries()).map(([id, call]) => ({
@@ -419,11 +422,176 @@ export function useChat(options: UseChatOptions): UseChatReturn {
                   setConversation((prev) => prev ? { ...prev, title: event.title } : prev);
                   onConversationTitleGenerated?.(event.conversationId, event.title);
                 }
+                // Nothing new to show: the answer only left other actions waiting
+                if (paused && freshActions.length === 0 && !hasBody) return;
+                // The server repeats the paused message's id (and stored content) when
+                // some of its actions are still waiting: it is already on screen.
+                if (messagesRef.current.some((m) => m.id === event.messageId)) {
+                  if (freshActions.length > 0) {
+                    setMessages((prev) =>
+                      prev.map((m) =>
+                        m.id === event.messageId
+                          ? { ...m, pendingActions: [...(m.pendingActions ?? []), ...freshActions], status: "requires_action" as const }
+                          : m
+                      )
+                    );
+                  }
+                  return;
+                }
                 setMessages((prev) => [...prev, assistantMessage]);
                 onMessageReceived?.(assistantMessage);
               }
             },
+            onActionRequired: (event: StreamEvent) => {
+              if (isStale()) return;
+              if (event.type !== "stream.action_required") return;
+              streamActionsRef.current = [
+                ...streamActionsRef.current,
+                ...normalizeActions(event.actions),
+              ];
+            },
+            onActionResolved: (event: StreamEvent) => {
+              if (isStale()) return;
+              if (event.type !== "stream.action_resolved") return;
+              // Answered elsewhere (or by this app): settle the card. Detail already
+              // known from this app's own answer is kept.
+              const r = event.resolution;
+              const cancelled = Boolean(r?.cancelled);
+              const thin: ActionResolution | undefined =
+                r?.type === "tool_approval"
+                  ? r.decision ? { type: "tool_approval", decision: r.decision } : undefined
+                  : r?.type === "user_question"
+                    ? { type: "user_question", answers: {}, cancelled }
+                    : undefined;
+              setMessages((prev) =>
+                prev.map((m) => {
+                  const existing = m.actionStates?.[event.actionId];
+                  if (!m.pendingActions?.some((a) => a.id === event.actionId)) return m;
+                  if (existing && (existing.status === "resolved" || existing.status === "cancelled")) return m;
+                  const next: ActionState = {
+                    status: cancelled ? "cancelled" : "resolved",
+                    resolution: existing?.resolution ?? thin,
+                  };
+                  return { ...m, actionStates: { ...m.actionStates, [event.actionId]: next } };
+                })
+              );
+            },
+          }
+  );
+
+  const sendMessage = useCallback(async (content: string) => {
+    if (!clientRef.current || !content.trim()) return;
+
+    // Capture the current session so async callbacks can detect staleness
+    const capturedSession = sessionRef.current;
+    const isStale = () => sessionRef.current !== capturedSession;
+
+    setError(null);
+    setIsStreaming(true);
+    lastUserMessageRef.current = content;
+    streamActionsRef.current = [];
+
+    // Sending while something is waiting cancels it (server policy `cancel`).
+    // Applied only once the server has accepted the send, so a 409 leaves the cards usable.
+    let cancelApplied = false;
+    const applyCancel = () => {
+      if (cancelApplied || pendingActionComposerMode !== "cancel") return;
+      cancelApplied = true;
+      const waiting = waitingBeforeSend;
+      if (waiting.length === 0) return;
+      const cancelled: Record<string, ActionState> = {};
+      for (const e of waiting) cancelled[e.action.id] = { status: "cancelled" };
+      setMessages((prev) => setActionStates(prev, cancelled));
+    };
+    const waitingBeforeSend = pendingActionComposerMode === "cancel"
+      ? collectPendingActions(messagesRef.current)
+      : [];
+
+    try {
+      // Create conversation if needed
+      let currentConversation = conversation;
+      if (!currentConversation) {
+        currentConversation = await createConversation();
+        // User navigated while we were creating the conversation
+        if (isStale()) {
+          setConversation(null);
+          return;
+        }
+      }
+
+      // Read base64 content from raw File objects for each pending file
+      const filesToSend: Array<{ name: string; content: string; mimeType: string }> = [];
+      for (const f of pendingFiles) {
+        const rawFile = rawFilesRef.current.get(f.id);
+        if (rawFile) {
+          const base64 = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => {
+              // result is "data:<mime>;base64,<data>" — extract just the base64 part
+              const result = reader.result as string;
+              const commaIdx = result.indexOf(",");
+              resolve(commaIdx >= 0 ? result.slice(commaIdx + 1) : result);
+            };
+            reader.onerror = () => reject(reader.error);
+            reader.readAsDataURL(rawFile);
+          });
+          filesToSend.push({
+            name: f.name,
+            content: base64,
+            mimeType: f.mimeType,
+          });
+        }
+      }
+
+      // Clean up raw file references
+      for (const f of pendingFiles) {
+        rawFilesRef.current.delete(f.id);
+      }
+
+      // If user navigated away while we were reading files, bail out
+      if (isStale()) return;
+
+      // Create optimistic user message
+      const userMessage: Message = {
+        id: generateId(),
+        conversationId: currentConversation.id,
+        role: "user",
+        content,
+        files: pendingFiles.length > 0 ? pendingFiles : undefined,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+
+      setMessages((prev) => [...prev, userMessage]);
+      setPendingFiles([]);
+      onMessageSent?.(userMessage);
+
+      if (streaming) {
+        // Streaming mode
+        setStreamingText("");
+        setActiveToolCalls(new Map());
+        setProgressMessage("");
+        toolCallStartTimeRef.current = null;
+
+        // Create an AbortController so the stop() function can cancel the stream
+        const abortController = new AbortController();
+        abortControllerRef.current = abortController;
+
+        await clientRef.current.sendMessageStream(
+          currentConversation.id,
+          {
+            message: content,
+            files: filesToSend.length > 0 ? filesToSend : undefined,
           },
+          (() => {
+            const base = createStreamCallbacksRef.current(isStale);
+            return {
+              ...base,
+              onStart: (e) => { applyCancel(); base.onStart?.(e); },
+              onText: (text, full) => { applyCancel(); base.onText?.(text, full); },
+              onDone: (e) => { applyCancel(); base.onDone?.(e); },
+            };
+          })(),
           abortController.signal
         );
       } else {
@@ -440,10 +608,11 @@ export function useChat(options: UseChatOptions): UseChatReturn {
           return;
         }
 
+        applyCancel();
         setMessages((prev) => {
           // Replace optimistic user message with actual
           const filtered = prev.filter((m) => m.id !== userMessage.id);
-          return [...filtered, response.message, response.response];
+          return [...filtered, response.message, withActions(response.response, response)];
         });
         // Update conversation title if server generated one
         if (response.conversationTitle) {
@@ -452,7 +621,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
             onConversationTitleGenerated?.(currentConversation.id, response.conversationTitle);
           }
         }
-        onMessageReceived?.(response.response);
+        onMessageReceived?.(withActions(response.response, response));
       }
     } catch (err) {
       // Ignore stale sessions (user navigated away) and abort errors (user stopped)
@@ -473,6 +642,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     createConversation,
     pendingFiles,
     streaming,
+    pendingActionComposerMode,
     onMessageSent,
     onMessageReceived,
     onStreamText,
@@ -482,6 +652,97 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     onConversationTitleGenerated,
     onBackgroundStreamCompleted,
   ]);
+
+  const resolveAction = useCallback(async (actionId: string, resolution: ActionResolution) => {
+    const client = clientRef.current;
+    if (!client?.resolveAction || !conversation) return;
+    const entry = collectPendingActions(messagesRef.current).find((e) => e.action.id === actionId);
+    if (!entry || entry.state?.status === "resolving") return;
+
+    const capturedSession = sessionRef.current;
+    const isStale = () => sessionRef.current !== capturedSession;
+    const conversationId = conversation.id;
+    const patch = (state: ActionState) =>
+      setMessages((prev) => setActionStates(prev, { [actionId]: state }));
+
+    setError(null);
+    streamActionsRef.current = [];
+    patch({ status: "resolving", resolution });
+    setIsResolvingAction(true);
+    setIsStreaming(true);
+    setStreamingText("");
+    setActiveToolCalls(new Map());
+    activeToolCallsRef.current = new Map();
+    toolCallStartTimeRef.current = null;
+    setProgressMessage("");
+
+    // Once the server has started answering, the action is spent even if the stream later breaks
+    let accepted = false;
+    try {
+      if (streaming) {
+        const abortController = new AbortController();
+        abortControllerRef.current = abortController;
+        const base = createStreamCallbacksRef.current(isStale);
+        await client.resolveAction(conversationId, actionId, resolution, {
+          stream: true,
+          signal: abortController.signal,
+          callbacks: {
+            ...base,
+            onStart: (e) => { accepted = true; base.onStart?.(e); },
+            onText: (text, full) => { accepted = true; base.onText?.(text, full); },
+            onActionResolved: (e) => { accepted = true; base.onActionResolved?.(e); },
+            onDone: (e) => { accepted = true; base.onDone?.(e); },
+          },
+        });
+      } else {
+        const response = await client.resolveAction(conversationId, actionId, resolution, { stream: false });
+        accepted = true;
+        if (!isStale() && response?.response) {
+          const reply = withActions(response.response, response);
+          const shown = new Set(collectPendingActions(messagesRef.current).map((e) => e.action.id));
+          const fresh = (reply.pendingActions ?? []).filter((a) => !shown.has(a.id));
+          const onScreen = messagesRef.current.some((m) => m.id === reply.id);
+          if (onScreen) {
+            if (fresh.length > 0) {
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === reply.id
+                    ? { ...m, pendingActions: [...(m.pendingActions ?? []), ...fresh], status: "requires_action" as const }
+                    : m
+                )
+              );
+            }
+          } else if (fresh.length > 0 || reply.content) {
+            const message = { ...reply, pendingActions: fresh.length > 0 ? fresh : undefined };
+            setMessages((prev) => [...prev, message]);
+            onMessageReceived?.(message);
+          }
+        }
+      }
+      if (isStale()) return;
+      patch(stateForResolution(resolution));
+      onActionResolved?.({ conversationId, actionId, action: entry.action, resolution });
+    } catch (err) {
+      if (isStale()) return;
+      if (err instanceof DOMException && err.name === "AbortError") {
+        patch(accepted ? stateForResolution(resolution) : { status: "pending" });
+        return;
+      }
+      const error = err instanceof Error ? err : new Error(t("chat.error.sendFailed"));
+      const code = (err as { code?: string } | null)?.code;
+      // Gone from the server's side (answered elsewhere or expired): stop offering it
+      if (code === "action_not_pending") patch({ status: "resolved" });
+      else patch(accepted ? stateForResolution(resolution) : { status: "pending" });
+      setError(error);
+      onError?.(error);
+    } finally {
+      if (!isStale()) {
+        setIsStreaming(false);
+        setIsResolvingAction(false);
+        abortControllerRef.current = null;
+      }
+    }
+  }, [t, conversation, streaming, onMessageReceived, onActionResolved, onError]);
 
   const addFiles = useCallback(async (files: File[]) => {
     if (!enableFileUpload) return;
@@ -591,6 +852,10 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     setIsStreaming(false);
   }, [conversation]);
 
+  const pendingActions = useMemo(() => collectPendingActions(messages), [messages]);
+  const answerable = useMemo(() => singleFreeTextQuestion(pendingActions), [pendingActions]);
+  const canResolveActions = typeof clientRef.current?.resolveAction === "function";
+
   return {
     messages,
     conversation,
@@ -610,6 +875,12 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     createConversation,
     retry,
     stop,
+    pendingActions,
+    awaitingAction: pendingActions.length > 0 && !isLoadingConversation,
+    isResolvingAction,
+    canResolveActions,
+    answerableQuestion: answerable ? { actionId: answerable.action.id, question: answerable.question } : null,
+    resolveAction,
     setError,
     setMessages,
     setConversation,

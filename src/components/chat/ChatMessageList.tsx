@@ -5,6 +5,7 @@ import { cn } from "../../utils";
 import type { Message, MessageActionProps } from "../../types";
 import { ChatMessage } from "./ChatMessage";
 import { ToolCalls } from "./ToolCall";
+import type { ChatActionsConfig } from "./ActionCards";
 import { useI18n } from "../../hooks/useI18n";
 
 export interface ChatMessageListProps {
@@ -34,6 +35,8 @@ export interface ChatMessageListProps {
   emptyState?: React.ReactNode;
   /** Show citations section under assistant messages */
   enableCitations?: boolean;
+  /** How approval / question cards behave */
+  actions?: ChatActionsConfig;
 }
 
 /**
@@ -53,6 +56,7 @@ export function ChatMessageList({
   showTimestamps = false,
   emptyState,
   enableCitations = true,
+  actions,
 }: ChatMessageListProps) {
   const { t } = useI18n();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -89,10 +93,11 @@ export function ChatMessageList({
             isStreaming={
               isStreaming &&
               index === messages.length - 1 &&
-              message.role === "assistant"
+              message.role === "assistant" &&
+              !message.pendingActions
             }
             streamingText={
-              index === messages.length - 1 && message.role === "assistant"
+              index === messages.length - 1 && message.role === "assistant" && !message.pendingActions
                 ? streamingText
                 : undefined
             }
@@ -101,6 +106,7 @@ export function ChatMessageList({
             showAvatar={showAvatars}
             showTimestamp={showTimestamps}
             enableCitations={enableCitations}
+            actions={actions}
           />
         ))}
 

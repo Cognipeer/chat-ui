@@ -10,11 +10,14 @@ import type {
   ChatConfig,
   ChatCallbacks,
   MessageActionProps,
+  ToolApprovalRenderProps,
+  QuestionRenderProps,
 } from "../../types";
 import { ChatThemeProvider, ChatI18nProvider, type SupportedLocale } from "../../providers";
 import { AgentServerClient, type ChatTransport } from "../../api";
 import { useChat, useChatHistory, useI18n } from "../../hooks";
 import { ChatMessageList } from "./ChatMessageList";
+import type { ChatActionsConfig } from "./ActionCards";
 import { ChatInput } from "./ChatInput";
 import type { ChatInputHandle } from "./ChatInput";
 import { ChatHistory } from "./ChatHistory";
@@ -68,6 +71,26 @@ export interface ChatProps extends ChatConfig, ChatCallbacks {
   enableMessageSearch?: boolean;
   /** Show citations section under assistant messages */
   enableCitations?: boolean;
+  /**
+   * Let the user approve or deny tool calls in this app (default true). When
+   * off, approvals show a read-only "waiting in another app" notice.
+   */
+  enableToolApprovals?: boolean;
+  /**
+   * Let the user answer the assistant's questions in this app (default true).
+   * When off, questions show a read-only notice.
+   */
+  enableQuestions?: boolean;
+  /** Replace the approval card */
+  renderToolApproval?: (props: ToolApprovalRenderProps) => React.ReactNode;
+  /** Replace the question card */
+  renderQuestion?: (props: QuestionRenderProps) => React.ReactNode;
+  /**
+   * What the composer does while an approval or question is waiting.
+   * `block` (default) disables it until answered; `cancel` lets a new message
+   * through, which cancels the pending request.
+   */
+  pendingActionComposerMode?: "block" | "cancel";
   /**
    * Show agent name below the conversation title in the history sidebar.
    * - `true`  → always show
@@ -137,6 +160,12 @@ export function Chat({
   autoFocusInput = false,
   enableMessageSearch = false,
   enableCitations = true,
+  enableToolApprovals = true,
+  enableQuestions = true,
+  renderToolApproval,
+  renderQuestion,
+  pendingActionComposerMode = "block",
+  onActionResolved,
   showAgentName,
   // I18n
   locale,
@@ -273,7 +302,51 @@ export function Chat({
     onConversationCreated: wrappedOnConversationCreated,
     onConversationTitleGenerated: wrappedOnConversationTitleGenerated,
     onBackgroundStreamCompleted: wrappedOnBackgroundStreamCompleted,
+    onActionResolved,
+    pendingActionComposerMode,
   });
+
+  // Approval / question cards
+  const actionsConfig = useMemo<ChatActionsConfig>(
+    () => ({
+      enableToolApprovals,
+      enableQuestions,
+      canResolve: chat.canResolveActions,
+      renderToolApproval,
+      renderQuestion,
+      onResolve: chat.resolveAction,
+    }),
+    [enableToolApprovals, enableQuestions, chat.canResolveActions, renderToolApproval, renderQuestion, chat.resolveAction]
+  );
+
+  // A lone free-text question is answered from the composer
+  const composerAnswers =
+    chat.awaitingAction &&
+    enableQuestions &&
+    chat.canResolveActions &&
+    chat.answerableQuestion !== null;
+  const pendingMode = !chat.awaitingAction
+    ? undefined
+    : composerAnswers
+      ? ("answer" as const)
+      : pendingActionComposerMode === "cancel"
+        ? ("cancel" as const)
+        : ("blocked" as const);
+
+  const handleSend = useCallback(
+    (text: string) => {
+      const q = chat.answerableQuestion;
+      if (pendingMode === "answer" && q) {
+        void chat.resolveAction(q.actionId, {
+          type: "user_question",
+          answers: { [q.question.question]: text },
+        });
+        return;
+      }
+      void chat.sendMessage(text);
+    },
+    [chat.answerableQuestion, chat.resolveAction, chat.sendMessage, pendingMode]
+  );
 
   // History state — when there are multiple agents, don't filter by agentId
   // so we can see all portal conversations
@@ -411,6 +484,7 @@ export function Chat({
               showAvatars={showAvatars}
               showTimestamps={showTimestamps}
               enableCitations={enableCitations}
+              actions={actionsConfig}
               emptyState={renderEmptyState?.()}
             />
           )}
@@ -435,7 +509,7 @@ export function Chat({
           {/* Input */}
           <ChatInput
             ref={inputRef}
-            onSend={chat.sendMessage}
+            onSend={handleSend}
             onStop={chat.stop}
             onFilesAdd={effectiveFileUpload ? chat.addFiles : undefined}
             onFileRemove={chat.removeFile}
@@ -446,6 +520,7 @@ export function Chat({
             allowedFileTypes={allowedFileTypes}
             maxFiles={maxFiles}
             autoFocus={autoFocusInput}
+            pendingMode={pendingMode}
           />
         </div>
       </div>
