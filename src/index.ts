@@ -1,6 +1,6 @@
 // Main exports
 export { Chat, ChatMinimal, type ChatProps, type ChatMinimalProps } from "./components/chat";
-export { ChatMessage, type ChatMessageProps } from "./components/chat";
+export { ChatMessage, type ChatMessageProps, type ImageRenderProps } from "./components/chat";
 export { ChatMessageList, type ChatMessageListProps } from "./components/chat";
 export { ChatInput, type ChatInputProps, type ChatInputHandle } from "./components/chat";
 export { ChatHistory, type ChatHistoryProps } from "./components/chat";
@@ -23,7 +23,15 @@ export { useI18n, type UseI18nReturn } from "./hooks";
 // Providers
 export { ChatThemeProvider, useChatTheme, useChatThemeOptional } from "./providers";
 export { ChatProvider, useChatContext, useChatContextOptional, type ChatProviderProps } from "./providers";
-export { ChatI18nProvider, useI18nContext, useI18nContextOptional, type ChatI18nProviderProps, type SupportedLocale } from "./providers";
+export {
+  ChatI18nProvider,
+  useI18nContext,
+  useI18nContextOptional,
+  type ChatI18nProviderProps,
+  type ChatMessages,
+  type BuiltInLocale,
+  type SupportedLocale,
+} from "./providers";
 
 // API Client
 export {
@@ -101,6 +109,7 @@ export {
   XIcon,
   StopIcon,
   FileIcon,
+  ImageIcon,
   ChatIcon,
   TrashIcon,
   PlusIcon,
@@ -117,12 +126,17 @@ export {
 } from "./components/chat/Icons";
 
 // Utils
-export { cn, formatFileSize, formatRelativeTime, generateId } from "./utils";
+export { cn, formatFileSize, formatRelativeTime, generateId, isImageFile } from "./utils";
 export {
   restorePendingActions,
   collectPendingActions,
+  normalizeActions,
+  isQuestionRequired,
   type PendingActionEntry,
 } from "./utils/actions";
+export { validateAgainstSchema, type SchemaIssue } from "./utils/jsonSchema";
+export { localizeError, normalizeErrorCode, type CodedError } from "./utils/errors";
+export { safeImageSrc, safeFileHref } from "./utils/images";
 export {
   insertCitationMarkers,
   parseCitationHref,

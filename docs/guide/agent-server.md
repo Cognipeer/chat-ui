@@ -262,6 +262,14 @@ function AgentSelector() {
 />
 ```
 
+## Approvals and questions
+
+With `@cognipeer/agent-server` 0.3.0 or later, an agent can pause for an approval or a question. `Chat` shows the card and sends the answer to `POST /conversations/:conversationId/actions/:actionId` (body `{ resolution, stream? }`); `GET /conversations/:id` lists the actions still waiting. See [Approvals and Questions](/guide/approvals).
+
+## Error codes
+
+Failed requests carry the server's `code`, and `Chat` shows a localized message for the well-known ones (`conversation_busy`, `action_pending`, `action_expired`, `rate_limited`, `message_too_long`, `file_too_large`, ...). A send refused because a card is waiting or a turn is running makes the page fetch the conversation again, so the card or the latest answer shows. See [Approvals and Questions](/guide/approvals#errors).
+
 ## Direct API Client Usage
 
 For custom implementations:
@@ -271,28 +279,24 @@ import { AgentServerClient } from "@cognipeer/chat-ui";
 
 const client = new AgentServerClient({
   baseUrl: "/api/agents",
-  agentId: "assistant",
   authorization: "Bearer token",
 });
 
 // List conversations
-const { conversations } = await client.listConversations();
+const { conversations } = await client.getConversations();
 
-// Create conversation
-const { conversation } = await client.createConversation({ title: "New Chat" });
+// Create conversation (the agent is named here)
+const conversation = await client.createConversation({ agentId: "assistant", title: "New Chat" });
 
 // Send message
-const { message } = await client.sendMessage(conversation.id, {
-  message: "Hello!",
-  streaming: true,
-});
+const { response } = await client.sendMessage(conversation.id, { message: "Hello!" });
 
 // Stream response
-for await (const event of client.streamMessage(conversation.id, {
-  message: "Hello!",
-})) {
-  console.log(event);
-}
+await client.sendMessageStream(
+  conversation.id,
+  { message: "Hello!" },
+  { onText: (chunk, fullText) => console.log(fullText) }
+);
 ```
 
 ## Next Steps

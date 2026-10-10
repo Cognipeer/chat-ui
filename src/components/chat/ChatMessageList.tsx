@@ -1,9 +1,9 @@
 "use client";
 
-import React, { useRef, useEffect } from "react";
-import { cn } from "../../utils";
+import React, { useRef, useEffect, useMemo, useState } from "react";
+import { cn, collectPendingActions } from "../../utils";
 import type { Message, MessageActionProps } from "../../types";
-import { ChatMessage } from "./ChatMessage";
+import { ChatMessage, type ImageRenderProps } from "./ChatMessage";
 import { ToolCalls } from "./ToolCall";
 import type { ChatActionsConfig } from "./ActionCards";
 import { useI18n } from "../../hooks/useI18n";
@@ -37,6 +37,61 @@ export interface ChatMessageListProps {
   enableCitations?: boolean;
   /** How approval / question cards behave */
   actions?: ChatActionsConfig;
+  /** Replace how an image in a message is drawn */
+  renderImage?: (props: ImageRenderProps) => React.ReactNode;
+}
+
+const NO_IDS: ReadonlySet<string> = new Set();
+
+/**
+ * Notices the approval / question cards that appear while the list is on screen (not the ones a
+ * loaded conversation arrives with): the first gets keyboard focus, and a screen reader is told.
+ * A different set of messages (a conversation opened, a chat cleared) starts over without a fuss.
+ * `Chat` takes this list off screen while it loads a conversation, so those cards are never "new".
+ */
+function useNewCards(messages: Message[]): { focusIds: ReadonlySet<string>; announcement: string } {
+  const { t } = useI18n();
+  const known = useRef<{ messages: Set<string>; actions: Set<string> } | null>(null);
+  const [fresh, setFresh] = useState<{ ids: ReadonlySet<string>; announcement: string; count: number }>({
+    ids: NO_IDS,
+    announcement: "",
+    count: 0,
+  });
+
+  useEffect(() => {
+    const waiting = collectPendingActions(messages);
+    const messageIds = new Set(messages.map((m) => m.id));
+    const before = known.current;
+    // The first render only takes stock. After that it is the same conversation unless it had
+    // messages and none of them is left (another conversation opened, the chat cleared).
+    const continued =
+      before !== null && (before.messages.size === 0 || Array.from(before.messages).some((id) => messageIds.has(id)));
+    const added = continued ? waiting.filter((e) => !before!.actions.has(e.action.id)) : [];
+    known.current = {
+      messages: messageIds,
+      actions: new Set([...(continued ? before!.actions : []), ...waiting.map((e) => e.action.id)]),
+    };
+    if (added.length === 0) {
+      setFresh((current) => (current.ids.size === 0 ? current : { ...current, ids: NO_IDS }));
+      return;
+    }
+    const first = added[0].action;
+    setFresh((current) => ({
+      ids: new Set([first.id]),
+      announcement:
+        first.type === "tool_approval"
+          ? t("chat.a11y.newApproval", { tool: first.title ?? first.toolName })
+          : t("chat.question.title"),
+      count: current.count + 1,
+    }));
+  }, [messages]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // A live region only speaks when its text changes: a zero-width space on every other
+  // announcement lets the same sentence be read again for the next card
+  return {
+    focusIds: fresh.ids,
+    announcement: fresh.count > 1 && fresh.count % 2 === 0 ? `${fresh.announcement}\u200b` : fresh.announcement,
+  };
 }
 
 /**
@@ -57,10 +112,16 @@ export function ChatMessageList({
   emptyState,
   enableCitations = true,
   actions,
+  renderImage,
 }: ChatMessageListProps) {
   const { t } = useI18n();
   const containerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const { focusIds, announcement } = useNewCards(messages);
+  const cardActions = useMemo(
+    () => (actions ? { ...actions, focusActionIds: actions.focusActionIds ?? focusIds } : actions),
+    [actions, focusIds]
+  );
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -80,11 +141,21 @@ export function ChatMessageList({
   return (
     <div
       ref={containerRef}
+      // A log announces what is added; while a reply streams it is busy, so the finished
+      // answer is read once instead of every word
+      role="log"
+      aria-live="polite"
+      aria-relevant="additions text"
+      aria-busy={isStreaming}
+      aria-label={t("chat.a11y.messages")}
       className={cn(
         "flex-1 overflow-y-auto chat-scrollbar",
         className
       )}
     >
+      <div aria-live="assertive" aria-atomic="true" className="sr-only">
+        {announcement}
+      </div>
       <div className="max-w-3xl mx-auto">
         {messages.map((message, index) => (
           <ChatMessage
@@ -106,7 +177,8 @@ export function ChatMessageList({
             showAvatar={showAvatars}
             showTimestamp={showTimestamps}
             enableCitations={enableCitations}
-            actions={actions}
+            actions={cardActions}
+            renderImage={renderImage}
           />
         ))}
 
@@ -126,6 +198,7 @@ export function ChatMessageList({
             renderAvatar={renderAvatar}
             showAvatar={showAvatars}
             enableCitations={enableCitations}
+            renderImage={renderImage}
           />
         )}
 
@@ -152,9 +225,9 @@ export function ChatMessageList({
               {/* Show loading dots only when no tool calls are active */}
               {(!activeToolCalls || activeToolCalls.size === 0) && (
                 <div className="flex items-center gap-1.5">
-                  <div className="w-2 h-2 bg-chat-text-tertiary rounded-full animate-pulse-dot" />
-                  <div className="w-2 h-2 bg-chat-text-tertiary rounded-full animate-pulse-dot animation-delay-200" />
-                  <div className="w-2 h-2 bg-chat-text-tertiary rounded-full animate-pulse-dot animation-delay-400" />
+                  <div className="w-2 h-2 bg-chat-text-tertiary rounded-full animate-pulse-dot motion-reduce:animate-none" />
+                  <div className="w-2 h-2 bg-chat-text-tertiary rounded-full animate-pulse-dot animation-delay-200 motion-reduce:animate-none" />
+                  <div className="w-2 h-2 bg-chat-text-tertiary rounded-full animate-pulse-dot animation-delay-400 motion-reduce:animate-none" />
                 </div>
               )}
               {progressMessage && (

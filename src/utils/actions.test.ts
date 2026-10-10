@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { Message, PendingAction } from "../types";
 import {
+  actionDeadline,
   collectPendingActions,
+  isQuestionRequired,
+  keepSettledDetail,
+  normalizeActions,
   restorePendingActions,
   singleFreeTextQuestion,
+  splitRemaining,
   stateForSpentAction,
 } from "./actions";
 
@@ -98,5 +103,140 @@ describe("stateForSpentAction", () => {
   it("leaves every other error to the caller", () => {
     expect(stateForSpentAction("rate_limited")).toBeUndefined();
     expect(stateForSpentAction(undefined)).toBeUndefined();
+  });
+});
+
+describe("isQuestionRequired (a question is required unless the server says required: false)", () => {
+  it("defaults to required", () => {
+    expect(isQuestionRequired({})).toBe(true);
+    expect(isQuestionRequired({ required: undefined })).toBe(true);
+    expect(isQuestionRequired({ required: true })).toBe(true);
+    expect(isQuestionRequired({ required: false })).toBe(false);
+  });
+});
+
+describe("normalizeActions", () => {
+  it("accepts the Console's snapshot spelling (`kind`) and keeps only well-formed actions", () => {
+    const actions = normalizeActions([
+      { id: "a1", kind: "tool_approval", toolName: "sandbox_exec", status: "pending" },
+      { id: "q1", kind: "user_question", questions: [{ question: "Which?" }] },
+      { id: "x", kind: "nonsense" },
+      { kind: "tool_approval", toolName: "no id" },
+    ]);
+    expect(actions.map((a) => [a.id, a.type])).toEqual([
+      ["a1", "tool_approval"],
+      ["q1", "user_question"],
+    ]);
+  });
+});
+
+describe("restorePendingActions with settled actions the server recorded", () => {
+  const snapshot = (entries: unknown[], extra: Partial<Message> = {}) =>
+    msg({ id: "a", metadata: { pendingActions: entries }, ...extra });
+
+  it("shows what was decided from settled entries in metadata.pendingActions", () => {
+    const [restored] = restorePendingActions(
+      [
+        snapshot([
+          { id: "a1", kind: "tool_approval", toolName: "sandbox_exec", args: { cmd: "ls" }, status: "resolved", resolution: { decision: "allow", approvedArgs: { cmd: "ls -la" }, rememberForSession: true }, resolvedBy: "u1", resolvedAt: "2026-10-11T10:00:00Z" },
+          { id: "a2", kind: "tool_approval", toolName: "web_fetch", status: "resolved", resolution: { decision: "deny", comment: "too risky" } },
+          { id: "a3", kind: "tool_approval", toolName: "slow", status: "expired" },
+          { id: "a4", kind: "tool_approval", toolName: "other", status: "cancelled" },
+          { id: "q1", kind: "user_question", questions: [{ question: "Which env?" }], status: "resolved", resolution: { answers: { "Which env?": "staging" } } },
+          { id: "q2", kind: "user_question", questions: [{ question: "Notes?" }], status: "resolved", resolution: { cancelled: true } },
+        ]),
+      ],
+      []
+    );
+    expect(restored.actionStates?.a1).toEqual({
+      status: "resolved",
+      resolution: { type: "tool_approval", decision: "allow", approvedArgs: { cmd: "ls -la" }, rememberForSession: true },
+      resolvedBy: "u1",
+      resolvedAt: "2026-10-11T10:00:00Z",
+    });
+    expect(restored.actionStates?.a2).toEqual({ status: "resolved", resolution: { type: "tool_approval", decision: "deny", comment: "too risky" } });
+    expect(restored.actionStates?.a3).toEqual({ status: "expired" });
+    expect(restored.actionStates?.a4).toEqual({ status: "cancelled" });
+    expect(restored.actionStates?.q1).toEqual({ status: "resolved", resolution: { type: "user_question", answers: { "Which env?": "staging" } } });
+    expect(restored.actionStates?.q2).toEqual({ status: "resolved", resolution: { type: "user_question", answers: {}, cancelled: true } });
+    expect(collectPendingActions([restored])).toEqual([]);
+  });
+
+  it("reads metadata.actionStates and the message's own actionStates", () => {
+    const [fromMeta] = restorePendingActions(
+      [
+        msg({
+          id: "a",
+          pendingActions: [approval],
+          metadata: { actionStates: { a1: { status: "resolved", resolution: { decision: "deny", comment: "no" } } } },
+        }),
+      ],
+      []
+    );
+    expect(fromMeta.actionStates?.a1).toMatchObject({ status: "resolved", resolution: { type: "tool_approval", decision: "deny", comment: "no" } });
+
+    const own = { status: "expired" as const };
+    const [fromOwn] = restorePendingActions([msg({ id: "a", pendingActions: [approval], actionStates: { a1: own } })], []);
+    expect(fromOwn.actionStates?.a1).toBe(own);
+  });
+
+  it("falls back to plainly resolved when nothing says how it ended", () => {
+    const [restored] = restorePendingActions([snapshot([{ id: "a1", kind: "tool_approval", toolName: "t", status: "pending" }])], []);
+    expect(restored.actionStates?.a1).toEqual({ status: "resolved" });
+  });
+
+  it("lets the server's list of open actions win over a settled copy", () => {
+    const [restored] = restorePendingActions(
+      [
+        snapshot([{ id: "a1", kind: "tool_approval", toolName: "sandbox_exec", status: "resolved", resolution: { decision: "allow" } }], {
+          actionStates: { a1: { status: "resolved" } },
+        }),
+      ],
+      [approval]
+    );
+    expect(restored.actionStates?.a1).toBeUndefined();
+    expect(collectPendingActions([restored]).map((e) => e.action.id)).toEqual(["a1"]);
+  });
+
+  it("prefers a settled snapshot over the last-message guess when the server lists nothing", () => {
+    const [restored] = restorePendingActions([snapshot([{ id: "a1", kind: "tool_approval", toolName: "t", status: "resolved", resolution: { decision: "allow" } }])]);
+    expect(restored.actionStates?.a1.status).toBe("resolved");
+    expect(collectPendingActions([restored])).toEqual([]);
+  });
+});
+
+describe("keepSettledDetail", () => {
+  it("keeps an Expired or Cancelled card a refresh would flatten to plainly resolved", () => {
+    const current = [msg({ id: "a", pendingActions: [approval], actionStates: { a1: { status: "expired" } } })];
+    const loaded = [msg({ id: "a", pendingActions: [approval], actionStates: { a1: { status: "resolved" } } })];
+    expect(keepSettledDetail(loaded, current)[0].actionStates?.a1).toEqual({ status: "expired" });
+  });
+
+  it("takes the server's detail when it has some", () => {
+    const current = [msg({ id: "a", pendingActions: [approval], actionStates: { a1: { status: "expired" } } })];
+    const detailed = { status: "resolved" as const, resolution: { type: "tool_approval" as const, decision: "deny" as const } };
+    const loaded = [msg({ id: "a", pendingActions: [approval], actionStates: { a1: detailed } })];
+    expect(keepSettledDetail(loaded, current)[0].actionStates?.a1).toBe(detailed);
+  });
+
+  it("leaves messages it knows nothing about alone", () => {
+    const loaded = [msg({ id: "z", pendingActions: [approval], actionStates: { a1: { status: "resolved" } } })];
+    expect(keepSettledDetail(loaded, [])[0]).toBe(loaded[0]);
+  });
+});
+
+describe("deadlines", () => {
+  it("reads expiresAt as epoch milliseconds", () => {
+    expect(actionDeadline({ expiresAt: "2026-10-11T10:00:00Z" })).toBe(Date.parse("2026-10-11T10:00:00Z"));
+    expect(actionDeadline({})).toBeUndefined();
+    expect(actionDeadline({ expiresAt: "not a date" })).toBeUndefined();
+  });
+
+  it("splits the time left into the largest unit that fits, rounding up", () => {
+    expect(splitRemaining(23 * 3600_000 + 5000)).toEqual({ value: 23, unit: "hour" });
+    expect(splitRemaining(2 * 86400_000)).toEqual({ value: 2, unit: "day" });
+    expect(splitRemaining(9 * 60_000)).toEqual({ value: 9, unit: "minute" });
+    expect(splitRemaining(42_000)).toEqual({ value: 42, unit: "second" });
+    expect(splitRemaining(300)).toEqual({ value: 1, unit: "second" });
   });
 });

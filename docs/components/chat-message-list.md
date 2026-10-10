@@ -1,6 +1,6 @@
 # ChatMessageList Component
 
-Renders a list of messages with auto-scroll.
+Renders a list of messages with auto-scroll, the streaming reply and the progress of tool calls.
 
 ## Import
 
@@ -11,27 +11,36 @@ import { ChatMessageList } from "@cognipeer/chat-ui";
 ## Usage
 
 ```tsx
+const chat = useChat({ baseUrl: "/api/agents", agentId: "assistant" });
+
 <ChatMessageList
-  messages={messages}
-  isLoading={isLoading}
-  streamingText={streamingText}
+  messages={chat.messages}
+  isStreaming={chat.isStreaming}
+  streamingText={chat.streamingText}
+  progressMessage={chat.progressMessage}
+  activeToolCalls={chat.activeToolCalls}
+  actions={{ onResolve: chat.resolveAction, canResolve: chat.canResolveActions }}
 />
 ```
 
 ## Props
 
-| Prop | Type | Description |
-|------|------|-------------|
-| `messages` | `Message[]` | Array of messages |
-| `isLoading` | `boolean` | Whether loading/streaming |
-| `streamingText` | `string` | Current streaming text |
-| `streamingMessage` | `Partial<Message>` | Streaming message data |
-| `activeToolCalls` | `Map` | Active tool calls |
-| `renderMessage` | `Function` | Custom message renderer |
-| `renderToolCall` | `Function` | Custom tool call renderer |
-| `renderActions` | `Function` | Custom action buttons |
-| `renderEmpty` | `Function` | Empty state renderer |
-| `className` | `string` | Container class name |
+| Prop | Type | Default | Description |
+|------|------|---------|-------------|
+| `messages` | `Message[]` | required | Array of messages |
+| `isStreaming` | `boolean` | `false` | A reply is streaming |
+| `streamingText` | `string` | - | Current streaming text |
+| `progressMessage` | `string` | - | Progress line shown while waiting |
+| `activeToolCalls` | `Map` | - | Tool calls of the running turn |
+| `actions` | `ChatActionsConfig` | - | How approval / question cards behave. Without `onResolve` they are read-only ("Waiting for approval in another app"); see [Approvals and Questions](/guide/approvals#custom-layouts) |
+| `autoScroll` | `boolean` | `true` | Scroll to new messages |
+| `showAvatars`, `showTimestamps` | `boolean` | `true`, `false` | Message chrome |
+| `enableCitations` | `boolean` | `true` | Sources under answers |
+| `renderActions` | `(props: MessageActionProps) => ReactNode` | - | Custom action buttons |
+| `renderAvatar` | `(role) => ReactNode` | - | Custom avatar |
+| `renderImage` | `(props: ImageRenderProps) => ReactNode` | - | Draw images yourself |
+| `emptyState` | `ReactNode` | built-in | Shown when there are no messages |
+| `className` | `string` | - | Container class name |
 
 ## Examples
 
@@ -39,8 +48,8 @@ import { ChatMessageList } from "@cognipeer/chat-ui";
 
 ```tsx
 const messages = [
-  { id: "1", role: "user", content: "Hello", createdAt: "..." },
-  { id: "2", role: "assistant", content: "Hi there!", createdAt: "..." },
+  { id: "1", conversationId: "c", role: "user", content: "Hello", createdAt: new Date(), updatedAt: new Date() },
+  { id: "2", conversationId: "c", role: "assistant", content: "Hi there!", createdAt: new Date(), updatedAt: new Date() },
 ];
 
 <ChatMessageList messages={messages} />
@@ -49,27 +58,7 @@ const messages = [
 ### With Streaming
 
 ```tsx
-<ChatMessageList
-  messages={messages}
-  isLoading={true}
-  streamingText="I'm typing a response..."
-/>
-```
-
-### Custom Message Rendering
-
-```tsx
-<ChatMessageList
-  messages={messages}
-  renderMessage={({ message, isStreaming, streamingText }) => (
-    <div className={`message ${message.role}`}>
-      <Avatar role={message.role} />
-      <div className="content">
-        {isStreaming ? streamingText : message.content}
-      </div>
-    </div>
-  )}
-/>
+<ChatMessageList messages={messages} isStreaming streamingText="I'm typing a response..." />
 ```
 
 ### Custom Empty State
@@ -77,12 +66,12 @@ const messages = [
 ```tsx
 <ChatMessageList
   messages={[]}
-  renderEmpty={() => (
+  emptyState={
     <div className="empty-state">
       <h3>Welcome to Chat!</h3>
       <p>Start a conversation by sending a message.</p>
     </div>
-  )}
+  }
 />
 ```
 
@@ -93,7 +82,6 @@ const messages = [
   messages={messages}
   renderActions={({ message, isStreaming }) => {
     if (isStreaming || message.role !== "assistant") return null;
-    
     return (
       <div>
         <button>Copy</button>
@@ -106,26 +94,20 @@ const messages = [
 
 ## Auto-Scroll Behavior
 
-The list automatically scrolls to:
+With `autoScroll` the list scrolls to the bottom when the messages, the streaming text or the tool calls change.
 
-- New messages
-- Streaming content updates
-- Bottom when sending a message
+## Accessibility
 
-Scroll is paused when user scrolls up.
+The list is a labelled live `log`. While a reply streams it is `aria-busy`, so a screen reader reads the finished answer once instead of every chunk. When an approval or question card appears in a conversation that is already on screen, a hidden assertive live region announces it and the first new card takes keyboard focus (unless the person is typing). Cards that arrive with a loaded conversation are not announced and do not take focus.
 
 ## Virtual Scrolling
 
-For large message lists, consider wrapping in a virtual list:
+For very large message lists, render `ChatMessage` inside a virtual list instead:
 
 ```tsx
 import { FixedSizeList } from "react-window";
 
-<FixedSizeList
-  height={600}
-  itemCount={messages.length}
-  itemSize={100}
->
+<FixedSizeList height={600} itemCount={messages.length} itemSize={100}>
   {({ index, style }) => (
     <div style={style}>
       <ChatMessage message={messages[index]} />
@@ -136,22 +118,7 @@ import { FixedSizeList } from "react-window";
 
 ## Styling
 
-```css
-.chat-message-list {
-  flex: 1;
-  overflow-y: auto;
-  padding: 16px;
-}
-
-.chat-message-list::-webkit-scrollbar {
-  width: 8px;
-}
-
-.chat-message-list::-webkit-scrollbar-thumb {
-  background: var(--chat-border-primary);
-  border-radius: 4px;
-}
-```
+The list scrolls with the `.chat-scrollbar` styles from `styles.css`; colours come from the theme variables. See [Theming](/guide/theming).
 
 ## Related
 

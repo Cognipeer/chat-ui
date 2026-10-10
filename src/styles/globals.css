@@ -19,6 +19,16 @@
 
   --chat-accent-primary: #10a37f;
   --chat-accent-secondary: #1a7f64;
+
+  /* Status colours: success / danger / warning / info, each with a tinted background */
+  --chat-success: #34d399;
+  --chat-success-bg: rgba(16, 185, 129, 0.12);
+  --chat-danger: #f87171;
+  --chat-danger-bg: rgba(239, 68, 68, 0.12);
+  --chat-warning: #fbbf24;
+  --chat-warning-bg: rgba(245, 158, 11, 0.14);
+  --chat-info: #60a5fa;
+  --chat-info-bg: rgba(59, 130, 246, 0.12);
 }
 
 /* Light Theme */
@@ -38,6 +48,15 @@
 
   --chat-accent-primary: #10a37f;
   --chat-accent-secondary: #1a7f64;
+
+  --chat-success: #047857;
+  --chat-success-bg: rgba(16, 185, 129, 0.12);
+  --chat-danger: #b91c1c;
+  --chat-danger-bg: rgba(239, 68, 68, 0.1);
+  --chat-warning: #92400e;
+  --chat-warning-bg: rgba(245, 158, 11, 0.16);
+  --chat-info: #1d4ed8;
+  --chat-info-bg: rgba(59, 130, 246, 0.1);
 }
 
 /* Base styles */

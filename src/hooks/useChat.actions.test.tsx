@@ -245,12 +245,13 @@ describe("useChat approvals", () => {
   });
 
   it.each([
-    ["action_expired", "expired", "This request has expired."],
-    ["action_cancelled", "cancelled", "This request was cancelled."],
-    ["action_not_pending", "resolved", "Already answered."],
+    ["action_expired", "expired", "That request has expired."],
+    ["action_cancelled", "cancelled", "That request was cancelled."],
+    ["action_not_pending", "resolved", "That request was already answered."],
   ])("settles the card as %s -> %s and frees the composer", async (code, status, message) => {
+    // the server's own English wording is replaced by the localized message for its code
     const resolveAction = vi.fn(async () => {
-      throw Object.assign(new Error(message), { code, status: 410 });
+      throw Object.assign(new Error("server wording"), { code, status: 410 });
     });
     const onError = vi.fn();
     const { result } = renderHook(

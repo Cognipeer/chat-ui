@@ -1,24 +1,70 @@
 "use client";
 
-import React, { createContext, useContext, useState, useEffect, useMemo } from "react";
+import React, { createContext, useContext, useState, useEffect, useMemo, useCallback } from "react";
 import { IntlProvider as ReactIntlProvider, useIntl } from "react-intl";
 import enMessages from "../locales/en.json";
 import trMessages from "../locales/tr.json";
 import { setGlobalI18n } from "../utils/helpers";
 
-export type SupportedLocale = "en" | "tr";
+/** Locales whose strings ship with the library. */
+export type BuiltInLocale = "en" | "tr";
+
+/**
+ * A locale code. `en` and `tr` are built in; any other code works once
+ * `customMessages` supplies its strings (keys it leaves out fall back to English).
+ */
+export type SupportedLocale = BuiltInLocale | (string & {});
+
+/** Strings per locale code, keyed by message id. */
+export type ChatMessages = Partial<Record<SupportedLocale, Record<string, string>>>;
 
 interface I18nContextValue {
   locale: SupportedLocale;
   setLocale: (locale: SupportedLocale) => void;
+  /** Custom strings in effect here (this provider's own merged over the ones it inherited) */
+  customMessages?: ChatMessages;
 }
 
 const I18nContext = createContext<I18nContextValue | undefined>(undefined);
 
-const messages: Record<SupportedLocale, Record<string, string>> = {
+const builtInMessages: Record<BuiltInLocale, Record<string, string>> = {
   en: enMessages,
   tr: trMessages,
 };
+
+function hasLocale(table: object, code: string): boolean {
+  return Object.prototype.hasOwnProperty.call(table, code);
+}
+
+/** The strings of one locale: English first, so a key a locale lacks falls back per key. */
+export function messagesFor(locale: string, custom?: ChatMessages): Record<string, string> {
+  const base = { ...builtInMessages.en, ...custom?.en };
+  if (locale === "en") return base;
+  return {
+    ...base,
+    ...(hasLocale(builtInMessages, locale) ? builtInMessages[locale as BuiltInLocale] : undefined),
+    ...(custom && hasLocale(custom, locale) ? custom[locale] : undefined),
+  };
+}
+
+function mergeMessages(parent: ChatMessages | undefined, own: ChatMessages | undefined): ChatMessages | undefined {
+  if (!parent) return own;
+  if (!own) return parent;
+  const merged: ChatMessages = { ...parent };
+  for (const [code, strings] of Object.entries(own)) {
+    merged[code] = { ...merged[code], ...strings };
+  }
+  return merged;
+}
+
+/** `Intl` throws for a malformed tag, so number and date formatting get a locale it accepts. */
+function formatLocaleOf(locale: string): string {
+  try {
+    return Intl.DateTimeFormat.supportedLocalesOf(locale).length > 0 ? locale : "en";
+  } catch {
+    return "en";
+  }
+}
 
 export interface ChatI18nProviderProps {
   children: React.ReactNode;
@@ -26,18 +72,26 @@ export interface ChatI18nProviderProps {
   defaultLocale?: SupportedLocale;
   /** Override locale (disables query string detection) */
   locale?: SupportedLocale;
-  /** Custom messages to merge with built-in messages */
-  customMessages?: Partial<Record<SupportedLocale, Record<string, string>>>;
+  /**
+   * Custom messages to merge with the built-in ones, per locale code. Merged over
+   * the custom messages of an outer `ChatI18nProvider`, if any. A locale other
+   * than `en` / `tr` only needs the keys it translates; the rest fall back to English.
+   */
+  customMessages?: ChatMessages;
   /** Callback when locale changes */
   onLocaleChange?: (locale: SupportedLocale) => void;
 }
 
 /**
  * I18n provider for the chat UI.
- * 
+ *
  * Automatically detects locale from URL query parameter (?lang=en or ?lang=tr).
  * Falls back to defaultLocale if no query parameter is found.
- * 
+ *
+ * Providers nest: inside another `ChatI18nProvider` this one inherits its locale
+ * (unless `locale` is given) and its custom messages, so `<Chat>` can sit inside a
+ * host's provider. `<Chat>` also works without any.
+ *
  * @example
  * ```tsx
  * <ChatI18nProvider defaultLocale="en">
@@ -52,16 +106,21 @@ export function ChatI18nProvider({
   customMessages,
   onLocaleChange,
 }: ChatI18nProviderProps) {
-  const [locale, setLocaleState] = useState<SupportedLocale>(() => {
-    // If locale is controlled, use it
-    if (controlledLocale) return controlledLocale;
+  const parent = useContext(I18nContext);
+
+  const mergedCustom = useMemo(
+    () => mergeMessages(parent?.customMessages, customMessages),
+    [parent?.customMessages, customMessages]
+  );
+
+  // A locale chosen through `setLocale` here. Without one, the outer provider's locale applies.
+  const [chosen, setChosen] = useState<SupportedLocale | undefined>(() => {
+    if (controlledLocale || parent) return undefined;
 
     // Client-side only: detect from URL query parameter
     if (typeof window !== "undefined") {
-      const params = new URLSearchParams(window.location.search);
-      const langParam = params.get("lang");
-      
-      if (langParam === "en" || langParam === "tr") {
+      const langParam = new URLSearchParams(window.location.search).get("lang");
+      if (langParam && (hasLocale(builtInMessages, langParam) || (customMessages && hasLocale(customMessages, langParam)))) {
         return langParam;
       }
     }
@@ -69,51 +128,48 @@ export function ChatI18nProvider({
     return defaultLocale;
   });
 
-  // Sync with controlled locale
-  useEffect(() => {
-    if (controlledLocale && controlledLocale !== locale) {
-      setLocaleState(controlledLocale);
-    }
-  }, [controlledLocale, locale]);
+  const locale: SupportedLocale = controlledLocale ?? chosen ?? parent?.locale ?? defaultLocale;
 
-  // Update URL when locale changes (only if not controlled)
-  const setLocale = (newLocale: SupportedLocale) => {
-    if (controlledLocale) {
-      console.warn("ChatI18nProvider: Cannot change locale when controlled via props");
-      return;
-    }
+  const parentSetLocale = parent?.setLocale;
+  const setLocale = useCallback(
+    (newLocale: SupportedLocale) => {
+      if (controlledLocale) {
+        console.warn("ChatI18nProvider: Cannot change locale when controlled via props");
+        return;
+      }
 
-    setLocaleState(newLocale);
-    onLocaleChange?.(newLocale);
+      if (parentSetLocale && chosen === undefined) {
+        // The outer provider owns the locale
+        parentSetLocale(newLocale);
+        onLocaleChange?.(newLocale);
+        return;
+      }
 
-    // Update URL query parameter if in browser
-    if (typeof window !== "undefined") {
-      const url = new URL(window.location.href);
-      url.searchParams.set("lang", newLocale);
-      window.history.replaceState({}, "", url.toString());
-    }
-  };
+      setChosen(newLocale);
+      onLocaleChange?.(newLocale);
 
-  // Merge custom messages with built-in messages
-  const mergedMessages = useMemo(() => {
-    if (!customMessages) return messages;
+      // Update URL query parameter if in browser
+      if (typeof window !== "undefined") {
+        const url = new URL(window.location.href);
+        url.searchParams.set("lang", newLocale);
+        window.history.replaceState({}, "", url.toString());
+      }
+    },
+    [controlledLocale, parentSetLocale, chosen, onLocaleChange]
+  );
 
-    return {
-      en: { ...messages.en, ...customMessages.en },
-      tr: { ...messages.tr, ...customMessages.tr },
-    } as Record<SupportedLocale, Record<string, string>>;
-  }, [customMessages]);
+  const localeMessages = useMemo(() => messagesFor(locale, mergedCustom), [locale, mergedCustom]);
 
-  const contextValue: I18nContextValue = {
-    locale,
-    setLocale,
-  };
+  const contextValue = useMemo<I18nContextValue>(
+    () => ({ locale, setLocale, customMessages: mergedCustom }),
+    [locale, setLocale, mergedCustom]
+  );
 
   return (
     <I18nContext.Provider value={contextValue}>
       <ReactIntlProvider
-        locale={locale}
-        messages={mergedMessages[locale]}
+        locale={formatLocaleOf(locale)}
+        messages={localeMessages}
         defaultLocale="en"
       >
         <I18nInitializer />
@@ -129,7 +185,7 @@ export function ChatI18nProvider({
  */
 function I18nInitializer() {
   const intl = useIntl();
-  
+
   useEffect(() => {
     // Set global i18n function for utility functions
     setGlobalI18n((key: string, values?: Record<string, string | number>) => {

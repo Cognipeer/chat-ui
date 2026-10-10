@@ -58,6 +58,12 @@ Override specific colors using `themeColors`:
 | `borderSecondary` | Secondary border | `#2f2f2f` |
 | `accentPrimary` | Primary accent (buttons) | `#10a37f` |
 | `accentSecondary` | Secondary accent | `#1a7f64` |
+| `success`, `successBg` | Approved / answered outcomes: icon colour and tinted background | `#34d399`, `rgba(16, 185, 129, 0.12)` |
+| `danger`, `dangerBg` | Error banner, denied outcomes, invalid input | `#f87171`, `rgba(239, 68, 68, 0.12)` |
+| `warning`, `warningBg` | Expired outcomes, deadline close to running out, image warning | `#fbbf24`, `rgba(245, 158, 11, 0.14)` |
+| `info`, `infoBg` | Informational notices | `#60a5fa`, `rgba(59, 130, 246, 0.12)` |
+
+`themeColors` takes every one of these keys (it is `ChatTheme["colors"]`). The light theme ships darker status colours so they stay readable on white (`success #047857`, `danger #b91c1c`, `warning #92400e`, `info #1d4ed8`).
 
 ## CSS Variables
 
@@ -77,6 +83,16 @@ The library uses CSS variables for theming. Override them in your CSS:
   --chat-border-secondary: #2f2f2f;
   --chat-accent-primary: #10a37f;
   --chat-accent-secondary: #1a7f64;
+
+  /* Status colours: the colour and a tinted background for each */
+  --chat-success: #34d399;
+  --chat-success-bg: rgba(16, 185, 129, 0.12);
+  --chat-danger: #f87171;
+  --chat-danger-bg: rgba(239, 68, 68, 0.12);
+  --chat-warning: #fbbf24;
+  --chat-warning-bg: rgba(245, 158, 11, 0.14);
+  --chat-info: #60a5fa;
+  --chat-info-bg: rgba(59, 130, 246, 0.12);
 }
 ```
 
@@ -96,6 +112,14 @@ The library uses CSS variables for theming. Override them in your CSS:
   --chat-border-secondary: #ececec;
   --chat-accent-primary: #10a37f;
   --chat-accent-secondary: #1a7f64;
+  --chat-success: #047857;
+  --chat-success-bg: rgba(16, 185, 129, 0.12);
+  --chat-danger: #b91c1c;
+  --chat-danger-bg: rgba(239, 68, 68, 0.1);
+  --chat-warning: #92400e;
+  --chat-warning-bg: rgba(245, 158, 11, 0.16);
+  --chat-info: #1d4ed8;
+  --chat-info-bg: rgba(59, 130, 246, 0.1);
 }
 ```
 

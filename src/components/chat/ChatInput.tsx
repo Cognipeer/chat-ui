@@ -1,9 +1,9 @@
 "use client";
 
-import React, { useState, useRef, useCallback, useEffect, useImperativeHandle, forwardRef, KeyboardEvent, ChangeEvent } from "react";
-import { cn, formatFileSize } from "../../utils";
+import React, { useState, useRef, useCallback, useEffect, useImperativeHandle, forwardRef, KeyboardEvent, ChangeEvent, ClipboardEvent, DragEvent } from "react";
+import { cn, formatFileSize, isImageType, safeImageSrc } from "../../utils";
 import type { FileAttachment } from "../../types";
-import { SendIcon, PaperclipIcon, XIcon, StopIcon } from "./Icons";
+import { SendIcon, PaperclipIcon, XIcon, StopIcon, FileIcon, ImageIcon, LoadingIcon } from "./Icons";
 import { useI18n } from "../../hooks";
 
 export interface ChatInputHandle {
@@ -15,17 +15,20 @@ export interface ChatInputProps {
   /**
    * Callback when sending a message. The composer clears at once; if this returns
    * (or resolves to) `false` the message was refused, and the typed text comes
-   * back unless something new was typed meanwhile.
+   * back unless something new was typed meanwhile. With files attached the text
+   * may be empty.
    */
   onSend: (message: string) => void | boolean | Promise<void | boolean>;
   /** Callback when stopping generation */
   onStop?: () => void;
-  /** Callback when files are added */
+  /** Callback when files are added (picked, dropped or pasted) */
   onFilesAdd?: (files: File[]) => void;
   /** Callback when a pending file is removed */
   onFileRemove?: (fileId: string) => void;
   /** Whether currently loading/streaming */
   isLoading?: boolean;
+  /** True while the attached files are being uploaded for a message: attaching and sending wait */
+  isUploading?: boolean;
   /** Pending files */
   pendingFiles?: FileAttachment[];
   /** Placeholder text */
@@ -36,6 +39,8 @@ export interface ChatInputProps {
   allowedFileTypes?: string[];
   /** Maximum files */
   maxFiles?: number;
+  /** Warn that an attached image may be ignored (the agent does not read images) */
+  imagesIgnored?: boolean;
   /** Whether input is disabled */
   disabled?: boolean;
   /** Custom class name */
@@ -54,8 +59,25 @@ export interface ChatInputProps {
   pendingMode?: "blocked" | "cancel" | "answer";
 }
 
+/** True when a drag carries files (not text or a link). */
+function dragHasFiles(e: DragEvent): boolean {
+  return Array.from(e.dataTransfer?.types ?? []).includes("Files");
+}
+
+/** "image.png" is what a browser calls any pasted screenshot; give each its own name. */
+function nameForPasted(file: File, index: number): File {
+  if (!/^image\.[a-z0-9]+$/i.test(file.name)) return file;
+  const ext = file.name.slice(file.name.lastIndexOf("."));
+  const stamp = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14);
+  return new File([file], `pasted-${stamp}${index > 0 ? `-${index + 1}` : ""}${ext}`, {
+    type: file.type,
+    lastModified: file.lastModified,
+  });
+}
+
 /**
- * Chat input component with file upload support
+ * Chat input component with file upload support: pick, drop or paste files, send
+ * files without text.
  */
 export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput({
   onSend,
@@ -63,11 +85,13 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   onFilesAdd,
   onFileRemove,
   isLoading = false,
+  isUploading = false,
   pendingFiles = [],
   placeholder,
   enableFileUpload = true,
   allowedFileTypes,
   maxFiles = 10,
+  imagesIgnored = false,
   disabled = false,
   className,
   renderSendButton,
@@ -77,9 +101,11 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
 }, ref) {
   const { t } = useI18n();
   const [value, setValue] = useState("");
+  const [dragging, setDragging] = useState(false);
+  const dragDepth = useRef(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  
+
   const blocked = pendingMode === "blocked";
   const defaultPlaceholder = blocked
     ? t("chat.input.waitingPlaceholder")
@@ -92,6 +118,13 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
         : pendingMode === "answer"
           ? t("chat.input.answerNotice")
           : null;
+
+  // Files can be added unless the composer is closed or a message is still uploading them
+  const attachable = enableFileUpload && Boolean(onFilesAdd) && !disabled && !blocked && !isUploading;
+  const canAddMore = pendingFiles.length < maxFiles;
+  // Files alone make a message, except as the answer to a question (that needs words)
+  const hasSendable = value.trim().length > 0 || (pendingFiles.length > 0 && pendingMode !== "answer");
+  const hasImages = pendingFiles.some((f) => isImageType(f.mimeType));
 
   // Expose focus method to parent via ref
   useImperativeHandle(ref, () => ({
@@ -125,7 +158,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   }, [value, fitHeight]);
 
   const handleSend = useCallback(() => {
-    if (value.trim() && !isLoading && !disabled && !blocked) {
+    if (hasSendable && !isLoading && !isUploading && !disabled && !blocked) {
       const text = value.trim();
       const outcome = onSend(text);
       setValue("");
@@ -144,7 +177,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
         keep(outcome);
       }
     }
-  }, [value, isLoading, disabled, blocked, onSend]);
+  }, [value, hasSendable, isLoading, isUploading, disabled, blocked, onSend]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -182,10 +215,74 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     [onFilesAdd]
   );
 
-  const canSend = value.trim().length > 0 && !isLoading && !disabled && !blocked;
+  // A screenshot or a copied file pastes as an attachment; pasted text stays text
+  const handlePaste = useCallback(
+    (e: ClipboardEvent<HTMLTextAreaElement>) => {
+      if (!attachable) return;
+      const files = Array.from(e.clipboardData?.files ?? []);
+      if (files.length === 0 || e.clipboardData.getData("text/plain")) return;
+      e.preventDefault();
+      onFilesAdd?.(files.map(nameForPasted));
+    },
+    [attachable, onFilesAdd]
+  );
+
+  const handleDragEnter = useCallback(
+    (e: DragEvent<HTMLDivElement>) => {
+      if (!dragHasFiles(e)) return;
+      dragDepth.current += 1;
+      if (attachable) setDragging(true);
+    },
+    [attachable]
+  );
+
+  const handleDragOver = useCallback(
+    (e: DragEvent<HTMLDivElement>) => {
+      // Always claim a file drag over the composer: dropping must not make the browser open the file
+      if (!dragHasFiles(e)) return;
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = attachable ? "copy" : "none";
+    },
+    [attachable]
+  );
+
+  const handleDragLeave = useCallback((e: DragEvent<HTMLDivElement>) => {
+    if (!dragHasFiles(e)) return;
+    dragDepth.current = Math.max(0, dragDepth.current - 1);
+    if (dragDepth.current === 0) setDragging(false);
+  }, []);
+
+  const handleDrop = useCallback(
+    (e: DragEvent<HTMLDivElement>) => {
+      if (!dragHasFiles(e)) return;
+      e.preventDefault();
+      dragDepth.current = 0;
+      setDragging(false);
+      const files = Array.from(e.dataTransfer?.files ?? []);
+      if (attachable && files.length > 0) onFilesAdd?.(files);
+    },
+    [attachable, onFilesAdd]
+  );
+
+  const canSend = hasSendable && !isLoading && !isUploading && !disabled && !blocked;
+  const attachDisabled = !attachable || !canAddMore;
 
   return (
-    <div className={cn("border-t border-chat-border-primary bg-chat-bg-primary p-4", className)}>
+    <div
+      className={cn("relative border-t border-chat-border-primary bg-chat-bg-primary p-4", className)}
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      {dragging && (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-2 z-10 flex items-center justify-center rounded-2xl border-2 border-dashed border-chat-accent-primary bg-chat-bg-primary text-sm font-medium text-chat-accent-primary"
+        >
+          {t("chat.input.dropFiles")}
+        </div>
+      )}
       <div className="max-w-3xl mx-auto">
         {/* Waiting on an approval or answer */}
         {pendingNotice && (
@@ -199,29 +296,62 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
 
         {/* Pending files */}
         {pendingFiles.length > 0 && (
-          <div className="flex flex-wrap gap-2 mb-3">
-            {pendingFiles.map((file) => (
-              <div
-                key={file.id}
-                className="flex items-center gap-2 px-3 py-1.5 bg-chat-bg-tertiary rounded-lg text-sm"
-              >
-                <span className="text-chat-text-primary truncate max-w-[150px]">
-                  {file.name}
-                </span>
-                <span className="text-chat-text-tertiary text-xs">
-                  {formatFileSize(file.size)}
-                </span>
-                {onFileRemove && (
-                  <button
-                    onClick={() => onFileRemove(file.id)}
-                    className="p-0.5 hover:bg-chat-bg-hover rounded"
-                    title={t("chat.input.removeFile")}
-                  >
-                    <XIcon className="w-3.5 h-3.5 text-chat-text-tertiary" />
-                  </button>
-                )}
-              </div>
-            ))}
+          <ul aria-label={t("chat.input.files")} className="flex flex-wrap gap-2 mb-3 list-none p-0 m-0">
+            {pendingFiles.map((file) => {
+              const isImage = isImageType(file.mimeType);
+              const thumb = isImage ? safeImageSrc(file.previewUrl ?? file.url) : undefined;
+              const ignored = imagesIgnored && isImage;
+              return (
+                <li
+                  key={file.id}
+                  title={ignored ? t("chat.input.imageIgnored", { fileName: file.name }) : undefined}
+                  className={cn(
+                    "flex items-center gap-2 px-3 py-1.5 bg-chat-bg-tertiary rounded-lg text-sm border",
+                    ignored ? "border-chat-warning" : "border-transparent"
+                  )}
+                >
+                  {thumb ? (
+                    <img src={thumb} alt="" className="h-8 w-8 flex-shrink-0 rounded object-cover" />
+                  ) : isImage ? (
+                    <ImageIcon className="w-4 h-4 flex-shrink-0 text-chat-text-secondary" />
+                  ) : (
+                    <FileIcon className="w-4 h-4 flex-shrink-0 text-chat-text-secondary" />
+                  )}
+                  <span className="text-chat-text-primary truncate max-w-[150px]">
+                    {file.name}
+                  </span>
+                  <span className="text-chat-text-tertiary text-xs">
+                    {formatFileSize(file.size)}
+                  </span>
+                  {isUploading && (
+                    <span role="status" aria-label={t("chat.input.fileUploading", { fileName: file.name })}>
+                      <LoadingIcon className="w-3.5 h-3.5 text-chat-text-tertiary animate-spin motion-reduce:animate-none" />
+                    </span>
+                  )}
+                  {onFileRemove && !isUploading && (
+                    <button
+                      type="button"
+                      onClick={() => onFileRemove(file.id)}
+                      className="p-0.5 hover:bg-chat-bg-hover rounded"
+                      title={t("chat.input.removeFile")}
+                      aria-label={`${t("chat.input.removeFile")}: ${file.name}`}
+                    >
+                      <XIcon className="w-3.5 h-3.5 text-chat-text-tertiary" />
+                    </button>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+
+        {/* An attached image the agent may not read */}
+        {imagesIgnored && hasImages && (
+          <div
+            role="status"
+            className="mb-3 rounded-lg border border-chat-warning bg-chat-warning-bg px-3 py-2 text-xs text-chat-warning"
+          >
+            {t("chat.input.imageNotSeen")}
           </div>
         )}
 
@@ -237,15 +367,19 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
                 accept={allowedFileTypes?.join(",")}
                 onChange={handleFilesChange}
                 className="hidden"
+                tabIndex={-1}
+                aria-hidden="true"
               />
               <button
+                type="button"
                 onClick={handleFileSelect}
-                disabled={disabled || pendingFiles.length >= maxFiles}
+                disabled={attachDisabled}
                 className={cn(
                   "flex-shrink-0 p-3 text-chat-text-secondary hover:text-chat-text-primary transition-colors",
-                  (disabled || pendingFiles.length >= maxFiles) && "opacity-50 cursor-not-allowed"
+                  attachDisabled && "opacity-50 cursor-not-allowed"
                 )}
                 title={t("chat.input.attachFiles")}
+                aria-label={t("chat.input.attachFiles")}
               >
                 <PaperclipIcon className="w-5 h-5" />
               </button>
@@ -258,7 +392,9 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
             value={value}
             onChange={handleChange}
             onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
             placeholder={defaultPlaceholder}
+            aria-label={t("chat.input.label")}
             disabled={disabled || blocked}
             rows={1}
             className={cn(
@@ -274,9 +410,11 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
                 renderStopButton({ onClick: onStop })
               ) : (
                 <button
+                  type="button"
                   onClick={onStop}
                   className="p-2 bg-chat-text-secondary hover:bg-chat-text-primary text-chat-bg-primary rounded-lg transition-colors"
                   title={t("chat.input.stop")}
+                  aria-label={t("chat.input.stop")}
                 >
                   <StopIcon className="w-4 h-4" />
                 </button>
@@ -285,6 +423,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
               renderSendButton({ onClick: handleSend, disabled: !canSend })
             ) : (
               <button
+                type="button"
                 onClick={handleSend}
                 disabled={!canSend}
                 className={cn(
@@ -294,6 +433,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
                     : "bg-chat-bg-hover text-chat-text-tertiary cursor-not-allowed"
                 )}
                 title={t("chat.input.send")}
+                aria-label={t("chat.input.send")}
               >
                 <SendIcon className="w-4 h-4" />
               </button>

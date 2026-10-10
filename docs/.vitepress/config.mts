@@ -35,6 +35,7 @@ export default defineConfig({
           items: [
             { text: 'State Management', link: '/guide/state-management' },
             { text: 'Theming', link: '/guide/theming' },
+            { text: 'Internationalization', link: '/guide/i18n' },
             { text: 'Streaming', link: '/guide/streaming' },
             { text: 'File Uploads', link: '/guide/file-uploads' },
             { text: 'Tool Calls', link: '/guide/tool-calls' },

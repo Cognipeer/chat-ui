@@ -1,6 +1,6 @@
 # ChatMessage Component
 
-Renders a single message in the chat.
+Renders a single message in the chat: markdown text, images, file attachments, tool calls, sources, and the approval / question cards of a paused turn.
 
 ## Import
 
@@ -14,88 +14,71 @@ import { ChatMessage } from "@cognipeer/chat-ui";
 <ChatMessage
   message={{
     id: "msg-1",
+    conversationId: "c-1",
     role: "assistant",
     content: "Hello! How can I help you?",
-    createdAt: new Date().toISOString(),
+    createdAt: new Date(),
+    updatedAt: new Date(),
   }}
 />
 ```
 
 ## Props
 
-| Prop | Type | Description |
-|------|------|-------------|
-| `message` | `Message` | The message to render |
-| `isStreaming` | `boolean` | Whether message is streaming |
-| `streamingText` | `string` | Current streaming text |
-| `activeToolCalls` | `Map` | Active tool calls |
-| `renderToolCall` | `Function` | Custom tool call renderer |
-| `renderActions` | `Function` | Custom action buttons |
-| `className` | `string` | Additional class names |
+| Prop | Type | Default | Description |
+|------|------|---------|-------------|
+| `message` | `Message` | required | The message to render |
+| `isStreaming` | `boolean` | `false` | Whether this message is streaming |
+| `streamingText` | `string` | - | Current streaming text (used while `isStreaming`) |
+| `showAvatar` | `boolean` | `true` | Show the avatar |
+| `showTimestamp` | `boolean` | `false` | Show the time |
+| `enableCitations` | `boolean` | `true` | Sources and inline markers under assistant messages |
+| `actions` | `ChatActionsConfig` | - | How approval / question cards behave under this message. Without `onResolve` they are read-only; see [Approvals and Questions](/guide/approvals#custom-layouts) |
+| `renderActions` | `(props: MessageActionProps) => ReactNode` | - | Custom action buttons (shown on hover) |
+| `renderAvatar` | `(role) => ReactNode` | - | Custom avatar |
+| `renderImage` | `(props: ImageRenderProps) => ReactNode` | - | Draw an image yourself, e.g. fetch it with credentials and show a blob URL |
+| `className` | `string` | - | Additional class names |
 
-## Message Structure
+## Message content
 
-```typescript
-interface Message {
-  id: string;
-  role: "user" | "assistant" | "system";
-  content: string | ContentPart[];
-  createdAt: string;
-  toolCalls?: ToolCall[];
-}
+`content` is a string, or an array of parts:
 
-interface ContentPart {
-  type: "text" | "image" | "file";
-  text?: string;
-  image?: { url: string };
-  file?: { id: string; name: string; url: string };
-}
+```tsx
+content: [
+  { type: "text", text: "Here is the chart" },
+  { type: "image_url", image_url: { url: "https://cdn.example.com/chart.png" } },
+]
 ```
+
+- **Text parts** are joined, one per line, and rendered as markdown.
+- **Image parts** (`image_url`, `input_image`, `image`) are drawn as pictures below the text, lazily loaded, each opening full size in a new tab. Only a safe URL is drawn: `https:`, `blob:`, relative or same-origin URLs, `http:` when the page is itself served over http, and base64 PNG / JPEG / GIF / WebP. `javascript:` URLs, SVG data URLs and other schemes are dropped.
+- Other parts are ignored.
+
+## Attachments
+
+`message.files` shows under the text:
+
+- an **image** with a usable `url` (or a local `previewUrl`, for a file just sent from this page) as a thumbnail with its name and size; it opens full size in a new tab;
+- any other file, or an image without a usable URL, as a chip with its name, extension and size, and a **Download** link when `url` is a safe link (http(s), `blob:` or relative).
+
+## Status and actions
+
+A paused assistant message (`status: "requires_action"`, `pendingActions`) shows an approval or question card per action; how a settled card looks comes from `message.actionStates`, which the app fills as cards settle and which a server may send for a reloaded history. See [Approvals and Questions](/guide/approvals#history).
 
 ## Examples
 
-### User Message
-
-```tsx
-<ChatMessage
-  message={{
-    id: "1",
-    role: "user",
-    content: "What's the weather like?",
-    createdAt: new Date().toISOString(),
-  }}
-/>
-```
-
-### Assistant Message
-
-```tsx
-<ChatMessage
-  message={{
-    id: "2",
-    role: "assistant",
-    content: "The weather is sunny with a high of 72°F.",
-    createdAt: new Date().toISOString(),
-  }}
-/>
-```
-
 ### With Tool Calls
 
+Tool calls of a finished message are read from `metadata.toolCallDetails`:
+
 ```tsx
 <ChatMessage
   message={{
-    id: "3",
-    role: "assistant",
-    content: "Let me check the weather for you.",
-    createdAt: new Date().toISOString(),
-    toolCalls: [
-      {
-        id: "call-1",
-        name: "get_weather",
-        arguments: '{"location": "New York"}',
-      },
-    ],
+    ...message,
+    metadata: {
+      toolCallDetails: [{ id: "call-1", name: "get_weather", args: { location: "New York" }, result: { temp: 22 } }],
+      toolCallDurationSeconds: 2,
+    },
   }}
 />
 ```
@@ -103,34 +86,32 @@ interface ContentPart {
 ### Streaming
 
 ```tsx
-<ChatMessage
-  message={{
-    id: "4",
-    role: "assistant",
-    content: "",
-    createdAt: new Date().toISOString(),
-  }}
-  isStreaming={true}
-  streamingText="I'm currently writing..."
-/>
+<ChatMessage message={message} isStreaming streamingText="I'm currently writing..." />
 ```
 
-### With Files
+### With an Image
 
 ```tsx
 <ChatMessage
   message={{
-    id: "5",
+    ...message,
     role: "user",
     content: [
       { type: "text", text: "Analyze this image" },
-      {
-        type: "image",
-        image: { url: "data:image/png;base64,..." },
-      },
+      { type: "image_url", image_url: { url: "data:image/png;base64,..." } },
     ],
-    createdAt: new Date().toISOString(),
   }}
+/>
+```
+
+### Images behind authentication
+
+An `<img>` cannot send an `Authorization` header, so draw the image yourself:
+
+```tsx
+<ChatMessage
+  message={message}
+  renderImage={({ src, alt }) => <AuthenticatedImage src={src} alt={alt} />}
 />
 ```
 
@@ -141,9 +122,8 @@ interface ContentPart {
   message={message}
   renderActions={() => (
     <div className="flex gap-2">
-      <button>👍</button>
-      <button>👎</button>
-      <button>📋</button>
+      <button>Like</button>
+      <button>Copy</button>
     </div>
   )}
 />
@@ -151,40 +131,11 @@ interface ContentPart {
 
 ## Styling
 
-```css
-.chat-message {
-  padding: 16px;
-}
-
-.chat-message.user {
-  background: var(--chat-bg-tertiary);
-}
-
-.chat-message.assistant {
-  background: transparent;
-}
-
-.chat-message-content {
-  line-height: 1.6;
-}
-
-.chat-message-content pre {
-  background: var(--chat-bg-secondary);
-  padding: 12px;
-  border-radius: 8px;
-  overflow-x: auto;
-}
-```
+Colours come from the theme variables; markdown is styled by the `.chat-markdown` rules in `styles.css`. See [Theming](/guide/theming).
 
 ## Markdown Support
 
-The component renders markdown content:
-
-- **Bold** and *italic* text
-- `inline code`
-- Code blocks with syntax highlighting
-- Lists and tables
-- Links
+The component renders markdown content (GitHub-flavoured): bold and italic text, inline code, code blocks, lists, tables and links (links open in a new tab).
 
 ## Related
 

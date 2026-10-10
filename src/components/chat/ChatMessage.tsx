@@ -3,7 +3,7 @@
 import React from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { cn } from "../../utils";
+import { cn, formatFileSize, imagePartSource, isImageType, safeFileHref, safeImageSrc } from "../../utils";
 import {
   insertCitationMarkers,
   parseCitationHref,
@@ -11,10 +11,19 @@ import {
   citationUrlTransform,
 } from "../../utils/citations";
 import type { Message, MessageActionProps, FileAttachment, Citation } from "../../types";
-import { FileIcon } from "./Icons";
+import { FileIcon, ImageIcon } from "./Icons";
 import { ToolCalls } from "./ToolCall";
 import { MessageActionCards, type ChatActionsConfig } from "./ActionCards";
 import { useI18n } from "../../hooks";
+
+/** What `renderImage` receives for an image in a message. */
+export interface ImageRenderProps {
+  /** A URL that is safe to use as an `<img src>` */
+  src: string;
+  alt: string;
+  /** The attachment it belongs to; absent for an image that is part of the message content */
+  file?: FileAttachment;
+}
 
 export interface ChatMessageProps {
   /** The message to display */
@@ -37,6 +46,8 @@ export interface ChatMessageProps {
   enableCitations?: boolean;
   /** How approval / question cards behave under this message */
   actions?: ChatActionsConfig;
+  /** Replace how an image is drawn, e.g. to fetch it with credentials */
+  renderImage?: (props: ImageRenderProps) => React.ReactNode;
 }
 
 /**
@@ -53,10 +64,12 @@ export function ChatMessage({
   showTimestamp = false,
   enableCitations = true,
   actions,
+  renderImage,
 }: ChatMessageProps) {
   const isUser = message.role === "user";
   const isAssistant = message.role === "assistant";
   const content = isStreaming && streamingText ? streamingText : getTextContent(message.content);
+  const images = React.useMemo(() => getImages(message.content), [message.content]);
 
   // Offsets index the finished answer, so markers only go in once it is whole.
   const showInlineCitations = enableCitations && isAssistant && !isStreaming;
@@ -115,12 +128,15 @@ export function ChatMessage({
           </div>
         )}
 
+        {/* Images that are part of the content */}
+        {images.length > 0 && <MessageImages images={images} renderImage={renderImage} />}
+
         {/* Approvals and questions the assistant is waiting on */}
         {isAssistant && !isStreaming && <MessageActionCards message={message} config={actions} />}
 
         {/* File attachments */}
         {message.files && message.files.length > 0 && (
-          <FileAttachments files={message.files} />
+          <FileAttachments files={message.files} renderImage={renderImage} />
         )}
 
         {/* Sources */}
@@ -191,22 +207,98 @@ function splitFileName(name: string): { base: string; ext: string } {
   return { base: name.slice(0, idx), ext: name.slice(idx) };
 }
 
+/** An image, opening full size in a new tab on click or Enter. */
+function ImageThumb({
+  src,
+  alt,
+  className,
+  renderImage,
+  file,
+}: {
+  src: string;
+  alt: string;
+  className?: string;
+  renderImage?: (props: ImageRenderProps) => React.ReactNode;
+  file?: FileAttachment;
+}) {
+  const { t } = useI18n();
+  if (renderImage) return <>{renderImage({ src, alt, file })}</>;
+  return (
+    <a
+      href={src}
+      target="_blank"
+      rel="noopener noreferrer"
+      aria-label={t("chat.message.openImage", { name: alt })}
+      className="inline-block rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-chat-accent-primary"
+    >
+      <img src={src} alt={alt} loading="lazy" className={cn("rounded-lg object-contain bg-chat-bg-tertiary", className)} />
+    </a>
+  );
+}
+
+/** Images that are part of a message's content (`image_url`, `input_image`, `image` parts). */
+function MessageImages({
+  images,
+  renderImage,
+}: {
+  images: string[];
+  renderImage?: (props: ImageRenderProps) => React.ReactNode;
+}) {
+  const { t } = useI18n();
+  return (
+    <div className="flex flex-wrap gap-2 mt-2">
+      {images.map((src, index) => (
+        <ImageThumb
+          key={`${index}-${src.slice(0, 64)}`}
+          src={src}
+          alt={`${t("chat.message.image")} ${index + 1}`}
+          className="max-h-64 max-w-full"
+          renderImage={renderImage}
+        />
+      ))}
+    </div>
+  );
+}
+
 /**
- * File attachments display
+ * File attachments display: images as thumbnails (from the server's `url`, or the local
+ * preview of a file just sent), other files as a chip with name and size.
  */
-function FileAttachments({ files }: { files: FileAttachment[] }) {
+function FileAttachments({
+  files,
+  renderImage,
+}: {
+  files: FileAttachment[];
+  renderImage?: (props: ImageRenderProps) => React.ReactNode;
+}) {
   const { t } = useI18n();
 
   return (
     <div className="flex flex-wrap gap-2 mt-2">
       {files.map((file) => {
+        const thumb = isImageType(file.mimeType) ? safeImageSrc(file.previewUrl ?? file.url) : undefined;
+        if (thumb) {
+          return (
+            <figure key={file.id} className="m-0 max-w-full">
+              <ImageThumb src={thumb} alt={file.name} className="max-h-48 max-w-full" renderImage={renderImage} file={file} />
+              <figcaption className="mt-1 text-xs text-chat-text-secondary truncate max-w-[16rem]" title={file.name}>
+                {file.name} · {formatFileSize(file.size)}
+              </figcaption>
+            </figure>
+          );
+        }
         const { base, ext } = splitFileName(file.name);
+        const href = safeFileHref(file.url);
         return (
           <div
             key={file.id}
             className="flex items-center gap-2 px-3 py-2 bg-chat-bg-tertiary rounded-lg text-sm"
           >
-            <FileIcon className="w-4 h-4 text-chat-text-secondary flex-shrink-0" />
+            {isImageType(file.mimeType) ? (
+              <ImageIcon className="w-4 h-4 text-chat-text-secondary flex-shrink-0" />
+            ) : (
+              <FileIcon className="w-4 h-4 text-chat-text-secondary flex-shrink-0" />
+            )}
             <span
               className="text-chat-text-primary truncate max-w-[160px]"
               title={file.name}
@@ -218,9 +310,14 @@ function FileAttachments({ files }: { files: FileAttachment[] }) {
                 {ext}
               </span>
             )}
-            {file.url && (
+            {file.size > 0 && (
+              <span className="text-chat-text-tertiary text-xs flex-shrink-0">
+                {formatFileSize(file.size)}
+              </span>
+            )}
+            {href && (
               <a
-                href={file.url}
+                href={href}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-chat-accent-primary hover:underline flex-shrink-0"
@@ -404,7 +501,7 @@ function MessageCitations({ citations }: { citations: Citation[] }) {
 }
 
 /**
- * Extract text content from message content
+ * Extract text content from message content: the text parts, one per line.
  */
 function getTextContent(content: Message["content"]): string {
   if (typeof content === "string") {
@@ -413,7 +510,18 @@ function getTextContent(content: Message["content"]): string {
   return content
     .filter((part) => part.type === "text" && "text" in part)
     .map((part) => (part as { type: "text"; text: string }).text)
-    .join("");
+    .join("\n");
+}
+
+/** The safe image URLs among the content parts, in order. */
+function getImages(content: Message["content"]): string[] {
+  if (typeof content === "string") return [];
+  const out: string[] = [];
+  for (const part of content) {
+    const image = imagePartSource(part);
+    if (image) out.push(image.src);
+  }
+  return out;
 }
 
 /**

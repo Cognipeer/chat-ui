@@ -26,6 +26,10 @@ module.exports = {
             primary: "var(--chat-accent-primary)",
             secondary: "var(--chat-accent-secondary)",
           },
+          success: { DEFAULT: "var(--chat-success)", bg: "var(--chat-success-bg)" },
+          danger: { DEFAULT: "var(--chat-danger)", bg: "var(--chat-danger-bg)" },
+          warning: { DEFAULT: "var(--chat-warning)", bg: "var(--chat-warning-bg)" },
+          info: { DEFAULT: "var(--chat-info)", bg: "var(--chat-info-bg)" },
         },
       },
       animation: {

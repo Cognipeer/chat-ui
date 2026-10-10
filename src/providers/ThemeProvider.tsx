@@ -55,6 +55,14 @@ export function ChatThemeProvider({
       if (theme.colors.borderSecondary) vars["--chat-border-secondary"] = theme.colors.borderSecondary;
       if (theme.colors.accentPrimary) vars["--chat-accent-primary"] = theme.colors.accentPrimary;
       if (theme.colors.accentSecondary) vars["--chat-accent-secondary"] = theme.colors.accentSecondary;
+      if (theme.colors.success) vars["--chat-success"] = theme.colors.success;
+      if (theme.colors.successBg) vars["--chat-success-bg"] = theme.colors.successBg;
+      if (theme.colors.danger) vars["--chat-danger"] = theme.colors.danger;
+      if (theme.colors.dangerBg) vars["--chat-danger-bg"] = theme.colors.dangerBg;
+      if (theme.colors.warning) vars["--chat-warning"] = theme.colors.warning;
+      if (theme.colors.warningBg) vars["--chat-warning-bg"] = theme.colors.warningBg;
+      if (theme.colors.info) vars["--chat-info"] = theme.colors.info;
+      if (theme.colors.infoBg) vars["--chat-info-bg"] = theme.colors.infoBg;
     }
 
     return vars;

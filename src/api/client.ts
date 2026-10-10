@@ -256,9 +256,13 @@ export class AgentServerClient implements ChatTransport {
           case "stream.progress":
             callbacks.onProgress?.(event);
             break;
-          case "stream.error":
-            callbacks.onError?.(new Error(event.error));
+          case "stream.error": {
+            // The code lets the UI show a friendly message and recover (busy, pending action, ...)
+            const error = new Error(event.error) as Error & { code?: string };
+            if (event.code) error.code = event.code;
+            callbacks.onError?.(error);
             break;
+          }
           case "stream.action_required":
             callbacks.onActionRequired?.(event);
             break;

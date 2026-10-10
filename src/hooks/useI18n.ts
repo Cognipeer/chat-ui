@@ -1,11 +1,14 @@
 "use client";
 
-import { useIntl } from "react-intl";
-import { useI18nContextOptional, type SupportedLocale } from "../providers/I18nProvider";
+import { useContext } from "react";
+import { createIntl, IntlContext, type IntlShape } from "react-intl";
+import { useI18nContextOptional, messagesFor, type SupportedLocale } from "../providers/I18nProvider";
 
 export interface UseI18nReturn {
   /** Translate a message by key */
   t: (id: string, values?: Record<string, any>) => string;
+  /** Whether a message exists for this key (in the current locale or the English fallback) */
+  has: (id: string) => boolean;
   /** Current locale */
   locale: SupportedLocale;
   /** Change locale (updates URL query parameter) */
@@ -18,10 +21,19 @@ export interface UseI18nReturn {
   formatRelativeTime: (value: number, unit: Intl.RelativeTimeFormatUnit) => string;
 }
 
+// What the components fall back to outside a `ChatI18nProvider`: the built-in English strings
+let standaloneIntl: IntlShape | undefined;
+function getStandaloneIntl(): IntlShape {
+  standaloneIntl ??= createIntl({ locale: "en", messages: messagesFor("en") });
+  return standaloneIntl;
+}
+
 /**
  * Hook to access i18n utilities.
  * 
- * Provides translation function, locale state, and formatting helpers.
+ * Provides translation function, locale state, and formatting helpers. Outside a
+ * `ChatI18nProvider` it answers in the built-in English strings, so the components
+ * and hooks work without one.
  * 
  * @example
  * ```tsx
@@ -40,7 +52,7 @@ export interface UseI18nReturn {
  * ```
  */
 export function useI18n(): UseI18nReturn {
-  const intl = useIntl();
+  const intl = useContext(IntlContext) ?? getStandaloneIntl();
   const i18nContext = useI18nContextOptional();
 
   const locale = (i18nContext?.locale || intl.locale) as SupportedLocale;
@@ -57,6 +69,7 @@ export function useI18n(): UseI18nReturn {
         return id;
       }
     },
+    has: (id: string) => Object.prototype.hasOwnProperty.call(intl.messages, id),
     locale,
     setLocale,
     formatNumber: (value: number, options?: Intl.NumberFormatOptions) => 

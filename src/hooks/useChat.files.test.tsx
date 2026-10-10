@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { ChatI18nProvider } from "../providers";
@@ -160,9 +160,9 @@ describe("useChat refused files", () => {
     );
     await attach(result, file("big.txt"));
     expect(result.current.pendingFiles).toEqual([]);
-    expect(result.current.error?.message).toBe("File big.txt exceeds maximum size");
+    expect(result.current.error?.message).toBe("File big.txt is larger than the 3 Bytes limit");
     expect(onError).toHaveBeenCalledTimes(1);
-    expect(onError.mock.calls[0][0].message).toBe("File big.txt exceeds maximum size");
+    expect(onError.mock.calls[0][0].message).toBe("File big.txt is larger than the 3 Bytes limit");
   });
 
   it("refuses a file over the count and keeps the ones that fit", async () => {
@@ -259,7 +259,10 @@ describe("useChat refused sends", () => {
     expect(sent).toBe(false);
     expect(result.current.messages).toEqual([]);
     expect(result.current.pendingFiles.map((f) => f.name)).toEqual(["a.txt"]);
-    expect(result.current.error?.message).toBe("Answer the request above first");
+    // the server says action_pending: shown as the localized message, the server's wording kept aside
+    expect(result.current.error?.message).toBe("The assistant is waiting for your answer above. Answer it to continue.");
+    expect((result.current.error as { serverMessage?: string } | null)?.serverMessage).toBe("Answer the request above first");
+    expect((result.current.error as { code?: string } | null)?.code).toBe("action_pending");
 
     // the retry carries the file again, content included
     await act(async () => {
@@ -303,5 +306,211 @@ describe("useChat refused sends", () => {
     expect(sent).toBe(true);
     expect(result.current.messages.map((m) => m.role)).toEqual(["user"]);
     expect(result.current.error?.message).toBe("connection lost");
+  });
+});
+
+describe("useChat sends files without text", () => {
+  const sentTo = () => {
+    const sendMessageStream = vi.fn(async (_c: string, _o: unknown, cb: StreamCallbacks) => {
+      cb.onDone?.({ type: "stream.done", conversationId: "c1", messageId: "m1", content: "ok", timestamp: 2 });
+    });
+    return sendMessageStream;
+  };
+  const messageOf = (stream: ReturnType<typeof sentTo>) => (stream.mock.calls[0][1] as { message: string }).message;
+
+  it("sends the default text with the files when the text is empty", async () => {
+    const sendMessageStream = sentTo();
+    const { result } = renderHook(() => useChat({ transport: makeTransport({ sendMessageStream }), agentId: "agent" }), { wrapper });
+    await attach(result, file("a.txt"));
+    let sent: boolean | undefined;
+    await act(async () => {
+      sent = await result.current.sendMessage("");
+    });
+    expect(sent).toBe(true);
+    expect(messageOf(sendMessageStream)).toBe("Please review the attached files.");
+    expect(result.current.messages[0]).toMatchObject({ role: "user", content: "Please review the attached files." });
+    expect(result.current.messages[0].files).toHaveLength(1);
+  });
+
+  it("uses the configured text, and an empty one when asked to", async () => {
+    const custom = sentTo();
+    const first = renderHook(
+      () => useChat({ transport: makeTransport({ sendMessageStream: custom }), agentId: "agent", attachmentsOnlyMessage: "Summarize this" }),
+      { wrapper }
+    );
+    await attach(first.result, file("a.txt"));
+    await act(async () => {
+      await first.result.current.sendMessage("   ");
+    });
+    expect(messageOf(custom)).toBe("Summarize this");
+
+    const none = sentTo();
+    const second = renderHook(
+      () => useChat({ transport: makeTransport({ sendMessageStream: none }), agentId: "agent", attachmentsOnlyMessage: "" }),
+      { wrapper }
+    );
+    await attach(second.result, file("a.txt"));
+    await act(async () => {
+      await second.result.current.sendMessage("");
+    });
+    expect(messageOf(none)).toBe("");
+  });
+
+  it("speaks the locale for the default text", async () => {
+    const trWrapper = ({ children }: { children: ReactNode }) => <ChatI18nProvider locale="tr">{children}</ChatI18nProvider>;
+    const sendMessageStream = sentTo();
+    const { result } = renderHook(() => useChat({ transport: makeTransport({ sendMessageStream }), agentId: "agent" }), { wrapper: trWrapper });
+    await attach(result, file("a.txt"));
+    await act(async () => {
+      await result.current.sendMessage("");
+    });
+    expect(messageOf(sendMessageStream)).toBe("Lütfen ekli dosyaları inceleyin.");
+  });
+
+  it("still sends nothing for empty text and no files", async () => {
+    const sendMessageStream = sentTo();
+    const { result } = renderHook(() => useChat({ transport: makeTransport({ sendMessageStream }), agentId: "agent" }), { wrapper });
+    let sent: boolean | undefined;
+    await act(async () => {
+      sent = await result.current.sendMessage("  ");
+    });
+    expect(sent).toBe(false);
+    expect(sendMessageStream).not.toHaveBeenCalled();
+  });
+
+  it("keeps the typed text over the default", async () => {
+    const sendMessageStream = sentTo();
+    const { result } = renderHook(() => useChat({ transport: makeTransport({ sendMessageStream }), agentId: "agent" }), { wrapper });
+    await attach(result, file("a.txt"));
+    await act(async () => {
+      await result.current.sendMessage("what is in here?");
+    });
+    expect(messageOf(sendMessageStream)).toBe("what is in here?");
+  });
+});
+
+describe("useChat: uploading", () => {
+  it("is uploading while the files are being stored, and the files stay attached if it fails", async () => {
+    let finish!: (file: { id: string; name: string; mimeType: string; size: number }) => void;
+    const uploadFile = vi.fn(() => new Promise<{ id: string; name: string; mimeType: string; size: number }>((resolve) => (finish = resolve)));
+    const { result } = renderHook(
+      () => useChat({ transport: makeTransport({ uploadFile }), agentId: "agent", fileTransport: "upload" }),
+      { wrapper }
+    );
+    await attach(result, file("a.txt"));
+    expect(result.current.isUploading).toBe(false);
+
+    let sending!: Promise<boolean>;
+    act(() => {
+      sending = result.current.sendMessage("read");
+    });
+    await vi.waitFor(() => expect(result.current.isUploading).toBe(true));
+    await act(async () => {
+      finish({ id: "f1", name: "a.txt", mimeType: "text/plain", size: 5 });
+      await sending;
+    });
+    expect(result.current.isUploading).toBe(false);
+  });
+
+  it("is not uploading when a message carries no files", async () => {
+    const { result } = renderHook(() => useChat({ transport: makeTransport(), agentId: "agent" }), { wrapper });
+    await act(async () => {
+      await result.current.sendMessage("hello");
+    });
+    expect(result.current.isUploading).toBe(false);
+  });
+
+  it("is not uploading after a failed upload", async () => {
+    const uploadFile = vi.fn(async () => {
+      throw new Error("nope");
+    });
+    const { result } = renderHook(
+      () => useChat({ transport: makeTransport({ uploadFile }), agentId: "agent", fileTransport: "upload" }),
+      { wrapper }
+    );
+    await attach(result, file("a.txt"));
+    await act(async () => {
+      await result.current.sendMessage("read");
+    });
+    expect(result.current.isUploading).toBe(false);
+    expect(result.current.pendingFiles).toHaveLength(1);
+  });
+});
+
+describe("useChat: image previews", () => {
+  const created: string[] = [];
+  const revoked: string[] = [];
+  const original = { create: URL.createObjectURL, revoke: URL.revokeObjectURL };
+
+  beforeEach(() => {
+    created.length = 0;
+    revoked.length = 0;
+    URL.createObjectURL = () => {
+      const url = `blob:test/${created.length}`;
+      created.push(url);
+      return url;
+    };
+    URL.revokeObjectURL = (url: string) => {
+      revoked.push(url);
+    };
+  });
+
+  afterEach(() => {
+    URL.createObjectURL = original.create;
+    URL.revokeObjectURL = original.revoke;
+  });
+
+  it("gives an image a local thumbnail URL, and other files none", async () => {
+    const { result } = renderHook(() => useChat({ transport: makeTransport(), agentId: "agent" }), { wrapper });
+    await attach(result, file("cat.png", "image/png"), file("notes.txt"));
+    const [image, text] = result.current.pendingFiles;
+    expect(image.previewUrl).toBe("blob:test/0");
+    expect(text.previewUrl).toBeUndefined();
+    expect(created).toHaveLength(1);
+  });
+
+  it("releases the URL when the file is removed", async () => {
+    const { result } = renderHook(() => useChat({ transport: makeTransport(), agentId: "agent" }), { wrapper });
+    await attach(result, file("cat.png", "image/png"));
+    act(() => result.current.removeFile(result.current.pendingFiles[0].id));
+    expect(revoked).toEqual(["blob:test/0"]);
+    expect(result.current.pendingFiles).toEqual([]);
+  });
+
+  it("keeps the thumbnail on the sent message, and releases it when the chat is left or the hook unmounts", async () => {
+    const { result, unmount } = renderHook(() => useChat({ transport: makeTransport(), agentId: "agent" }), { wrapper });
+    await attach(result, file("cat.png", "image/png"));
+    await act(async () => {
+      await result.current.sendMessage("look");
+    });
+    expect(result.current.messages[0].files?.[0].previewUrl).toBe("blob:test/0");
+    expect(revoked).toEqual([]);
+
+    act(() => result.current.clearMessages());
+    expect(revoked).toEqual(["blob:test/0"]);
+
+    await attach(result, file("dog.png", "image/png"));
+    unmount();
+    expect(revoked).toEqual(["blob:test/0", "blob:test/1"]);
+  });
+
+  it("brings a refused message's thumbnail back with its file", async () => {
+    const sendMessageStream = vi.fn(async () => {
+      throw new Error("nope");
+    });
+    const { result } = renderHook(() => useChat({ transport: makeTransport({ sendMessageStream }), agentId: "agent" }), { wrapper });
+    await attach(result, file("cat.png", "image/png"));
+    await act(async () => {
+      await result.current.sendMessage("look");
+    });
+    expect(result.current.pendingFiles[0].previewUrl).toBe("blob:test/0");
+    expect(revoked).toEqual([]);
+  });
+
+  it("works where the browser cannot make object URLs", async () => {
+    (URL as { createObjectURL?: unknown }).createObjectURL = undefined;
+    const { result } = renderHook(() => useChat({ transport: makeTransport(), agentId: "agent" }), { wrapper });
+    await attach(result, file("cat.png", "image/png"));
+    expect(result.current.pendingFiles[0].previewUrl).toBeUndefined();
   });
 });

@@ -15,12 +15,24 @@ const {
   // State
   messages,
   isLoading,
+  isStreaming,
+  isLoadingConversation,
   error,
   streamingText,
+  progressMessage,
   activeToolCalls,
   conversation,
   pendingFiles,
-  
+  isUploading,
+
+  // Approvals and questions
+  pendingActions,
+  awaitingAction,
+  isResolvingAction,
+  canResolveActions,
+  answerableQuestion,
+  resolveAction,
+
   // Actions
   sendMessage,
   stop,
@@ -47,28 +59,28 @@ const {
 
 ## Options
 
+`UseChatOptions` is `ChatConfig` (see [Types](/api/types#chatconfig)) and `ChatCallbacks`, plus:
+
 ```typescript
-interface UseChatOptions {
-  // Required
-  baseUrl: string;
-  agentId: string;
-  
-  // Optional
-  authorization?: string;
-  headers?: Record<string, string>;
-  conversationId?: string;
-  streaming?: boolean;
-  enableFileUpload?: boolean;
-  maxFileSize?: number;
-  
-  // Callbacks
-  onMessageSent?: (message: Message) => void;
-  onMessageReceived?: (message: Message) => void;
-  onStreamText?: (chunk: string, fullText: string) => void;
-  onToolCall?: (name: string, args: object) => void;
-  onToolResult?: (name: string, result: any) => void;
-  onConversationCreated?: (conversation: Conversation) => void;
-  onError?: (error: Error) => void;
+interface UseChatOptions extends ChatConfig, ChatCallbacks {
+  baseUrl?: string;        // or `transport`
+  agentId?: string;
+  conversationId?: string; // opened on mount
+  initialMessages?: Message[];
+
+  streaming?: boolean;                 // default true
+  enableFileUpload?: boolean;          // default true
+  allowedFileTypes?: string[];
+  maxFileSize?: number;                // bytes, default 10 MB
+  maxFiles?: number;                   // default 10
+  fileTransport?: "inline" | "upload"; // default "inline"
+  /** Text sent when a message carries files and no typed text; "" sends none */
+  attachmentsOnlyMessage?: string;     // default: localized "review the attached files"
+
+  /** What a new message does while an approval or question waits */
+  pendingActionComposerMode?: "block" | "cancel"; // default "block"
+  /** How long after a card's deadline the conversation is fetched again (ms) */
+  actionExpiryRefreshMs?: number;      // default 1500
 }
 ```
 
@@ -80,23 +92,39 @@ interface UseChatReturn {
   messages: Message[];
   
   // Loading state
-  isLoading: boolean;
+  isLoading: boolean;                 // isStreaming || isLoadingConversation
+  isStreaming: boolean;
+  isLoadingConversation: boolean;
   streamingText: string;
+  progressMessage: string;
   activeToolCalls: Map<string, ToolCallState>;
   
-  // Error handling
+  // Error handling: a localized, friendly message for well-known server codes
   error: Error | null;
   
   // Conversation
   conversation: Conversation | null;
   
   // Files
-  pendingFiles: FileAttachment[];
+  pendingFiles: FileAttachment[];     // images carry a local `previewUrl`
+  isUploading: boolean;               // files are being read or uploaded for a message being sent
+
+  // Approvals and questions
+  pendingActions: PendingActionEntry[]; // waiting for an answer, oldest first
+  awaitingAction: boolean;
+  isResolvingAction: boolean;
+  canResolveActions: boolean;           // false when the transport cannot answer
+  answerableQuestion: { actionId: string; question: UserQuestion } | null; // a lone free-text question
+  // Resolves false when the answer was not taken (the card is back to waiting,
+  // or shows that the request expired / was cancelled / was answered elsewhere)
+  resolveAction: (actionId: string, resolution: ActionResolution) => Promise<boolean>;
   
   // Actions
   // Resolves false when the message was refused before the server took it: the
-  // transcript is unchanged, the files are still in pendingFiles, `error` says why
+  // transcript is unchanged, the files are still in pendingFiles, `error` says why.
+  // Empty text is fine while files are attached.
   sendMessage: (content: string) => Promise<boolean>;
+  // Detaches from the stream; the run keeps going on the server
   stop: () => void;
   retry: () => Promise<void>;
   createConversation: (title?: string) => Promise<Conversation>;
@@ -213,6 +241,39 @@ function ChatWithFiles() {
 }
 ```
 
+### Files without text, previews
+
+```tsx
+const chat = useChat({ baseUrl: "/api/agents", agentId: "assistant" });
+
+await chat.addFiles(Array.from(input.files));   // refusals (size, count, type, empty) go to `error` and `onError`
+chat.pendingFiles.map((f) => f.previewUrl);      // object URL of an image, shown before anything is uploaded
+await chat.sendMessage("");                      // files alone: sends `attachmentsOnlyMessage`
+```
+
+Preview URLs are revoked when a file is removed, the conversation is left or the hook unmounts.
+
+### Approvals and questions
+
+```tsx
+function Cards() {
+  const { pendingActions, resolveAction, canResolveActions } = useChat({ baseUrl: "/api/agents", agentId: "ops" });
+
+  return pendingActions.map(({ action }) =>
+    action.type === "tool_approval" ? (
+      <div key={action.id}>
+        {action.toolName}
+        <button disabled={!canResolveActions} onClick={() => resolveAction(action.id, { type: "tool_approval", decision: "allow" })}>
+          Approve
+        </button>
+      </div>
+    ) : null
+  );
+}
+```
+
+A card past its `expiresAt` turns Expired on its own (which frees the composer) and the conversation is fetched again shortly after. See [Approvals and Questions](/guide/approvals).
+
 ### Conversation Management
 
 ```tsx
@@ -246,6 +307,8 @@ function ConversationManager() {
 
 ### Error Handling
 
+A server error with a known `code` (`conversation_busy`, `rate_limited`, `file_too_large`, ...) becomes a localized, friendly `error.message`; `error.code`, `error.status` and `error.serverMessage` (the server's wording) stay on it. When a send is refused because a card is waiting or a turn is running (`action_pending`, `pending_action`, `conversation_busy`), the conversation is fetched again so the card or the latest answer shows.
+
 ```tsx
 function ChatWithErrors() {
   const { error, retry, sendMessage } = useChat({
@@ -271,6 +334,8 @@ function ChatWithErrors() {
 ```
 
 ### Stop Generation
+
+`stop()` aborts the browser's stream and keeps the text received so far. It does not cancel the run on the server.
 
 ```tsx
 function ChatWithStop() {
@@ -321,9 +386,10 @@ The hook manages:
 
 1. **Messages** - Full conversation history
 2. **Streaming** - Incremental text and tool calls
-3. **Files** - Pending file attachments
-4. **Error** - Last error state
-5. **Loading** - Request in progress
+3. **Files** - Pending file attachments, with image previews
+4. **Approvals and questions** - Cards waiting for an answer, their deadlines and how they ended
+5. **Error** - Last error state, localized
+6. **Loading** - Request in progress
 
 ## React-controlled mode
 

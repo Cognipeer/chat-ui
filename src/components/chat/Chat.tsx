@@ -9,14 +9,16 @@ import type {
   AgentInfo,
   ChatConfig,
   ChatCallbacks,
+  ChatTheme,
   MessageActionProps,
   ToolApprovalRenderProps,
   QuestionRenderProps,
 } from "../../types";
-import { ChatThemeProvider, ChatI18nProvider, type SupportedLocale } from "../../providers";
+import { ChatThemeProvider, ChatI18nProvider, type ChatMessages, type SupportedLocale } from "../../providers";
 import { AgentServerClient, type ChatTransport } from "../../api";
 import { useChat, useChatHistory, useI18n } from "../../hooks";
 import { ChatMessageList } from "./ChatMessageList";
+import type { ImageRenderProps } from "./ChatMessage";
 import type { ChatActionsConfig } from "./ActionCards";
 import { ChatInput } from "./ChatInput";
 import type { ChatInputHandle } from "./ChatInput";
@@ -36,15 +38,11 @@ export interface ChatProps extends ChatConfig, ChatCallbacks {
   initialMessages?: Message[];
   /** Theme mode */
   theme?: "light" | "dark";
-  /** Custom theme colors */
-  themeColors?: {
-    bgPrimary?: string;
-    bgSecondary?: string;
-    bgTertiary?: string;
-    textPrimary?: string;
-    textSecondary?: string;
-    accentPrimary?: string;
-  };
+  /**
+   * Custom theme colors: any key of `ChatTheme["colors"]`, including the status colours
+   * (`success`, `danger`, `warning`, `info` and their `...Bg` tints).
+   */
+  themeColors?: NonNullable<ChatTheme["colors"]>;
   /** Render custom message actions */
   renderMessageActions?: (props: MessageActionProps) => React.ReactNode;
   /** Render custom avatar */
@@ -86,6 +84,16 @@ export interface ChatProps extends ChatConfig, ChatCallbacks {
   /** Replace the question card */
   renderQuestion?: (props: QuestionRenderProps) => React.ReactNode;
   /**
+   * Let the person edit a tool call's arguments in the approval card before approving
+   * (default false). An agent's `capabilities.approvalArgsEdit` overrides it. The edit is
+   * checked against the action's `argsSchema` when it has one.
+   */
+  allowArgumentEdit?: boolean;
+  /** Approval and question cards turn amber when less than this many seconds are left (default 600) */
+  expiryWarningSeconds?: number;
+  /** Replace how an image in a message is drawn, e.g. to fetch it with credentials */
+  renderImage?: (props: ImageRenderProps) => React.ReactNode;
+  /**
    * What the composer does while an approval or question is waiting.
    * `block` (default) disables it until answered; `cancel` lets a new message
    * through, which cancels the pending request. An agent's own
@@ -101,12 +109,21 @@ export interface ChatProps extends ChatConfig, ChatCallbacks {
   showAgentName?: boolean;
   /** Called when selected agent changes (multi-agent mode) */
   onAgentChange?: (agentId: string) => void;
-  /** Language/locale (auto-detected from ?lang query param if not provided) */
+  /**
+   * Language/locale. Without it, the locale of an enclosing `ChatI18nProvider` applies, or
+   * else it is auto-detected from the `?lang` query param.
+   */
   locale?: SupportedLocale;
   /** Default locale when no query parameter is found */
   defaultLocale?: SupportedLocale;
   /** Callback when locale changes */
   onLocaleChange?: (locale: SupportedLocale) => void;
+  /**
+   * Replace or add UI strings per locale, merged over the built-in ones and over those of an
+   * enclosing `ChatI18nProvider`. A locale other than `en` / `tr` only needs the keys it
+   * translates; the rest fall back to English.
+   */
+  customMessages?: ChatMessages;
 }
 
 /**
@@ -114,8 +131,26 @@ export interface ChatProps extends ChatConfig, ChatCallbacks {
  *
  * When `agentId` is omitted the component will fetch the list of agents from
  * `GET /agents` and display a selector in the header when there are multiple.
+ *
+ * It works on its own and inside a `ChatI18nProvider`: the provider's locale and custom
+ * messages apply, and `locale` / `customMessages` props refine them.
  */
-export function Chat({
+export function Chat({ locale, defaultLocale, onLocaleChange, customMessages, ...props }: ChatProps) {
+  return (
+    <ChatI18nProvider
+      locale={locale}
+      defaultLocale={defaultLocale}
+      onLocaleChange={onLocaleChange}
+      customMessages={customMessages}
+    >
+      <ChatContent {...props} />
+    </ChatI18nProvider>
+  );
+}
+
+type ChatContentProps = Omit<ChatProps, "locale" | "defaultLocale" | "onLocaleChange" | "customMessages">;
+
+function ChatContent({
   // Config
   baseUrl,
   transport,
@@ -130,6 +165,7 @@ export function Chat({
   maxFileSize,
   maxFiles,
   fileTransport,
+  attachmentsOnlyMessage,
   // Callbacks
   onMessageSent,
   onMessageReceived,
@@ -166,14 +202,13 @@ export function Chat({
   enableQuestions = true,
   renderToolApproval,
   renderQuestion,
+  allowArgumentEdit = false,
+  expiryWarningSeconds,
+  renderImage,
   pendingActionComposerMode = "block",
   onActionResolved,
   showAgentName,
-  // I18n
-  locale,
-  defaultLocale = "en",
-  onLocaleChange,
-}: ChatProps) {
+}: ChatContentProps) {
   const { t } = useI18n();
   const [historyOpen, setHistoryOpen] = useState(defaultHistoryOpen);
 
@@ -260,6 +295,10 @@ export function Chat({
     agentMeta?.pendingActionComposerMode === "block" || agentMeta?.pendingActionComposerMode === "cancel"
       ? agentMeta.pendingActionComposerMode
       : pendingActionComposerMode;
+  // The agent says whether it takes edited arguments and whether it reads images
+  const effectiveArgEdit = selectedAgent?.capabilities?.approvalArgsEdit ?? allowArgumentEdit;
+  const imagesIgnored =
+    selectedAgent?.capabilities?.acceptsImages === false || agentMeta?.acceptsImages === false;
 
   // Use refs for callbacks that will depend on history (defined later)
   const onMessageReceivedRef = useRef(onMessageReceived);
@@ -314,6 +353,7 @@ export function Chat({
     maxFileSize: effectiveMaxFileSize,
     maxFiles: effectiveMaxFiles,
     fileTransport,
+    attachmentsOnlyMessage,
     conversationId,
     initialMessages,
     onMessageSent,
@@ -338,8 +378,19 @@ export function Chat({
       renderToolApproval,
       renderQuestion,
       onResolve: chat.resolveAction,
+      allowArgumentEdit: effectiveArgEdit,
+      expiryWarningSeconds,
     }),
-    [enableToolApprovals, enableQuestions, chat.canResolveActions, renderToolApproval, renderQuestion, chat.resolveAction]
+    [
+      enableToolApprovals,
+      enableQuestions,
+      chat.canResolveActions,
+      renderToolApproval,
+      renderQuestion,
+      chat.resolveAction,
+      effectiveArgEdit,
+      expiryWarningSeconds,
+    ]
   );
 
   // A lone free-text question is answered from the composer
@@ -355,6 +406,18 @@ export function Chat({
       : effectiveComposerMode === "cancel"
         ? ("cancel" as const)
         : ("blocked" as const);
+
+  // Once the last card is answered (or lapses) the keyboard goes back to the composer
+  const wasAwaiting = useRef(false);
+  useEffect(() => {
+    if (wasAwaiting.current && !chat.awaitingAction) {
+      const active = document.activeElement;
+      if (!active || active === document.body || active.closest("[data-chat-card]")) {
+        inputRef.current?.focus();
+      }
+    }
+    wasAwaiting.current = chat.awaitingAction;
+  }, [chat.awaitingAction]);
 
   const handleSend = useCallback(
     (text: string) => {
@@ -429,18 +492,13 @@ export function Chat({
   const showAgentSelector = !chat.isLoadingConversation && chat.messages.length === 0;
 
   return (
-    <ChatI18nProvider
-      locale={locale}
-      defaultLocale={defaultLocale}
-      onLocaleChange={onLocaleChange}
+    <ChatThemeProvider
+      defaultMode={theme}
+      theme={{
+        mode: theme,
+        colors: themeColors,
+      }}
     >
-      <ChatThemeProvider
-        defaultMode={theme}
-        theme={{
-          mode: theme,
-          colors: themeColors,
-        }}
-      >
       <div
         className={cn(
           "chat-container flex h-full bg-chat-bg-primary text-chat-text-primary",
@@ -515,6 +573,7 @@ export function Chat({
               showTimestamps={showTimestamps}
               enableCitations={enableCitations}
               actions={actionsConfig}
+              renderImage={renderImage}
               emptyState={renderEmptyState?.()}
             />
           )}
@@ -523,11 +582,15 @@ export function Chat({
           {chat.error && (
             <div className="px-4 py-2">
               <div className="max-w-3xl mx-auto">
-                <div className="bg-red-500/10 border border-red-500/30 rounded-lg px-4 py-3 text-red-400 text-sm flex items-center justify-between">
-                  <span>{chat.error.message}</span>
+                <div
+                  role="alert"
+                  className="bg-chat-danger-bg border border-chat-danger rounded-lg px-4 py-3 text-chat-danger text-sm flex items-center justify-between gap-3"
+                >
+                  <span className="min-w-0 break-words">{chat.error.message}</span>
                   <button
+                    type="button"
                     onClick={() => chat.setError(null)}
-                    className="text-red-400 hover:text-red-300"
+                    className="flex-shrink-0 text-chat-danger underline-offset-2 hover:underline"
                   >
                     {t("chat.error.dismiss")}
                   </button>
@@ -544,18 +607,19 @@ export function Chat({
             onFilesAdd={effectiveFileUpload ? chat.addFiles : undefined}
             onFileRemove={chat.removeFile}
             isLoading={chat.isStreaming}
+            isUploading={chat.isUploading}
             pendingFiles={chat.pendingFiles}
             placeholder={inputPlaceholder}
             enableFileUpload={effectiveFileUpload}
             allowedFileTypes={effectiveAllowedFileTypes}
             maxFiles={effectiveMaxFiles}
+            imagesIgnored={imagesIgnored}
             autoFocus={autoFocusInput}
             pendingMode={pendingMode}
           />
         </div>
       </div>
-      </ChatThemeProvider>
-    </ChatI18nProvider>
+    </ChatThemeProvider>
   );
 }
 
@@ -598,8 +662,10 @@ function DefaultHeader({ showMenuButton, onMenuClick, title, agents = [], select
     <div className={cn("flex-shrink-0 flex items-center gap-3 px-4 border-b border-chat-border-primary", CHAT_HEADER_HEIGHT)}>
       {showMenuButton && (
         <button
+          type="button"
           onClick={onMenuClick}
           className="md:hidden p-2 hover:bg-chat-bg-hover rounded-lg"
+          aria-label={t("chat.header.menu")}
         >
           <MenuIcon className="w-5 h-5" />
         </button>
@@ -609,8 +675,12 @@ function DefaultHeader({ showMenuButton, onMenuClick, title, agents = [], select
       {showAgentPicker ? (
         <div className="relative flex-1 min-w-0" ref={dropdownRef}>
           <button
+            type="button"
             onClick={() => setDropdownOpen(!dropdownOpen)}
             className="flex items-center gap-2 px-3 py-1.5 rounded-lg hover:bg-chat-bg-hover transition-colors max-w-full"
+            aria-haspopup="true"
+            aria-expanded={dropdownOpen}
+            title={t("chat.header.changeAgent")}
           >
             <BotIcon className="w-4 h-4 text-chat-accent-primary flex-shrink-0" />
             <span className="text-sm font-medium truncate">
@@ -624,6 +694,8 @@ function DefaultHeader({ showMenuButton, onMenuClick, title, agents = [], select
               {agents.map((agent) => (
                 <button
                   key={agent.id}
+                  type="button"
+                  aria-current={agent.id === selectedAgentId ? "true" : undefined}
                   onClick={() => {
                     onAgentChange?.(agent.id);
                     setDropdownOpen(false);

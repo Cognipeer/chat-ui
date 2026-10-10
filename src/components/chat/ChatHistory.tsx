@@ -239,6 +239,7 @@ function ConversationItem({
           }}
           className="opacity-0 group-hover:opacity-100 p-1 hover:bg-chat-bg-hover rounded transition-all"
           title={t("chat.history.deleteConversation")}
+          aria-label={t("chat.history.deleteConversation")}
         >
           <TrashIcon className="w-4 h-4 text-chat-text-tertiary hover:text-red-400" />
         </button>

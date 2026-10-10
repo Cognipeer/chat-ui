@@ -75,3 +75,23 @@ describe("AgentServerClient.sendMessageStream", () => {
     expect(events.map((e) => e.type)).toEqual(["stream.action_required", "stream.done"]);
   });
 });
+
+describe("AgentServerClient stream errors", () => {
+  it("passes the code of a stream.error event on, so the UI can show a friendly message", async () => {
+    const fetchMock = vi.fn(async () => sse([{ type: "stream.error", error: "Conversation is busy", code: "CONVERSATION_BUSY", timestamp: 1 }]));
+    const client = new AgentServerClient({ baseUrl: "http://x", fetch: fetchMock as unknown as typeof fetch });
+    const errors: Array<Error & { code?: string }> = [];
+    await client.sendMessageStream("c1", { message: "go" }, { onError: (e) => errors.push(e) });
+    expect(errors).toHaveLength(1);
+    expect(errors[0].message).toBe("Conversation is busy");
+    expect(errors[0].code).toBe("CONVERSATION_BUSY");
+  });
+
+  it("leaves the code off an event that has none", async () => {
+    const fetchMock = vi.fn(async () => sse([{ type: "stream.error", error: "boom", timestamp: 1 }]));
+    const client = new AgentServerClient({ baseUrl: "http://x", fetch: fetchMock as unknown as typeof fetch });
+    const errors: Array<Error & { code?: string }> = [];
+    await client.sendMessageStream("c1", { message: "go" }, { onError: (e) => errors.push(e) });
+    expect(errors[0].code).toBeUndefined();
+  });
+});

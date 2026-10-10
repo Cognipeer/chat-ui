@@ -11,6 +11,15 @@ import type { ChatTransport } from "./api/transport";
 export type ContentPart =
   | { type: "text"; text: string }
   | { type: "image_url"; image_url: { url: string; detail?: "auto" | "low" | "high" } }
+  /** Responses API image input; `image_url` is the URL itself or `{ url }` */
+  | { type: "input_image"; image_url: string | { url: string } }
+  /** Anthropic-style image: inline base64 or a URL */
+  | {
+      type: "image";
+      source:
+        | { type: "base64"; media_type: string; data: string }
+        | { type: "url"; url: string };
+    }
   | { type: "file"; file: { id: string; name: string; mimeType: string; url?: string } }
   | { type: string; [key: string]: unknown };
 
@@ -33,7 +42,12 @@ export interface Message {
   pendingActions?: PendingAction[];
   /** How the turn ended. Absent means a normal, completed answer. */
   status?: MessageStatus;
-  /** Client-side state of each action in `pendingActions`, keyed by action id */
+  /**
+   * How each action in `pendingActions` ended or stands, keyed by action id. Kept by this
+   * app as cards settle; a server may also send it (or settled entries in
+   * `metadata.pendingActions`, each with a `status` and `resolution`) so a reloaded history
+   * shows what was decided. See `restorePendingActions`.
+   */
   actionStates?: Record<string, ActionState>;
   createdAt: Date;
   updatedAt: Date;
@@ -52,6 +66,11 @@ export interface FileAttachment {
   size: number;
   url?: string;
   storageKey?: string;
+  /**
+   * Object URL of a file that is still on this device, so an image can be shown before (or
+   * without) a server URL. Revoked when the conversation is left; never sent to the server.
+   */
+  previewUrl?: string;
 }
 
 export interface Citation {
@@ -87,6 +106,7 @@ export interface UserQuestion {
   header?: string;
   multiSelect?: boolean;
   placeholder?: string;
+  /** Default `true`: a question must be answered unless the server says `required: false` */
   required?: boolean;
   options?: UserQuestionOption[];
 }
@@ -100,6 +120,12 @@ export type PendingAction =
       title?: string;
       summary?: string;
       args?: Record<string, unknown>;
+      /**
+       * JSON Schema of `args`. When the card lets the person edit the arguments, the edit
+       * is checked against it (type, properties, required, enum, ranges, lengths, pattern,
+       * items, additionalProperties, anyOf / oneOf).
+       */
+      argsSchema?: Record<string, unknown>;
       expiresAt?: string;
     }
   | {
@@ -133,6 +159,9 @@ export interface ActionState {
   status: ActionStatus;
   /** What was answered; absent when it was resolved somewhere else */
   resolution?: ActionResolution;
+  /** Who settled it and when, when the server says (shown nowhere by default) */
+  resolvedBy?: string;
+  resolvedAt?: string;
 }
 
 // ============================================================================
@@ -174,13 +203,18 @@ export interface AgentInfo {
   /**
    * Free-form. `Chat` reads these keys to adapt itself to the agent (each overrides
    * the matching prop): `enableFileUpload`, `maxFileSize`, `maxFiles`,
-   * `allowedFileTypes` and `pendingActionComposerMode` (`"block"` | `"cancel"`).
+   * `allowedFileTypes`, `pendingActionComposerMode` (`"block"` | `"cancel"`) and
+   * `acceptsImages` (`false` warns on image attachments).
    */
   metadata?: Record<string, unknown>;
-  /** What the agent can pause for; absent when the server does not say */
+  /** What the agent can pause for or take; absent when the server does not say */
   capabilities?: {
     toolApproval?: boolean;
     askUser?: boolean;
+    /** The approval card may edit a call's arguments (overrides `allowArgumentEdit`) */
+    approvalArgsEdit?: boolean;
+    /** `false`: the agent does not read images; an attached image gets a warning */
+    acceptsImages?: boolean;
   };
 }
 
@@ -307,6 +341,15 @@ export interface ChatTheme {
     borderSecondary?: string;
     accentPrimary?: string;
     accentSecondary?: string;
+    /** Status colours: the text/icon colour and a tinted background for each */
+    success?: string;
+    successBg?: string;
+    danger?: string;
+    dangerBg?: string;
+    warning?: string;
+    warningBg?: string;
+    info?: string;
+    infoBg?: string;
   };
   borderRadius?: {
     message?: string;
@@ -338,6 +381,14 @@ export const defaultDarkTheme: ChatTheme = {
     borderSecondary: "#2f2f2f",
     accentPrimary: "#10a37f",
     accentSecondary: "#1a7f64",
+    success: "#34d399",
+    successBg: "rgba(16, 185, 129, 0.12)",
+    danger: "#f87171",
+    dangerBg: "rgba(239, 68, 68, 0.12)",
+    warning: "#fbbf24",
+    warningBg: "rgba(245, 158, 11, 0.14)",
+    info: "#60a5fa",
+    infoBg: "rgba(59, 130, 246, 0.12)",
   },
 };
 
@@ -356,6 +407,14 @@ export const defaultLightTheme: ChatTheme = {
     borderSecondary: "#ececec",
     accentPrimary: "#10a37f",
     accentSecondary: "#1a7f64",
+    success: "#047857",
+    successBg: "rgba(16, 185, 129, 0.12)",
+    danger: "#b91c1c",
+    dangerBg: "rgba(239, 68, 68, 0.1)",
+    warning: "#92400e",
+    warningBg: "rgba(245, 158, 11, 0.16)",
+    info: "#1d4ed8",
+    infoBg: "rgba(59, 130, 246, 0.1)",
   },
 };
 
@@ -402,6 +461,12 @@ export interface ChatConfig {
    * transport with `uploadFile` (`AgentServerClient` has it); otherwise inline.
    */
   fileTransport?: "inline" | "upload";
+  /**
+   * The text sent when a message carries files and nothing else. Default: a short,
+   * localized "please review the attached files" (servers reject an empty message).
+   * Set `""` to send no text and let the server decide.
+   */
+  attachmentsOnlyMessage?: string;
 }
 
 export interface ChatCallbacks {
