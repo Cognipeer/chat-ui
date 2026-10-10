@@ -171,6 +171,11 @@ export interface AgentInfo {
   name: string;
   description?: string;
   version?: string;
+  /**
+   * Free-form. `Chat` reads these keys to adapt itself to the agent (each overrides
+   * the matching prop): `enableFileUpload`, `maxFileSize`, `maxFiles`,
+   * `allowedFileTypes` and `pendingActionComposerMode` (`"block"` | `"cancel"`).
+   */
   metadata?: Record<string, unknown>;
   /** What the agent can pause for; absent when the server does not say */
   capabilities?: {

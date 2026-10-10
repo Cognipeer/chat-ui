@@ -30,11 +30,23 @@ Nothing changes for servers that never pause: no card appears and no new request
 | --- | --- | --- |
 | `enableToolApprovals` | `true` | When `false`, approvals show "Waiting for approval in another app" instead of buttons |
 | `enableQuestions` | `true` | Same for questions |
-| `pendingActionComposerMode` | `"block"` | While something is waiting, `block` disables the input; `cancel` allows a message, which cancels the pending request. Must match the server's `pendingActionPolicy` |
+| `pendingActionComposerMode` | `"block"` | While something is waiting, `block` disables the input; `cancel` allows a message, which cancels the pending request. Must match the server's `pendingActionPolicy`. An agent's `metadata.pendingActionComposerMode` overrides it (see below) |
 | `renderToolApproval`, `renderQuestion` | built-in cards | Replace a card. `resolve(resolution)` sends the answer |
 | `onActionResolved` | none | Called after the server accepted an answer |
 
-If the only thing waiting is a single question without options, the composer answers it directly.
+If the only thing waiting is a single question without options, the composer answers it directly. If that answer (or a message sent in `cancel` mode) is refused, the typed text stays in the composer.
+
+### Per-agent composer mode
+
+`pendingActionComposerMode` is a policy of the agent on the server, so the host that lists the agents (`GET /agents`) can say it in each agent's `metadata`, the same way it narrows uploads. Like `enableFileUpload`, the agent's value wins over the prop; anything other than `"block"` or `"cancel"` is ignored and the prop applies:
+
+```json
+{ "id": "ops", "name": "Ops", "metadata": { "pendingActionComposerMode": "cancel" } }
+```
+
+### Requests that are no longer open
+
+If an answer is refused because the request expired (`action_expired`), was cancelled (`action_cancelled`) or was already answered elsewhere (`action_not_pending`), the card switches to Expired, Cancelled or Answered, the composer is released, and the error is shown. Any other error puts the card back to waiting.
 
 Transports other than `AgentServerClient` do not implement `resolveAction`; cards are read-only for them.
 

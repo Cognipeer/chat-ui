@@ -53,6 +53,7 @@
   "chat.error.sendFailed": "Mesaj gönderilemedi",
   "chat.error.retry": "Yeniden dene",
   "chat.file.tooLarge": "{fileName} dosyası maksimum boyutu aşıyor",
+  "chat.file.empty": "{fileName} dosyası boş",
   "chat.file.tooMany": "Maksimum {maxFiles} dosyaya izin verilir",
   "chat.file.invalidType": "{fileType} dosya türüne izin verilmiyor",
   "chat.file.uploadFailed": "Dosya yüklenemedi",

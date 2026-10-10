@@ -94,7 +94,9 @@ interface UseChatReturn {
   pendingFiles: FileAttachment[];
   
   // Actions
-  sendMessage: (content: string, files?: File[]) => Promise<void>;
+  // Resolves false when the message was refused before the server took it: the
+  // transcript is unchanged, the files are still in pendingFiles, `error` says why
+  sendMessage: (content: string) => Promise<boolean>;
   stop: () => void;
   retry: () => Promise<void>;
   createConversation: (title?: string) => Promise<Conversation>;

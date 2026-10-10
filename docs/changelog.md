@@ -14,11 +14,18 @@ All notable changes to Chat UI will be documented here.
 - `ChatInput` `pendingMode` prop; English and Turkish strings for the new UI
 - `fileTransport: "upload"` (`Chat`, `useChat`): files are uploaded with `POST /files` (`conversationId` set) when the message is sent and the message carries only their ids (`fileIds`); a failed upload or a refused message removes what was stored. Default `"inline"` (base64 in the message) is unchanged. `ChatTransport.uploadFile` / `deleteFile` (optional) and `SendMessageOptions.fileIds`
 - An agent's `metadata` can narrow uploads for that agent: `enableFileUpload`, `maxFileSize`, `maxFiles`, `allowedFileTypes`
+- An agent's `metadata.pendingActionComposerMode` (`"block"` | `"cancel"`) overrides the `pendingActionComposerMode` prop for that agent
+- `chat.file.empty` string (English, Turkish)
+- `useChat`: `sendMessage` resolves `true`/`false` (false = refused before the server took it) and `resolveAction` resolves `true`/`false` (false = the answer was not taken); `ChatInput.onSend` may return (or resolve to) `false` to get the typed text back
 
 ### Changed
 
 - Errors thrown for failed requests now carry `status` and `code` when the server sends them
 - `allowedFileTypes` entries such as `image/*` now match by media-type prefix
+- Files refused client-side (too many, too large, type not allowed, 0 bytes) are shown in the chat's error banner as well as passed to `onError`. A 0-byte file is refused with its own message
+- An answer refused with `action_expired` or `action_cancelled` turns the card into Expired / Cancelled (as `action_not_pending` already did) and frees the composer; any other error still puts the card back to waiting
+- Opening a conversation from the history (or through `conversationId`) selects that conversation's agent, so the header and the per-agent paperclip, limits and composer mode match it (`onAgentChange` is called when the agent changes)
+- A refused upload or message no longer clears the composer: the typed text comes back, the optimistic message is removed and the attached files stay attached
 
 ## [0.3.0] - 2026-10-07
 

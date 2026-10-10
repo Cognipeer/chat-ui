@@ -153,3 +153,21 @@ export function stateForResolution(resolution: ActionResolution): ActionState {
   const cancelled = resolution.type === "user_question" && resolution.cancelled;
   return { status: cancelled ? "cancelled" : "resolved", resolution };
 }
+
+/**
+ * The card state an error code leads to when the server says the action can no
+ * longer be answered: answered elsewhere, expired, or cancelled. `undefined` for
+ * any other error (the action may still be open, so the card goes back to pending).
+ */
+export function stateForSpentAction(code: string | undefined): ActionState | undefined {
+  switch (code) {
+    case "action_not_pending":
+      return { status: "resolved" };
+    case "action_expired":
+      return { status: "expired" };
+    case "action_cancelled":
+      return { status: "cancelled" };
+    default:
+      return undefined;
+  }
+}

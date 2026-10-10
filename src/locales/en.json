@@ -53,6 +53,7 @@
   "chat.error.sendFailed": "Failed to send message",
   "chat.error.retry": "Retry",
   "chat.file.tooLarge": "File {fileName} exceeds maximum size",
+  "chat.file.empty": "File {fileName} is empty",
   "chat.file.tooMany": "Maximum {maxFiles} files allowed",
   "chat.file.invalidType": "File type {fileType} not allowed",
   "chat.file.uploadFailed": "Failed to upload file",

@@ -4,6 +4,7 @@ import {
   collectPendingActions,
   restorePendingActions,
   singleFreeTextQuestion,
+  stateForSpentAction,
 } from "./actions";
 
 const approval: PendingAction = { id: "a1", type: "tool_approval", toolName: "sandbox_exec", args: { cmd: "ls" } };
@@ -84,5 +85,18 @@ describe("singleFreeTextQuestion", () => {
     expect(singleFreeTextQuestion(of([withOptions]))).toBeNull();
     expect(singleFreeTextQuestion(of([approval]))).toBeNull();
     expect(singleFreeTextQuestion(of([question, approval]))).toBeNull();
+  });
+});
+
+describe("stateForSpentAction", () => {
+  it("maps the codes that say an action can no longer be answered", () => {
+    expect(stateForSpentAction("action_not_pending")).toEqual({ status: "resolved" });
+    expect(stateForSpentAction("action_expired")).toEqual({ status: "expired" });
+    expect(stateForSpentAction("action_cancelled")).toEqual({ status: "cancelled" });
+  });
+
+  it("leaves every other error to the caller", () => {
+    expect(stateForSpentAction("rate_limited")).toBeUndefined();
+    expect(stateForSpentAction(undefined)).toBeUndefined();
   });
 });

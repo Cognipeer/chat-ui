@@ -88,7 +88,8 @@ export interface ChatProps extends ChatConfig, ChatCallbacks {
   /**
    * What the composer does while an approval or question is waiting.
    * `block` (default) disables it until answered; `cancel` lets a new message
-   * through, which cancels the pending request.
+   * through, which cancels the pending request. An agent's own
+   * `metadata.pendingActionComposerMode` (`"block"` | `"cancel"`) overrides this.
    */
   pendingActionComposerMode?: "block" | "cancel";
   /**
@@ -234,6 +235,14 @@ export function Chat({
   // The agentId actually used by the hooks
   const effectiveAgentId = selectedAgentId || externalAgentId || "";
 
+  // A conversation belongs to one agent: opening it selects that agent, so the header and
+  // the per-agent settings (paperclip, limits, composer mode) match it. Unknown agents are ignored.
+  const followConversationAgent = useCallback((conversationAgentId?: string) => {
+    if (!conversationAgentId || conversationAgentId === effectiveAgentId) return;
+    if (!agents.some((a) => a.id === conversationAgentId)) return;
+    handleAgentChange(conversationAgentId);
+  }, [effectiveAgentId, agents, handleAgentChange]);
+
   // Compute effective file upload setting from agent metadata (peer-based toggle)
   const selectedAgent = agents.find(a => a.id === effectiveAgentId);
   const effectiveFileUpload = selectedAgent?.metadata?.enableFileUpload !== undefined
@@ -246,6 +255,11 @@ export function Chat({
   const effectiveAllowedFileTypes = Array.isArray(agentMeta?.allowedFileTypes)
     ? (agentMeta.allowedFileTypes as unknown[]).filter((type): type is string => typeof type === "string")
     : allowedFileTypes;
+  // What a new message does while this agent waits on an approval follows the agent's own policy
+  const effectiveComposerMode =
+    agentMeta?.pendingActionComposerMode === "block" || agentMeta?.pendingActionComposerMode === "cancel"
+      ? agentMeta.pendingActionComposerMode
+      : pendingActionComposerMode;
 
   // Use refs for callbacks that will depend on history (defined later)
   const onMessageReceivedRef = useRef(onMessageReceived);
@@ -312,7 +326,7 @@ export function Chat({
     onConversationTitleGenerated: wrappedOnConversationTitleGenerated,
     onBackgroundStreamCompleted: wrappedOnBackgroundStreamCompleted,
     onActionResolved,
-    pendingActionComposerMode,
+    pendingActionComposerMode: effectiveComposerMode,
   });
 
   // Approval / question cards
@@ -338,21 +352,21 @@ export function Chat({
     ? undefined
     : composerAnswers
       ? ("answer" as const)
-      : pendingActionComposerMode === "cancel"
+      : effectiveComposerMode === "cancel"
         ? ("cancel" as const)
         : ("blocked" as const);
 
   const handleSend = useCallback(
     (text: string) => {
       const q = chat.answerableQuestion;
+      // The composer keeps the text when the answer / message is refused
       if (pendingMode === "answer" && q) {
-        void chat.resolveAction(q.actionId, {
+        return chat.resolveAction(q.actionId, {
           type: "user_question",
           answers: { [q.question.question]: text },
         });
-        return;
       }
-      void chat.sendMessage(text);
+      return chat.sendMessage(text);
     },
     [chat.answerableQuestion, chat.resolveAction, chat.sendMessage, pendingMode]
   );
@@ -375,6 +389,7 @@ export function Chat({
 
   const handleConversationSelect = useCallback(
     (conversation: ConversationListItem) => {
+      followConversationAgent(conversation.agentId);
       chat.loadConversation(conversation.id);
       onConversationSelected?.(conversation);
       setHistoryOpen(false);
@@ -383,8 +398,14 @@ export function Chat({
         setTimeout(() => inputRef.current?.focus(), 100);
       }
     },
-    [chat, onConversationSelected, autoFocusInput]
+    [chat, onConversationSelected, autoFocusInput, followConversationAgent]
   );
+
+  // The same for a conversation opened without the sidebar (the `conversationId` prop)
+  const loadedAgentId = chat.conversation?.agentId;
+  useEffect(() => {
+    followConversationAgent(loadedAgentId);
+  }, [loadedAgentId, chat.conversation?.id, agents]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleNewChat = useCallback(() => {
     chat.clearMessages();

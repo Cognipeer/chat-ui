@@ -224,4 +224,105 @@ describe("useChat approvals", () => {
     expect(result.current.awaitingAction).toBe(true);
     expect(result.current.messages.find((m) => m.id === "m1")?.actionStates?.a1?.status).not.toBe("cancelled");
   });
+
+  it("resolves true when the server takes the answer", async () => {
+    const resolveAction = vi.fn(async (_c: string, _a: string, _r: unknown, options?: { callbacks?: StreamCallbacks }) => {
+      options?.callbacks?.onDone?.({ type: "stream.done", conversationId: "c1", messageId: "m2", content: "Done.", timestamp: 3 });
+      return undefined;
+    });
+    const { result } = renderHook(
+      () => useChat({ transport: makeTransport({ resolveAction }), agentId: "agent" }),
+      { wrapper }
+    );
+    await act(async () => {
+      await result.current.sendMessage("go");
+    });
+    let taken: boolean | undefined;
+    await act(async () => {
+      taken = await result.current.resolveAction("a1", { type: "tool_approval", decision: "allow" });
+    });
+    expect(taken).toBe(true);
+  });
+
+  it.each([
+    ["action_expired", "expired", "This request has expired."],
+    ["action_cancelled", "cancelled", "This request was cancelled."],
+    ["action_not_pending", "resolved", "Already answered."],
+  ])("settles the card as %s -> %s and frees the composer", async (code, status, message) => {
+    const resolveAction = vi.fn(async () => {
+      throw Object.assign(new Error(message), { code, status: 410 });
+    });
+    const onError = vi.fn();
+    const { result } = renderHook(
+      () => useChat({ transport: makeTransport({ resolveAction }), agentId: "agent", onError }),
+      { wrapper }
+    );
+    await act(async () => {
+      await result.current.sendMessage("go");
+    });
+    expect(result.current.awaitingAction).toBe(true);
+
+    let taken: boolean | undefined;
+    await act(async () => {
+      taken = await result.current.resolveAction("a1", { type: "tool_approval", decision: "allow" });
+    });
+
+    expect(taken).toBe(false);
+    expect(result.current.messages.find((m) => m.id === "m1")?.actionStates?.a1.status).toBe(status);
+    expect(result.current.awaitingAction).toBe(false);
+    expect(result.current.pendingActions).toEqual([]);
+    expect(result.current.error?.message).toBe(message);
+    expect(onError).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the card open for an error that does not say the action is gone", async () => {
+    const resolveAction = vi.fn(async () => {
+      throw Object.assign(new Error("Too many requests"), { code: "rate_limited", status: 429 });
+    });
+    const { result } = renderHook(
+      () => useChat({ transport: makeTransport({ resolveAction }), agentId: "agent" }),
+      { wrapper }
+    );
+    await act(async () => {
+      await result.current.sendMessage("go");
+    });
+    let taken: boolean | undefined;
+    await act(async () => {
+      taken = await result.current.resolveAction("a1", { type: "tool_approval", decision: "allow" });
+    });
+    expect(taken).toBe(false);
+    expect(result.current.awaitingAction).toBe(true);
+    expect(result.current.messages.find((m) => m.id === "m1")?.actionStates?.a1.status).toBe("pending");
+  });
+
+  it("lets the composer send again after an expired answer", async () => {
+    let first = true;
+    const sendMessageStream = vi.fn(async (_c: string, _o: unknown, cb: StreamCallbacks) => {
+      if (first) {
+        first = false;
+        cb.onDone?.({ type: "stream.done", conversationId: "c1", messageId: "m1", content: "", status: "requires_action", pendingActions: [approval], timestamp: 1 });
+      } else {
+        cb.onDone?.({ type: "stream.done", conversationId: "c1", messageId: "m3", content: "ok", timestamp: 2 });
+      }
+    });
+    const resolveAction = vi.fn(async () => {
+      throw Object.assign(new Error("This request has expired."), { code: "action_expired" });
+    });
+    const { result } = renderHook(
+      () => useChat({ transport: makeTransport({ sendMessageStream, resolveAction }), agentId: "agent" }),
+      { wrapper }
+    );
+    await act(async () => {
+      await result.current.sendMessage("go");
+    });
+    await act(async () => {
+      await result.current.resolveAction("a1", { type: "tool_approval", decision: "allow" });
+    });
+    let sent: boolean | undefined;
+    await act(async () => {
+      sent = await result.current.sendMessage("try again");
+    });
+    expect(sent).toBe(true);
+    expect(result.current.messages[result.current.messages.length - 1]).toMatchObject({ id: "m3", content: "ok" });
+  });
 });

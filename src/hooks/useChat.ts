@@ -10,6 +10,7 @@ import {
   restorePendingActions,
   setActionStates,
   stateForResolution,
+  stateForSpentAction,
   type PendingActionEntry,
 } from "../utils";
 import type {
@@ -61,8 +62,13 @@ export interface UseChatReturn {
   pendingFiles: FileAttachment[];
   /** Active tool calls */
   activeToolCalls: Map<string, { name: string; args: Record<string, unknown>; result?: unknown; reasoning?: string; displayName?: string }>;
-  /** Send a message */
-  sendMessage: (content: string) => Promise<void>;
+  /**
+   * Send a message. Resolves `false` when it was refused before the server took it
+   * (an upload or the send itself failed): nothing was added to the transcript, the
+   * attached files are back in `pendingFiles` and `error` says why, so a composer can
+   * keep the typed text. `true` otherwise.
+   */
+  sendMessage: (content: string) => Promise<boolean>;
   /** Add files to pending */
   addFiles: (files: File[]) => Promise<void>;
   /** Remove a pending file */
@@ -89,9 +95,11 @@ export interface UseChatReturn {
   answerableQuestion: { actionId: string; question: UserQuestion } | null;
   /**
    * Answer a pending approval or question. The continuation streams into a new
-   * assistant message and the card switches to its resolved state.
+   * assistant message and the card switches to its resolved state. Resolves `false`
+   * when the server did not take the answer (the card is back to pending, or shows
+   * that the request expired / was cancelled / was answered elsewhere).
    */
-  resolveAction: (actionId: string, resolution: ActionResolution) => Promise<void>;
+  resolveAction: (actionId: string, resolution: ActionResolution) => Promise<boolean>;
   /** Set error */
   setError: (error: Error | null) => void;
   /** Directly override message state */
@@ -480,8 +488,8 @@ export function useChat(options: UseChatOptions): UseChatReturn {
           }
   );
 
-  const sendMessage = useCallback(async (content: string) => {
-    if (!clientRef.current || !content.trim()) return;
+  const sendMessage = useCallback(async (content: string): Promise<boolean> => {
+    if (!clientRef.current || !content.trim()) return false;
 
     // Capture the current session so async callbacks can detect staleness
     const capturedSession = sessionRef.current;
@@ -511,6 +519,10 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     // Files stored ahead of the message (`fileTransport: "upload"`); dropped again if the server never took the message
     const uploadedIds: string[] = [];
     let messageAccepted = false;
+    // A refused send takes its bubble back and returns the files to the composer
+    const attached = pendingFiles;
+    const attachedRaw = attached.map((f) => [f.id, rawFilesRef.current.get(f.id)] as const);
+    let optimisticId: string | undefined;
 
     try {
       // Create conversation if needed
@@ -520,7 +532,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         // User navigated while we were creating the conversation
         if (isStale()) {
           setConversation(null);
-          return;
+          return true;
         }
       }
 
@@ -576,7 +588,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       }
 
       // If user navigated away while we were reading files, bail out
-      if (isStale()) return;
+      if (isStale()) return true;
 
       // Create optimistic user message
       const userMessage: Message = {
@@ -589,6 +601,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         updatedAt: new Date(),
       };
 
+      optimisticId = userMessage.id;
       setMessages((prev) => [...prev, userMessage]);
       setPendingFiles([]);
       onMessageSent?.(userMessage);
@@ -635,7 +648,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         if (isStale()) {
           // Server already persisted the response — notify sidebar refresh
           onBackgroundStreamCompleted?.(currentConversation!.id);
-          return;
+          return true;
         }
 
         applyCancel();
@@ -653,17 +666,26 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         }
         onMessageReceived?.(withActions(response.response, response));
       }
+      return true;
     } catch (err) {
       if (!messageAccepted && uploadedIds.length > 0) {
         const client = clientRef.current;
         await Promise.all(uploadedIds.map((id) => client?.deleteFile?.(id).catch(() => undefined)));
       }
       // Ignore stale sessions (user navigated away) and abort errors (user stopped)
-      if (isStale()) return;
-      if (err instanceof DOMException && err.name === 'AbortError') return;
+      if (isStale()) return true;
+      if (err instanceof DOMException && err.name === 'AbortError') return true;
       const error = err instanceof Error ? err : new Error(t("chat.error.sendFailed"));
+      if (!messageAccepted && optimisticId) {
+        const sentId = optimisticId;
+        setMessages((prev) => prev.filter((m) => m.id !== sentId));
+        for (const [id, raw] of attachedRaw) if (raw) rawFilesRef.current.set(id, raw);
+        setPendingFiles((prev) => [...attached, ...prev.filter((f) => !attached.some((a) => a.id === f.id))]);
+      }
       setError(error);
       onError?.(error);
+      // Once the server started answering, the message is spent even if the stream broke later
+      return messageAccepted;
     } finally {
       if (!isStale()) {
         setIsStreaming(false);
@@ -688,11 +710,11 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     onBackgroundStreamCompleted,
   ]);
 
-  const resolveAction = useCallback(async (actionId: string, resolution: ActionResolution) => {
+  const resolveAction = useCallback(async (actionId: string, resolution: ActionResolution): Promise<boolean> => {
     const client = clientRef.current;
-    if (!client?.resolveAction || !conversation) return;
+    if (!client?.resolveAction || !conversation) return false;
     const entry = collectPendingActions(messagesRef.current).find((e) => e.action.id === actionId);
-    if (!entry || entry.state?.status === "resolving") return;
+    if (!entry || entry.state?.status === "resolving") return false;
 
     const capturedSession = sessionRef.current;
     const isStale = () => sessionRef.current !== capturedSession;
@@ -754,22 +776,24 @@ export function useChat(options: UseChatOptions): UseChatReturn {
           }
         }
       }
-      if (isStale()) return;
+      if (isStale()) return true;
       patch(stateForResolution(resolution));
       onActionResolved?.({ conversationId, actionId, action: entry.action, resolution });
+      return true;
     } catch (err) {
-      if (isStale()) return;
+      if (isStale()) return true;
       if (err instanceof DOMException && err.name === "AbortError") {
         patch(accepted ? stateForResolution(resolution) : { status: "pending" });
-        return;
+        return accepted;
       }
       const error = err instanceof Error ? err : new Error(t("chat.error.sendFailed"));
       const code = (err as { code?: string } | null)?.code;
-      // Gone from the server's side (answered elsewhere or expired): stop offering it
-      if (code === "action_not_pending") patch({ status: "resolved" });
-      else patch(accepted ? stateForResolution(resolution) : { status: "pending" });
+      // Spent on the server's side (answered elsewhere, expired, cancelled): stop offering it,
+      // which also frees the composer
+      patch(stateForSpentAction(code) ?? (accepted ? stateForResolution(resolution) : { status: "pending" }));
       setError(error);
       onError?.(error);
+      return accepted;
     } finally {
       if (!isStale()) {
         setIsStreaming(false);
@@ -783,17 +807,30 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     if (!enableFileUpload) return;
 
     const validFiles: FileAttachment[] = [];
+    // Every refusal goes to `onError`; together they are also shown through `error`
+    const refusals: Error[] = [];
+    const refuse = (message: string) => {
+      const error = new Error(message);
+      refusals.push(error);
+      onError?.(error);
+    };
 
     for (const file of files) {
       // Check file count
       if (pendingFiles.length + validFiles.length >= maxFiles) {
-        onError?.(new Error(t("chat.file.tooMany", { maxFiles })));
+        refuse(t("chat.file.tooMany", { maxFiles }));
         break;
+      }
+
+      // The server would answer an empty file with a validation error
+      if (file.size === 0) {
+        refuse(t("chat.file.empty", { fileName: file.name }));
+        continue;
       }
 
       // Check file size
       if (file.size > maxFileSize) {
-        onError?.(new Error(t("chat.file.tooLarge", { fileName: file.name })));
+        refuse(t("chat.file.tooLarge", { fileName: file.name }));
         continue;
       }
 
@@ -806,7 +843,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
             : file.type === type || file.name.endsWith(type.replace("*", ""))
         );
         if (!isAllowed) {
-          onError?.(new Error(t("chat.file.invalidType", { fileType: file.type })));
+          refuse(t("chat.file.invalidType", { fileType: file.type || file.name }));
           continue;
         }
       }
@@ -824,6 +861,9 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       });
     }
 
+    if (refusals.length > 0) {
+      setError(refusals.length === 1 ? refusals[0] : new Error(refusals.map((e) => e.message).join("; ")));
+    }
     setPendingFiles((prev) => [...prev, ...validFiles]);
   }, [t, enableFileUpload, pendingFiles, maxFiles, maxFileSize, allowedFileTypes, onError]);
 

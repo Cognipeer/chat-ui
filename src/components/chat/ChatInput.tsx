@@ -12,8 +12,12 @@ export interface ChatInputHandle {
 }
 
 export interface ChatInputProps {
-  /** Callback when sending a message */
-  onSend: (message: string) => void;
+  /**
+   * Callback when sending a message. The composer clears at once; if this returns
+   * (or resolves to) `false` the message was refused, and the typed text comes
+   * back unless something new was typed meanwhile.
+   */
+  onSend: (message: string) => void | boolean | Promise<void | boolean>;
   /** Callback when stopping generation */
   onStop?: () => void;
   /** Callback when files are added */
@@ -105,13 +109,39 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     }
   }, [autoFocus]);
 
+  const fitHeight = useCallback(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    textarea.style.height = "auto";
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`;
+  }, []);
+
+  // A refused message puts its text back (the textarea grows to fit it again)
+  const restoreRef = useRef(false);
+  useEffect(() => {
+    if (!restoreRef.current) return;
+    restoreRef.current = false;
+    fitHeight();
+  }, [value, fitHeight]);
+
   const handleSend = useCallback(() => {
     if (value.trim() && !isLoading && !disabled && !blocked) {
-      onSend(value.trim());
+      const text = value.trim();
+      const outcome = onSend(text);
       setValue("");
       // Reset textarea height
       if (textareaRef.current) {
         textareaRef.current.style.height = "auto";
+      }
+      const keep = (refused: unknown) => {
+        if (refused !== false) return;
+        restoreRef.current = true;
+        setValue((typed) => (typed === "" ? text : typed));
+      };
+      if (outcome && typeof (outcome as PromiseLike<unknown>).then === "function") {
+        (outcome as PromiseLike<void | boolean>).then(keep, () => keep(false));
+      } else {
+        keep(outcome);
       }
     }
   }, [value, isLoading, disabled, blocked, onSend]);

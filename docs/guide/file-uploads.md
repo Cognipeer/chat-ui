@@ -34,6 +34,12 @@ Enable file attachments in your chat.
 | `maxFileSize` | `number` | `10MB` | Max file size in bytes |
 | `maxFiles` | `number` | `10` | Max files per message |
 
+## Refused files
+
+Files are checked before they are attached: too many for `maxFiles`, over `maxFileSize`, not in `allowedFileTypes`, or empty (0 bytes). A refused file is not attached; the reason is shown in the chat's error banner (one line per refusal) and still passed to `onError`. With `useChat`, the same message is in `error`.
+
+If an upload or the message itself is refused by the server, nothing is added to the conversation, the attached files stay attached and the typed text stays in the composer, so the person can fix it and send again.
+
 ## Allowed File Types
 
 Use MIME types or extensions:
@@ -216,4 +222,4 @@ By default files travel base64 inside the message body. With `fileTransport="upl
 
 The server decides what it accepts (size, type, count) and answers the upload itself, so a refusal is shown before the message is sent. A file stored for a message that then fails is removed again. The transport needs `uploadFile` (`AgentServerClient` has it); without it files go inline.
 
-An agent can narrow the limits for itself through its `metadata` (`enableFileUpload`, `maxFileSize`, `maxFiles`, `allowedFileTypes`).
+An agent can narrow the limits for itself through its `metadata` (`enableFileUpload`, `maxFileSize`, `maxFiles`, `allowedFileTypes`). Opening a conversation from the history selects its agent, so the paperclip and the limits are those of the conversation's agent.
