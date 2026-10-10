@@ -128,6 +128,7 @@ export function Chat({
   allowedFileTypes,
   maxFileSize,
   maxFiles,
+  fileTransport,
   // Callbacks
   onMessageSent,
   onMessageReceived,
@@ -238,6 +239,13 @@ export function Chat({
   const effectiveFileUpload = selectedAgent?.metadata?.enableFileUpload !== undefined
     ? Boolean(selectedAgent.metadata.enableFileUpload)
     : enableFileUpload;
+  // The agent can narrow what it takes (the host lists these in the agent's metadata)
+  const agentMeta = selectedAgent?.metadata;
+  const effectiveMaxFileSize = typeof agentMeta?.maxFileSize === "number" ? agentMeta.maxFileSize : maxFileSize;
+  const effectiveMaxFiles = typeof agentMeta?.maxFiles === "number" ? agentMeta.maxFiles : maxFiles;
+  const effectiveAllowedFileTypes = Array.isArray(agentMeta?.allowedFileTypes)
+    ? (agentMeta.allowedFileTypes as unknown[]).filter((type): type is string => typeof type === "string")
+    : allowedFileTypes;
 
   // Use refs for callbacks that will depend on history (defined later)
   const onMessageReceivedRef = useRef(onMessageReceived);
@@ -288,9 +296,10 @@ export function Chat({
     fetch: customFetch,
     streaming,
     enableFileUpload: effectiveFileUpload,
-    allowedFileTypes,
-    maxFileSize,
-    maxFiles,
+    allowedFileTypes: effectiveAllowedFileTypes,
+    maxFileSize: effectiveMaxFileSize,
+    maxFiles: effectiveMaxFiles,
+    fileTransport,
     conversationId,
     initialMessages,
     onMessageSent,
@@ -517,8 +526,8 @@ export function Chat({
             pendingFiles={chat.pendingFiles}
             placeholder={inputPlaceholder}
             enableFileUpload={effectiveFileUpload}
-            allowedFileTypes={allowedFileTypes}
-            maxFiles={maxFiles}
+            allowedFileTypes={effectiveAllowedFileTypes}
+            maxFiles={effectiveMaxFiles}
             autoFocus={autoFocusInput}
             pendingMode={pendingMode}
           />

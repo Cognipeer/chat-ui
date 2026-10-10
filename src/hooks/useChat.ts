@@ -138,6 +138,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     allowedFileTypes,
     maxFileSize = 10 * 1024 * 1024, // 10MB
     maxFiles = 10,
+    fileTransport = "inline",
     conversationId: initialConversationId,
     initialMessages = [],
     pendingActionComposerMode = "block",
@@ -507,6 +508,10 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       ? collectPendingActions(messagesRef.current)
       : [];
 
+    // Files stored ahead of the message (`fileTransport: "upload"`); dropped again if the server never took the message
+    const uploadedIds: string[] = [];
+    let messageAccepted = false;
+
     try {
       // Create conversation if needed
       let currentConversation = conversation;
@@ -520,26 +525,48 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       }
 
       // Read base64 content from raw File objects for each pending file
+      const readBase64 = (rawFile: File) =>
+        new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => {
+            // result is "data:<mime>;base64,<data>" — extract just the base64 part
+            const result = reader.result as string;
+            const commaIdx = result.indexOf(",");
+            resolve(commaIdx >= 0 ? result.slice(commaIdx + 1) : result);
+          };
+          reader.onerror = () => reject(reader.error);
+          reader.readAsDataURL(rawFile);
+        });
+
       const filesToSend: Array<{ name: string; content: string; mimeType: string }> = [];
-      for (const f of pendingFiles) {
-        const rawFile = rawFilesRef.current.get(f.id);
-        if (rawFile) {
-          const base64 = await new Promise<string>((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = () => {
-              // result is "data:<mime>;base64,<data>" — extract just the base64 part
-              const result = reader.result as string;
-              const commaIdx = result.indexOf(",");
-              resolve(commaIdx >= 0 ? result.slice(commaIdx + 1) : result);
-            };
-            reader.onerror = () => reject(reader.error);
-            reader.readAsDataURL(rawFile);
-          });
-          filesToSend.push({
-            name: f.name,
-            content: base64,
-            mimeType: f.mimeType,
-          });
+      // Upload mode: the files are stored first and the message carries their ids
+      const uploader = fileTransport === "upload" ? clientRef.current : null;
+      if (uploader?.uploadFile) {
+        try {
+          for (const f of pendingFiles) {
+            const rawFile = rawFilesRef.current.get(f.id);
+            if (!rawFile) continue;
+            const stored = await uploader.uploadFile({
+              file: { name: f.name, content: await readBase64(rawFile), mimeType: f.mimeType },
+              conversationId: currentConversation.id,
+            });
+            uploadedIds.push(stored.id);
+          }
+        } catch (uploadError) {
+          // Nothing was sent: drop what already reached the server and keep the files for another try
+          await Promise.all(uploadedIds.map((id) => uploader.deleteFile?.(id).catch(() => undefined)));
+          throw uploadError;
+        }
+      } else {
+        for (const f of pendingFiles) {
+          const rawFile = rawFilesRef.current.get(f.id);
+          if (rawFile) {
+            filesToSend.push({
+              name: f.name,
+              content: await readBase64(rawFile),
+              mimeType: f.mimeType,
+            });
+          }
         }
       }
 
@@ -582,14 +609,15 @@ export function useChat(options: UseChatOptions): UseChatReturn {
           {
             message: content,
             files: filesToSend.length > 0 ? filesToSend : undefined,
+            fileIds: uploadedIds.length > 0 ? uploadedIds : undefined,
           },
           (() => {
             const base = createStreamCallbacksRef.current(isStale);
             return {
               ...base,
-              onStart: (e) => { applyCancel(); base.onStart?.(e); },
-              onText: (text, full) => { applyCancel(); base.onText?.(text, full); },
-              onDone: (e) => { applyCancel(); base.onDone?.(e); },
+              onStart: (e) => { messageAccepted = true; applyCancel(); base.onStart?.(e); },
+              onText: (text, full) => { messageAccepted = true; applyCancel(); base.onText?.(text, full); },
+              onDone: (e) => { messageAccepted = true; applyCancel(); base.onDone?.(e); },
             };
           })(),
           abortController.signal
@@ -599,9 +627,11 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         const response = await clientRef.current.sendMessage(currentConversation.id, {
           message: content,
           files: filesToSend.length > 0 ? filesToSend : undefined,
+          fileIds: uploadedIds.length > 0 ? uploadedIds : undefined,
           stream: false,
         });
 
+        messageAccepted = true;
         if (isStale()) {
           // Server already persisted the response — notify sidebar refresh
           onBackgroundStreamCompleted?.(currentConversation!.id);
@@ -624,6 +654,10 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         onMessageReceived?.(withActions(response.response, response));
       }
     } catch (err) {
+      if (!messageAccepted && uploadedIds.length > 0) {
+        const client = clientRef.current;
+        await Promise.all(uploadedIds.map((id) => client?.deleteFile?.(id).catch(() => undefined)));
+      }
       // Ignore stale sessions (user navigated away) and abort errors (user stopped)
       if (isStale()) return;
       if (err instanceof DOMException && err.name === 'AbortError') return;
@@ -641,6 +675,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     conversation,
     createConversation,
     pendingFiles,
+    fileTransport,
     streaming,
     pendingActionComposerMode,
     onMessageSent,
@@ -764,8 +799,11 @@ export function useChat(options: UseChatOptions): UseChatReturn {
 
       // Check file type
       if (allowedFileTypes && allowedFileTypes.length > 0) {
-        const isAllowed = allowedFileTypes.some(
-          (type) => file.type === type || file.name.endsWith(type.replace("*", ""))
+        const isAllowed = allowedFileTypes.some((type) =>
+          // `image/*` matches by media-type prefix; `.pdf` / `application/pdf` as before
+          type.endsWith("/*")
+            ? file.type.startsWith(type.slice(0, -1))
+            : file.type === type || file.name.endsWith(type.replace("*", ""))
         );
         if (!isAllowed) {
           onError?.(new Error(t("chat.file.invalidType", { fileType: file.type })));

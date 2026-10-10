@@ -389,6 +389,14 @@ export interface ChatConfig {
   maxFileSize?: number;
   /** Maximum number of files per message */
   maxFiles?: number;
+  /**
+   * How files reach the server. `inline` (default) sends them base64 in the
+   * message body. `upload` first uploads each file with `POST /files`
+   * (`conversationId` set) and sends only their ids with the message
+   * (`fileIds`), so the message route needs no large body limit. Needs a
+   * transport with `uploadFile` (`AgentServerClient` has it); otherwise inline.
+   */
+  fileTransport?: "inline" | "upload";
 }
 
 export interface ChatCallbacks {

@@ -204,3 +204,16 @@ For large files, consider:
 - [Tool Calls](/guide/tool-calls)
 - [Custom Actions](/guide/custom-actions)
 - [ChatInput Component](/components/chat-input)
+
+
+## Uploading ahead of the message
+
+By default files travel base64 inside the message body. With `fileTransport="upload"` each file is first stored with `POST /files` (with the conversation id) and the message carries only the ids:
+
+```tsx
+<Chat baseUrl="/api/agents" fileTransport="upload" />
+```
+
+The server decides what it accepts (size, type, count) and answers the upload itself, so a refusal is shown before the message is sent. A file stored for a message that then fails is removed again. The transport needs `uploadFile` (`AgentServerClient` has it); without it files go inline.
+
+An agent can narrow the limits for itself through its `metadata` (`enableFileUpload`, `maxFileSize`, `maxFiles`, `allowedFileTypes`).

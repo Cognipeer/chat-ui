@@ -1,4 +1,5 @@
 import type {
+  FileAttachment,
   Message,
   Conversation,
   ConversationListItem,
@@ -24,6 +25,8 @@ export interface SendMessageOptions {
     content: string; // base64
     mimeType: string;
   }>;
+  /** Files uploaded earlier with `uploadFile` (for this conversation) that the message attaches */
+  fileIds?: string[];
   metadata?: Record<string, unknown>;
   stream?: boolean;
 }
@@ -124,4 +127,17 @@ export interface ChatTransport {
     resolution: ActionResolution,
     options?: ResolveActionOptions
   ): Promise<SendMessageResponse | undefined>;
+
+  /**
+   * Store a file on the server ahead of the message (`fileTransport: "upload"`).
+   * Optional: without it files are sent inline.
+   */
+  uploadFile?(params: {
+    file: { name: string; content: string; mimeType: string };
+    conversationId?: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<FileAttachment>;
+
+  /** Remove an uploaded file (best effort, used when a send fails after the upload). */
+  deleteFile?(fileId: string): Promise<void>;
 }

@@ -12,10 +12,13 @@ All notable changes to Chat UI will be documented here.
 - Types `PendingAction`, `ActionResolution`, `UserQuestion`, `MessageStatus`, `StreamActionRequiredEvent`, `StreamActionResolvedEvent`; `ChatTransport.resolveAction` (optional) and `AgentServerClient.resolveAction`
 - Pending actions are restored when a conversation is loaded
 - `ChatInput` `pendingMode` prop; English and Turkish strings for the new UI
+- `fileTransport: "upload"` (`Chat`, `useChat`): files are uploaded with `POST /files` (`conversationId` set) when the message is sent and the message carries only their ids (`fileIds`); a failed upload or a refused message removes what was stored. Default `"inline"` (base64 in the message) is unchanged. `ChatTransport.uploadFile` / `deleteFile` (optional) and `SendMessageOptions.fileIds`
+- An agent's `metadata` can narrow uploads for that agent: `enableFileUpload`, `maxFileSize`, `maxFiles`, `allowedFileTypes`
 
 ### Changed
 
 - Errors thrown for failed requests now carry `status` and `code` when the server sends them
+- `allowedFileTypes` entries such as `image/*` now match by media-type prefix
 
 ## [0.3.0] - 2026-10-07
 
