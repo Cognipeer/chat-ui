@@ -71,15 +71,32 @@ describe("feedback", () => {
 });
 
 describe("history", () => {
-  it("renames and pins through the conversation PATCH", async () => {
+  it("renames and pins through the conversation PATCH (the pin is a top-level field)", async () => {
     const fetchMock = vi.fn(async () => json({}));
     const client = new AgentServerClient({ baseUrl: "http://x/api", fetch: as(fetchMock) });
     await client.renameConversation("c1", "New title");
     await client.pinConversation("c1", true);
+    await client.pinConversation("c1", false);
     expect(calls(fetchMock).map(([url, init]) => [init.method, url, JSON.parse(String(init.body))])).toEqual([
       ["PATCH", "http://x/api/conversations/c1", { title: "New title" }],
-      ["PATCH", "http://x/api/conversations/c1", { metadata: { pinned: true } }],
+      ["PATCH", "http://x/api/conversations/c1", { pinned: true }],
+      ["PATCH", "http://x/api/conversations/c1", { pinned: false }],
     ]);
+  });
+
+  it("resolves with the pin the server stored, read from the conversation it answers with", async () => {
+    // agent-server answers the conversation itself, with `pinned: true` only while it is pinned
+    const pinnedAnswer = new AgentServerClient({ baseUrl: "http://x/api", fetch: as(vi.fn(async () => json({ id: "c1", agentId: "a", pinned: true, metadata: { pinned: true } }))) });
+    expect(await pinnedAnswer.pinConversation("c1", true)).toBe(true);
+    const unpinnedAnswer = new AgentServerClient({ baseUrl: "http://x/api", fetch: as(vi.fn(async () => json({ id: "c1", agentId: "a", metadata: {} }))) });
+    expect(await unpinnedAnswer.pinConversation("c1", false)).toBe(false);
+    // a server that ignored the pin looks exactly like an unpinned conversation
+    expect(await unpinnedAnswer.pinConversation("c1", true)).toBe(false);
+    const wrapped = new AgentServerClient({ baseUrl: "http://x/api", fetch: as(vi.fn(async () => json({ conversation: { id: "c1", metadata: { pinned: true } } }))) });
+    expect(await wrapped.pinConversation("c1", true)).toBe(true);
+    // an answer that is not a conversation says nothing
+    const silent = new AgentServerClient({ baseUrl: "http://x/api", fetch: as(vi.fn(async () => json({}))) });
+    expect(await silent.pinConversation("c1", true)).toBeUndefined();
   });
 
   it("lists a pinned conversation with its pinned flag", async () => {
@@ -100,7 +117,7 @@ describe("history", () => {
     expect(page.conversations.map((c) => c.pinned)).toEqual([true, undefined]);
   });
 
-  it("bulk-deletes in chunks of 100 and reports who is gone and who is not", async () => {
+  it("bulk-deletes in chunks of 100 and reports who is gone and who is not (the older { deleted[], failed[] } answer)", async () => {
     const ids = Array.from({ length: 130 }, (_, i) => `c${i}`);
     const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
       const sent = (JSON.parse(String(init.body)) as { ids: string[] }).ids;
@@ -119,6 +136,38 @@ describe("history", () => {
     expect(await empty.deleteConversations(["a", "b"])).toEqual({ deleted: ["a", "b"], failed: [] });
     const partial = new AgentServerClient({ baseUrl: "http://x/api", fetch: as(vi.fn(async () => json({ failed: ["b"] }))) });
     expect(await partial.deleteConversations(["a", "b"])).toEqual({ deleted: ["a"], failed: [{ id: "b" }] });
+  });
+
+  it("reads the answer agent-server really gives: results per id and a count", async () => {
+    // POST /conversations/bulk-delete of agent-server 0.3.0
+    const body = {
+      results: [
+        { id: "a", status: "deleted" },
+        { id: "b", status: "not_found" },
+        { id: "c", status: "busy", message: "A run is in progress on another node" },
+        { id: "d", status: "error", message: "The conversation could not be deleted" },
+        { id: "e", status: "deleted" },
+      ],
+      deleted: 2,
+    };
+    const fetchMock = vi.fn(async () => json(body));
+    const client = new AgentServerClient({ baseUrl: "http://x/api", fetch: as(fetchMock) });
+    expect(await client.deleteConversations(["a", "b", "c", "d", "e"])).toEqual({
+      deleted: ["a", "e"],
+      failed: [
+        { id: "b", code: "not_found" },
+        { id: "c", code: "busy", message: "A run is in progress on another node" },
+        { id: "d", code: "error", message: "The conversation could not be deleted" },
+      ],
+    });
+  });
+
+  it("reads every id of an all-deleted agent-server answer as deleted", async () => {
+    const client = new AgentServerClient({
+      baseUrl: "http://x/api",
+      fetch: as(vi.fn(async () => json({ results: [{ id: "a", status: "deleted" }, { id: "b", status: "deleted" }], deleted: 2 }))),
+    });
+    expect(await client.deleteConversations(["a", "b"])).toEqual({ deleted: ["a", "b"], failed: [] });
   });
 
   it("falls back to deleting one by one on a server without the bulk route", async () => {
@@ -150,6 +199,36 @@ describe("export", () => {
     expect(result.filename).toBe("chat.md");
     expect(result.contentType).toBe("text/markdown");
     expect(result.blob.size).toBe(6);
+  });
+
+  it("asks for the print view when the server has no PDF renderer (501 export_format_unsupported)", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes("format=pdf")) return json({ error: { code: "export_format_unsupported", message: "This server has no PDF renderer." } }, 501);
+      return new Response("<html>print me</html>", { status: 200, headers: { "content-type": "text/html; charset=utf-8", "content-disposition": 'attachment; filename="chat.html"' } });
+    });
+    const client = new AgentServerClient({ baseUrl: "http://x/api", fetch: as(fetchMock) });
+    const result = await client.exportConversation("c1", { format: "pdf", includeTools: false });
+    expect(calls(fetchMock).map(([url]) => url)).toEqual([
+      "http://x/api/conversations/c1/export?format=pdf&tools=0",
+      "http://x/api/conversations/c1/export?format=html&tools=0",
+    ]);
+    expect(result.contentType).toBe("text/html");
+    expect(result.blob.size).toBe("<html>print me</html>".length);
+  });
+
+  it("reports the 501 when the print view is refused too, and does not retry other refusals", async () => {
+    const refuse = vi.fn(async (url: string) =>
+      url.includes("format=pdf") ? json({ error: { code: "export_format_unsupported" } }, 501) : json({ error: { code: "VALIDATION_ERROR" } }, 400)
+    );
+    const client = new AgentServerClient({ baseUrl: "http://x/api", fetch: as(refuse) });
+    await expect(client.exportConversation("c1", { format: "pdf" })).rejects.toMatchObject({ status: 501, code: "export_format_unsupported" });
+    const other = vi.fn(async () => json({ error: { code: "export_disabled" } }, 403));
+    const forbidden = new AgentServerClient({ baseUrl: "http://x/api", fetch: as(other) });
+    await expect(forbidden.exportConversation("c1", { format: "pdf" })).rejects.toMatchObject({ status: 403 });
+    expect(other).toHaveBeenCalledTimes(1);
+    const md = vi.fn(async () => json({ error: { code: "export_format_unsupported" } }, 501));
+    await expect(new AgentServerClient({ baseUrl: "http://x/api", fetch: as(md) }).exportConversation("c1", { format: "md" })).rejects.toMatchObject({ status: 501 });
+    expect(md).toHaveBeenCalledTimes(1);
   });
 
   it("reports an HTML answer so the page can print it", async () => {

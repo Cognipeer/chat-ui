@@ -2,7 +2,7 @@
 
 Chat UI 0.4.0 can show the touches people expect from a workplace assistant: copy, regenerate and edit on messages, thumbs with reasons, a history you can rename, pin and clean up, suggested first messages, a Markdown welcome, an AI label with legal links, announcements, a terms gate, export, and alerts while the tab is in the background.
 
-**Every one of them is off until you switch it on**, with a prop or with the agent's `metadata.experience`, so an existing chat looks and behaves as before. Anything that needs the server (regenerate, edit, rating, rename, pin, bulk delete, export) also needs a transport that has the method; without it the button is simply not there.
+**Every one of them is off until the host page switches it on with a prop**, so an existing chat looks and behaves as before, also when it is upgraded together with agent-server (which publishes all of them as allowed). The agent can only take a feature away (see [Who decides](#who-decides)). Anything that needs the server (regenerate, edit, rating, rename, pin, bulk delete, export) also needs a transport that has the method; without it the button is simply not there.
 
 ## Switches
 
@@ -38,9 +38,18 @@ Chat UI 0.4.0 can show the touches people expect from a workplace assistant: cop
 | `initialAgentId`, `initialInput`, `autoSend` | Deep links |
 | `controllerRef` | `prefill(text, { send })`, `newChat()`, `focus()` for the host page |
 
-### From the agent
+### Who decides
 
-The host that lists agents (`GET /agents`) can say these in each agent's `metadata`. The agent's value wins over the prop; anything unusable is ignored:
+Two parties have a say, and they do not have the same power:
+
+- **The host page decides what is on.** A switch (`messageActions`, `feedback`, `historyActions`, `exportMenu`, `notifications`, `disclosure.aiLabel`) is off unless the host passed it, whatever the server says. `<Chat feedback={false}>` stays off.
+- **The agent decides what is allowed.** Each agent lists in its `metadata.experience` what the server will accept. A switch the agent sets to `false` is off even if the host turned it on; one the agent sets to `true` (or says nothing about) is **not** turned on by that. Lists are narrowed the same way: the export menu offers the host's `formats` that the agent also publishes, and the feedback `reasons` are the host's list cut down to the agent's (the server rejects reasons it did not publish).
+
+effective = host prop **and** agent flag, the host's default being off.
+
+Content is different: it is not a switch. When the agent has `welcome`, `starters`, `disclosure.links` or `disclosure.labelText`, those are used; otherwise the host's props are.
+
+agent-server 0.3.0 publishes every switch as allowed (`true`) unless its own settings or the agent's `experience` say otherwise, and its routes refuse a disallowed action with `403 action_disabled`. So the server enforces, and the host chooses what to show:
 
 ```json
 {
@@ -50,16 +59,18 @@ The host that lists agents (`GET /agents`) can say these in each agent's `metada
     "welcome": "## Hello {{user.firstName}}\n\nHow can I help?",
     "starters": [{ "text": "Where is my order?", "label": "Track an order" }, { "text": "Show my invoices", "autoSend": true }],
     "experience": {
-      "messageActions": { "copy": true, "regenerate": true },
+      "messageActions": { "copy": true, "regenerate": true, "edit": false },
       "feedback": { "enabled": true, "reasons": ["inaccurate", "incomplete", "other"] },
-      "history": { "rename": true, "pin": true },
-      "export": { "enabled": true },
-      "notifications": { "tabBadge": true },
+      "history": { "rename": true, "pin": true, "bulkDelete": false },
+      "export": { "enabled": true, "includeTools": false, "formats": ["md", "json", "html"] },
+      "notifications": { "desktop": "off" },
       "disclosure": { "aiLabel": true }
     }
   }
 }
 ```
+
+With this agent, `<Chat messageActions={{ copy: true, edit: true }} historyActions={{ pin: true, bulkDelete: true }} />` shows copy and pin only: `edit` and `bulkDelete` are taken away by the agent, and everything the host did not pass stays off.
 
 Variables such as `{{user.name}}` are the server's to fill in; Chat UI renders the text it is given.
 
@@ -81,10 +92,10 @@ A thumbs-up is sent at once. A thumbs-down opens a small form: reasons (`inaccur
 | Action | Request |
 | --- | --- |
 | Rename | `PATCH /conversations/:id { title }` |
-| Pin / unpin | `PATCH /conversations/:id { metadata: { pinned } }`; a list item with `metadata.pinned` (or `pinned`) is listed first |
-| Delete several | `POST /conversations/bulk-delete { ids }`, at most 100 per call (more are sent in turns). A server without the route is served one by one |
+| Pin / unpin | `PATCH /conversations/:id { pinned }` (a top-level field: agent-server drops `metadata.pinned` from what a client sends). The answer is the conversation; it carries `pinned: true` while pinned. A list item with `pinned` (or `metadata.pinned`) is listed first |
+| Delete several | `POST /conversations/bulk-delete { ids }`, at most 100 per call (more are sent in turns). agent-server answers `{ results: [{ id, status: "deleted" \| "not_found" \| "busy" \| "error", message? }], deleted: <count> }`; each id is judged by its own `status`. The older `{ deleted: string[], failed: [...] }` is read too. A server without the route is served one by one |
 
-Renaming and pinning show at once and are undone if the server refuses; what went wrong is shown under the list. `useChatHistory` returns `renameConversation`, `pinConversation` and `deleteConversations`.
+Renaming and pinning show at once and are undone if the server refuses; a pin is also taken back when the server answers but the conversation it returns is not in the state that was asked for (a server that ignores the pin can no longer leave a pin on screen that is not saved). What went wrong is shown under the list. A conversation that is `not_found`, `busy` or `error` in a bulk delete stays in the list and is counted in the message. `useChatHistory` returns `renameConversation`, `pinConversation` and `deleteConversations`; a transport's `pinConversation` may resolve with the pin it stored (`AgentServerClient` does), which is what the list compares.
 
 ## The empty chat
 
@@ -131,7 +142,9 @@ Nothing inside is mounted until the person accepts, so the chat makes no request
 
 ## Export
 
-The header menu asks the server first (`GET /conversations/:id/export?format=md|json|pdf&tools=0|1`). A server that has no such route (404 / 405 / 501) is served from the messages on screen: Markdown and JSON are built in the browser, and PDF opens the print dialog ("Save as PDF"). A server without a PDF renderer may answer a `pdf` request with a print-friendly `text/html` page; Chat UI prints it. Long conversations loaded in pages export only what is loaded in the fallback; the server route exports everything.
+The header menu asks the server first (`GET /conversations/:id/export?format=md|json|pdf&tools=0|1`). A server that has no such route (404 / 405 / 501) is served from the messages on screen: Markdown and JSON are built in the browser, and PDF opens the print dialog ("Save as PDF"). Long conversations loaded in pages export only what is loaded in the fallback; the server route exports everything.
+
+**The PDF item.** agent-server publishes `export.formats` as `["md", "json", "html"]` (plus `"pdf"` only when it has a PDF renderer). The menu's PDF item is offered for either `pdf` or `html`, because the print view is how a person without a renderer on the server gets a PDF. A `pdf` request that the server answers with `501 export_format_unsupported` is repeated as `format=html`, and the print-friendly page it returns (`text/html`) is printed in a hidden frame ("Save as PDF" is in the dialog). If that is refused too, the page falls back to the messages on screen.
 
 ## Background alerts
 

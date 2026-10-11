@@ -162,17 +162,35 @@ export function useChatHistory(options: UseChatHistoryOptions): UseChatHistoryRe
   const canRename = typeof clientRef.current?.renameConversation === "function";
   const canPin = typeof clientRef.current?.pinConversation === "function";
 
-  /** Shows `patch` on a row, and puts the row back as it was if `commit` fails. */
+  /**
+   * Shows `patch` on a row, and puts the row back as it was if `commit` fails - or if the server's
+   * answer (what `commit` resolves with) is one `accepted` refuses: a server can answer 200 and still
+   * not have done what was asked.
+   */
   const optimistically = useCallback(
-    async (id: string, patch: Partial<ConversationListItem>, commit: () => Promise<void>, failure: string): Promise<boolean> => {
+    async <R>(
+      id: string,
+      patch: Partial<ConversationListItem>,
+      commit: () => Promise<R>,
+      failure: string,
+      accepted?: (answer: R) => boolean
+    ): Promise<boolean> => {
       // the row as it is now, read before the list changes
       const before = conversationsRef.current.find((c) => c.id === id);
+      const undo = () => {
+        if (before) setConversations((prev) => prev.map((c) => (c.id === id ? before : c)));
+      };
       setConversations((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)));
       try {
-        await commit();
+        const answer = await commit();
+        if (accepted && !accepted(answer)) {
+          undo();
+          setError(new Error(failure));
+          return false;
+        }
         return true;
       } catch (err) {
-        if (before) setConversations((prev) => prev.map((c) => (c.id === id ? before : c)));
+        undo();
         setError(err instanceof Error ? err : new Error(failure));
         return false;
       }
@@ -202,7 +220,9 @@ export function useChatHistory(options: UseChatHistoryOptions): UseChatHistoryRe
         id,
         { pinned, metadata: { ...conversationsRef.current.find((c) => c.id === id)?.metadata, pinned } },
         () => client.pinConversation!(id, pinned),
-        t("chat.error.pinFailed")
+        t("chat.error.pinFailed"),
+        // the pin the server stored, when it says, has to be the one that was asked for
+        (stored) => typeof stored !== "boolean" || stored === pinned
       );
     },
     [optimistically, t]

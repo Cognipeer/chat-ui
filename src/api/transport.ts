@@ -160,8 +160,11 @@ export interface EditMessageInput {
 export interface BulkDeleteResult {
   /** Ids that are gone */
   deleted: string[];
-  /** Ids that were not deleted (not the person's, already gone, ...) with the server's reason code when it gives one */
-  failed: Array<{ id: string; code?: string }>;
+  /**
+   * Ids that were not deleted (not the person's, busy, ...) with the server's reason (`not_found`,
+   * `busy`, `error`, or an error code) and message when it gives them
+   */
+  failed: Array<{ id: string; code?: string; message?: string }>;
 }
 
 /** What `ChatTransport.exportConversation` is asked for. */
@@ -328,8 +331,12 @@ export interface ChatTransport {
   /** Change a conversation's title. Optional: without it the history offers no rename. */
   renameConversation?(conversationId: string, title: string): Promise<void>;
 
-  /** Pin or unpin a conversation (`metadata.pinned`). Optional: without it the history offers no pin. */
-  pinConversation?(conversationId: string, pinned: boolean): Promise<void>;
+  /**
+   * Pin or unpin a conversation (`PATCH /conversations/:id { pinned }`). Optional: without it the history
+   * offers no pin. Resolves with the pin the server stored when it says (the list takes the row back
+   * when that is not what was asked for), `undefined` when it does not.
+   */
+  pinConversation?(conversationId: string, pinned: boolean): Promise<boolean | void>;
 
   /**
    * Delete several conversations at once (`POST /conversations/bulk-delete`, at most 100 ids).

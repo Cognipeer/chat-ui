@@ -13,6 +13,7 @@ import type {
   ActionResolution,
   FeedbackInput,
   MessageFeedback,
+  ExportFormat,
 } from "../types";
 import type {
   BulkDeleteResult,
@@ -43,6 +44,7 @@ import { normalizeBudget, normalizeMessagesPage, normalizeRuntime, readContinuab
 import { fileFromRecord, uploadMimeType } from "../utils/files";
 import { normalizeFeedback } from "../utils/experience";
 import { filenameFromDisposition, exportFilename } from "../utils/export";
+import { readBulkDelete } from "./bulkDelete";
 
 /** How `followEvents` reconnects after losing the connection. */
 export interface FollowReconnectOptions {
@@ -68,6 +70,9 @@ export interface AgentServerClientOptions
 }
 
 /** Wait `ms`, or until `signal` aborts. */
+const isPlainRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value) && typeof value === "object" && !Array.isArray(value);
+
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
     if (signal?.aborted) return resolve();
@@ -265,6 +270,11 @@ export class AgentServerClient implements ChatTransport {
     params: {
       title?: string;
       metadata?: Record<string, unknown>;
+      /**
+       * Pins or unpins the conversation. A top-level field: the server owns the pin and drops
+       * `metadata.pinned` from what a client sends.
+       */
+      pinned?: boolean;
       /** Sets the conversation's spend limit; `null` removes it */
       budget?: ConversationBudget | null;
     }
@@ -315,40 +325,37 @@ export class AgentServerClient implements ChatTransport {
     await this.updateConversation(conversationId, { title });
   }
 
-  /** Pin or unpin a conversation: `metadata.pinned` is what the history sorts by. */
-  async pinConversation(conversationId: string, pinned: boolean): Promise<void> {
-    await this.updateConversation(conversationId, { metadata: { pinned } });
+  /**
+   * Pin or unpin a conversation (`PATCH /conversations/:id { pinned }`). Resolves with the pin the
+   * server stored, read from the conversation it answers with (`pinned`, or `metadata.pinned`;
+   * absent means not pinned), or `undefined` when the answer is not a conversation. A caller that
+   * shows the pin at once compares it with what it asked for.
+   */
+  async pinConversation(conversationId: string, pinned: boolean): Promise<boolean | undefined> {
+    const answer = (await this.updateConversation(conversationId, { pinned })) as unknown;
+    const body = isPlainRecord(answer) && isPlainRecord(answer.conversation) ? answer.conversation : answer;
+    if (!isPlainRecord(body) || typeof body.id !== "string") return undefined;
+    return body.pinned === true || (isPlainRecord(body.metadata) && body.metadata.pinned === true);
   }
 
   /**
    * Delete several conversations (`POST /conversations/bulk-delete`, at most 100 per call; more
    * are sent in turns). A server without the route (404 / 405 / 501) is served one by one.
+   *
+   * agent-server answers `{ results: [{ id, status: "deleted" | "not_found" | "busy" | "error", message? }], deleted: <count> }`:
+   * each id is judged by its status. `{ deleted: string[], failed: [...] }` (an older shape) is read
+   * too. An id the answer does not account for is reported as not deleted, so the list never drops
+   * a conversation that may still exist.
    */
   async deleteConversations(ids: string[]): Promise<BulkDeleteResult> {
     const result: BulkDeleteResult = { deleted: [], failed: [] };
     for (let at = 0; at < ids.length; at += 100) {
       const chunk = ids.slice(at, at + 100);
       try {
-        const body = await this.request<{ deleted?: unknown; failed?: unknown } | undefined>("POST", "/conversations/bulk-delete", { ids: chunk });
-        const deleted = Array.isArray(body?.deleted) ? body!.deleted.filter((id): id is string => typeof id === "string") : [];
-        const failed = Array.isArray(body?.failed)
-          ? body!.failed.flatMap((entry) => {
-              if (typeof entry === "string") return [{ id: entry }];
-              const e = entry as { id?: unknown; code?: unknown } | null;
-              return e && typeof e.id === "string" ? [{ id: e.id, ...(typeof e.code === "string" ? { code: e.code } : {}) }] : [];
-            })
-          : [];
-        // A server that lists what it deleted is believed; one that lists only the failures (or nothing) deleted the rest
-        const failedIds = new Set(failed.map((f) => f.id));
-        if (body?.deleted !== undefined) {
-          const deletedIds = new Set(deleted);
-          result.deleted.push(...deleted);
-          result.failed.push(...failed);
-          for (const id of chunk) if (!deletedIds.has(id) && !failedIds.has(id)) result.failed.push({ id });
-        } else {
-          result.deleted.push(...chunk.filter((id) => !failedIds.has(id)));
-          result.failed.push(...failed);
-        }
+        const body = await this.request<unknown>("POST", "/conversations/bulk-delete", { ids: chunk });
+        const read = readBulkDelete(body, chunk);
+        result.deleted.push(...read.deleted);
+        result.failed.push(...read.failed);
       } catch (err) {
         const status = (err as { status?: number } | null)?.status;
         if (status !== 404 && status !== 405 && status !== 501) throw err;
@@ -533,10 +540,27 @@ export class AgentServerClient implements ChatTransport {
   /**
    * A conversation as a file (`GET /conversations/:id/export?format=&tools=`). The server may
    * answer a PDF request with a print-friendly `text/html` page when it has no renderer; the
-   * result's `contentType` says so and the chat prints it.
+   * result's `contentType` says so and the chat prints it. agent-server answers `501
+   * export_format_unsupported` to `format=pdf` when it has no renderer: its print view
+   * (`format=html`) is fetched instead, so a person who needs a PDF can still "Save as PDF".
    */
   async exportConversation(conversationId: string, request: ExportRequest): Promise<ExportResult> {
-    const query = new URLSearchParams({ format: request.format, tools: request.includeTools ? "1" : "0" });
+    try {
+      return await this.fetchExport(conversationId, request.format, request);
+    } catch (err) {
+      const e = err as { status?: number; code?: string } | null;
+      if (request.format !== "pdf" || e?.status !== 501 || e?.code !== "export_format_unsupported") throw err;
+      try {
+        return await this.fetchExport(conversationId, "html", request);
+      } catch {
+        // (the first refusal is the one that explains)
+        throw err;
+      }
+    }
+  }
+
+  private async fetchExport(conversationId: string, format: ExportFormat | "html", request: ExportRequest): Promise<ExportResult> {
+    const query = new URLSearchParams({ format, tools: request.includeTools ? "1" : "0" });
     const response = await httpFetch(
       this.http,
       `${this.baseUrl}/conversations/${encodeURIComponent(conversationId)}/export?${query.toString()}`,

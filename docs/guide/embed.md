@@ -3,12 +3,15 @@
 `EmbedChat` is `Chat` for a page that is shown inside another page (an `iframe`) and signed in with an identity token **the host page's server signs**. It is how an intranet, an ERP or a SaaS product puts an assistant in its own page without a second login.
 
 ```
-host page (https://app.example.com)                 iframe (https://console.example.com/p/support/embed)
-  server mints a short-lived signed token                 loads, posts   { type: "cp:ready" }       ───►
-  ◄─── { type: "cp:token_request" } / cp:ready
-  ───► { type: "cp:auth", token }                          POST /api/portal/support/embed/session { token }
-                                                           ◄── { sessionToken, expiresAt, user }
-                                                           chat requests carry  Authorization: Bearer cp_es_...
+host page                                   iframe
+https://app.example.com                     https://console.example.com/api-embed/portal/support?tenant=acme&origin=https%3A%2F%2Fapp.example.com
+
+  server mints a short-lived signed token
+                                            ◄─── { type: "cp:ready" } (and cp:token_request later)
+  ───► { type: "cp:auth", token }
+                                            POST /api/portal/support/embed/session { token }
+                                            ◄── { sessionToken, expiresAt, user }
+                                            chat requests carry  Authorization: Bearer cp_es_...
 ```
 
 ## Why a bearer token and not cookies
@@ -21,7 +24,7 @@ Browsers increasingly block or partition cookies for pages inside a frame of ano
 import { EmbedChat } from "@cognipeer/chat-ui";
 import "@cognipeer/chat-ui/styles.css";
 
-// the page served at https://console.example.com/p/support/embed?origin=https%3A%2F%2Fapp.example.com
+// the page served at https://console.example.com/api-embed/portal/support?tenant=acme&origin=https%3A%2F%2Fapp.example.com
 <EmbedChat
   baseUrl="/api/portal/support"                  // the portal's chat API (same origin as the iframe)
   allowedOrigins={["https://app.example.com"]}   // exactly what the portal admin configured
@@ -34,6 +37,8 @@ import "@cognipeer/chat-ui/styles.css";
 ```
 
 All other `Chat` props (theme, locale, starters, feedback, ...) work as usual. `sessionUrl` defaults to `<baseUrl>/embed/session`; `hostOrigin` defaults to the `origin` query parameter of the page.
+
+A Cognipeer Console portal serves this page at `/api-embed/portal/{key}?tenant={slug}&origin={the host page's origin}`: the `tenant` slug is required (the frame has no other way to know whose portal it is) and `origin` has to be one of the origins the portal's administrator allowed.
 
 ## The messages
 
@@ -81,7 +86,7 @@ An administrator declares the tools the agent may call on the host page (`client
 ## A minimal host
 
 ```html
-<iframe id="cp" src="https://console.example.com/p/support/embed?origin=https%3A%2F%2Fapp.example.com" allow="clipboard-write"></iframe>
+<iframe id="cp" src="https://console.example.com/api-embed/portal/support?tenant=acme&origin=https%3A%2F%2Fapp.example.com" allow="clipboard-write"></iframe>
 <script>
   const CONSOLE = "https://console.example.com";
   const frame = document.getElementById("cp");

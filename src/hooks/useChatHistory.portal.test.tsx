@@ -96,6 +96,51 @@ describe("pinning", () => {
   });
 });
 
+describe("pinning against a server that does not do it", () => {
+  it("keeps the pin when the server says it stored it", async () => {
+    const pinConversation = vi.fn(async (_id: string, pinned: boolean) => pinned);
+    const { result } = await load(makeTransport({ pinConversation }));
+    await act(async () => {
+      expect(await result.current.pinConversation("c", true)).toBe(true);
+    });
+    expect(result.current.conversations.find((c) => c.id === "c")).toMatchObject({ pinned: true });
+    expect(result.current.error).toBeNull();
+  });
+
+  it("takes the row back when the server answers 200 but did not pin it", async () => {
+    // agent-server drops a pin it was not asked for in the right place and still answers 200
+    const pinConversation = vi.fn(async () => false);
+    const { result } = await load(makeTransport({ pinConversation }));
+    const before = result.current.conversations.find((c) => c.id === "c");
+    await act(async () => {
+      expect(await result.current.pinConversation("c", true)).toBe(false);
+    });
+    expect(result.current.conversations.find((c) => c.id === "c")).toEqual(before);
+    expect(result.current.error?.message).toBeTruthy();
+  });
+
+  it("takes an unpin back when the conversation is still pinned", async () => {
+    const pinConversation = vi.fn(async () => true);
+    const { result } = await load(makeTransport({ pinConversation }));
+    await act(async () => {
+      await result.current.pinConversation("c", true);
+    });
+    await act(async () => {
+      expect(await result.current.pinConversation("c", false)).toBe(false);
+    });
+    expect(result.current.conversations.find((c) => c.id === "c")?.pinned).toBe(true);
+  });
+
+  it("trusts a server that does not say what it stored", async () => {
+    const pinConversation = vi.fn(async () => undefined);
+    const { result } = await load(makeTransport({ pinConversation }));
+    await act(async () => {
+      expect(await result.current.pinConversation("c", true)).toBe(true);
+    });
+    expect(result.current.conversations.find((c) => c.id === "c")?.pinned).toBe(true);
+  });
+});
+
 describe("deleting several", () => {
   it("uses the bulk route and drops what is gone from the list", async () => {
     const deleteConversations = vi.fn(async () => ({ deleted: ["a", "c"], failed: [{ id: "b", code: "forbidden" }] }));

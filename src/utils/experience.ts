@@ -269,57 +269,116 @@ export interface Experience {
   welcome?: string;
 }
 
+/** The host's on/off switches of a group, `true` only where the host said `true`. */
 const flags = <T extends string>(value: unknown, keys: readonly T[]): Record<T, boolean> => {
   const config = isRecord(value) ? value : {};
   return Object.fromEntries(keys.map((key) => [key, config[key] === true])) as Record<T, boolean>;
 };
 
 /**
- * One place that decides which parts of the portal experience are on. Per switch, what the selected
- * agent says (`metadata.experience.<switch>`, `metadata.starters`, `metadata.welcome`) refines the
- * host's props; a switch neither sets stays off, so a chat behaves as before until it is turned on.
+ * Whether the agent took a switch away: its group is `false`, or the key in it is `false`. An agent
+ * that says nothing, or says `true`, takes nothing away and gives nothing either.
+ */
+const withdrawn = (group: unknown, key: string): boolean => group === false || (isRecord(group) && group[key] === false);
+
+/** The formats of an export list as the menu knows them; the server's print view (`html`) is the menu's `pdf`. */
+function menuFormats(value: unknown): ExportFormat[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const out = new Set<ExportFormat>();
+  for (const entry of value) {
+    const format = entry === "html" ? "pdf" : entry;
+    if (EXPORT_FORMATS.includes(format as ExportFormat)) out.add(format as ExportFormat);
+  }
+  return EXPORT_FORMATS.filter((format) => out.has(format));
+}
+
+const stringList = (value: unknown): string[] =>
+  Array.isArray(value) ? value.filter((r): r is string => typeof r === "string" && r !== "") : [];
+
+/**
+ * One place that decides which parts of the portal experience are on.
+ *
+ * **Who wins.** Every on/off switch (message actions, feedback, history actions, export, background
+ * alerts, the AI label) is on only when the host turned it on with a prop AND the selected agent has
+ * not taken it away: the agent's `metadata.experience.<switch>` (agent-server publishes every switch
+ * it allows there, all on by default) can only *restrict*. A switch the host never set stays off, so
+ * a chat behaves as before until the host turns a feature on, whatever the server publishes. What a
+ * list may hold is narrowed the same way: the export menu's formats and the feedback reasons are the
+ * host's list cut down to what the agent offers. Content, not switches - the agent's `starters`,
+ * `welcome`, legal links and label text - is the agent's when it has some, else the host's.
  */
 export function resolveExperience(agent: AgentInfo | undefined, props: ExperienceInput): Experience {
   const meta = agent?.metadata;
   const said = isRecord(meta?.experience) ? (meta!.experience as Record<string, unknown>) : {};
-  const pick = (key: string, prop: unknown): unknown => (said[key] !== undefined ? said[key] : prop);
 
-  const formatsRaw = (() => {
-    const value = pick("export", props.exportMenu);
-    return isRecord(value) && Array.isArray(value.formats)
-      ? value.formats.filter((f): f is ExportFormat => EXPORT_FORMATS.includes(f as ExportFormat))
-      : [];
-  })();
-  const exportValue = pick("export", props.exportMenu);
-  const exportRecord = isRecord(exportValue) ? exportValue : {};
+  // --- feedback
+  const host = resolveFeedbackConfig(props.feedback);
+  const saidFeedback = said.feedback;
+  const agentReasons = isRecord(saidFeedback) ? stringList(saidFeedback.reasons) : [];
+  const hostReasons = isRecord(props.feedback) ? stringList(props.feedback.reasons) : [];
+  const narrowed = hostReasons.filter((reason) => agentReasons.includes(reason));
+  // (the server rejects a reason it did not publish, so the agent's list bounds the host's)
+  const reasons = agentReasons.length === 0 ? host.reasons : narrowed.length > 0 ? narrowed : agentReasons;
 
-  const notificationsValue = pick("notifications", props.notifications);
-  const notifications = isRecord(notificationsValue) ? notificationsValue : {};
+  // --- export
+  const hostExport = props.exportMenu;
+  const hostExportRecord = isRecord(hostExport) ? hostExport : {};
+  const saidExport = said.export;
+  const agentFormats = isRecord(saidExport) ? menuFormats(saidExport.formats) : undefined;
+  const hostFormats = menuFormats(hostExportRecord.formats);
+  const formats = EXPORT_FORMATS.filter(
+    (format) => (!hostFormats || hostFormats.length === 0 || hostFormats.includes(format)) && (!agentFormats || agentFormats.includes(format))
+  );
+  const exportOn = (hostExport === true || hostExportRecord.enabled === true) && !withdrawn(saidExport, "enabled") && formats.length > 0;
 
-  const disclosureValue = pick("disclosure", props.disclosure);
-  const disclosure = isRecord(disclosureValue) ? disclosureValue : {};
+  // --- background alerts
+  const hostNotifications = isRecord(props.notifications) ? props.notifications : {};
+  const saidNotifications = said.notifications;
+  const desktopWithdrawn = withdrawn(saidNotifications, "desktop") || (isRecord(saidNotifications) && saidNotifications.desktop === "off");
+
+  // --- disclosure
+  const hostDisclosure = isRecord(props.disclosure) ? props.disclosure : {};
+  const saidDisclosure = said.disclosure;
+  const saidDisclosureRecord = isRecord(saidDisclosure) ? saidDisclosure : {};
+  const labelText = text(saidDisclosureRecord.labelText) ?? text(hostDisclosure.labelText);
+  const links = saidDisclosure === false ? {} : isRecord(saidDisclosureRecord.links) ? saidDisclosureRecord.links : hostDisclosure.links;
 
   const startersFromAgent = normalizeStarters(meta?.starters);
   const welcomeFromAgent = text(meta?.welcome);
 
+  const messageActions = flags(props.messageActions, ["copy", "regenerate", "edit"] as const);
+  const historyActions = flags(props.historyActions, ["rename", "pin", "bulkDelete"] as const);
+
   return {
-    messageActions: flags(pick("messageActions", props.messageActions), ["copy", "regenerate", "edit"] as const),
-    feedback: resolveFeedbackConfig(pick("feedback", props.feedback)),
-    historyActions: flags(pick("history", props.historyActions), ["rename", "pin", "bulkDelete"] as const),
+    messageActions: {
+      copy: messageActions.copy && !withdrawn(said.messageActions, "copy"),
+      regenerate: messageActions.regenerate && !withdrawn(said.messageActions, "regenerate"),
+      edit: messageActions.edit && !withdrawn(said.messageActions, "edit"),
+    },
+    feedback: {
+      enabled: host.enabled && !withdrawn(saidFeedback, "enabled"),
+      comments: host.comments && !withdrawn(saidFeedback, "comments"),
+      reasons,
+    },
+    historyActions: {
+      rename: historyActions.rename && !withdrawn(said.history, "rename"),
+      pin: historyActions.pin && !withdrawn(said.history, "pin"),
+      bulkDelete: historyActions.bulkDelete && !withdrawn(said.history, "bulkDelete"),
+    },
     exportMenu: {
-      enabled: exportValue === true || exportRecord.enabled === true,
-      formats: formatsRaw.length > 0 ? formatsRaw : EXPORT_FORMATS,
-      includeTools: exportRecord.includeTools === true,
+      enabled: exportOn,
+      formats,
+      includeTools: exportOn && hostExportRecord.includeTools === true && !withdrawn(saidExport, "includeTools"),
     },
     notifications: {
-      tabBadge: notifications.tabBadge === true,
-      sound: notifications.sound === true,
-      desktop: notifications.desktop === "opt_in" ? "opt_in" : "off",
+      tabBadge: hostNotifications.tabBadge === true && !withdrawn(saidNotifications, "tabBadge"),
+      sound: hostNotifications.sound === true && !withdrawn(saidNotifications, "sound"),
+      desktop: hostNotifications.desktop === "opt_in" && !desktopWithdrawn ? "opt_in" : "off",
     },
     disclosure: {
-      aiLabel: disclosure.aiLabel === true,
-      ...(text(disclosure.labelText) ? { labelText: text(disclosure.labelText) } : {}),
-      links: isRecord(disclosure.links) ? (disclosure.links as LegalLinks) : {},
+      aiLabel: hostDisclosure.aiLabel === true && !withdrawn(saidDisclosure, "aiLabel"),
+      ...(labelText ? { labelText } : {}),
+      links: isRecord(links) ? (links as LegalLinks) : {},
     },
     starters: startersFromAgent.length > 0 ? startersFromAgent : normalizeStarters(props.starters),
     welcome: welcomeFromAgent ?? text(props.welcome),

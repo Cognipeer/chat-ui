@@ -108,9 +108,21 @@ describe("message actions", () => {
     expect(screen.getAllByRole("button", { name: "Copy" })).toHaveLength(2);
   });
 
-  it("is switched on by the agent's own metadata", async () => {
+  it("is narrowed by the agent's own metadata, never switched on by it", async () => {
     const agent: AgentInfo = { id: "agent", name: "Helper", metadata: { experience: { messageActions: { copy: true }, feedback: { enabled: true, comments: false } } } };
-    renderChat(makeTransport({ sendFeedback: vi.fn(async () => null) }, [agent]), { conversationId: "c1" });
+    // the agent publishes everything on; a host that set nothing gets nothing
+    const bare = renderChat(makeTransport({ sendFeedback: vi.fn(async () => null) }, [agent]), { conversationId: "c1" });
+    await screen.findByText("first answer");
+    expect(screen.queryAllByRole("button", { name: "Copy" })).toHaveLength(0);
+    expect(screen.queryByRole("button", { name: "Bad response" })).toBeNull();
+    bare.unmount();
+
+    // the host turns the features on; the agent only takes the comment box away
+    renderChat(makeTransport({ sendFeedback: vi.fn(async () => null) }, [agent]), {
+      conversationId: "c1",
+      messageActions: { copy: true },
+      feedback: { enabled: true, comments: true },
+    });
     await screen.findByText("first answer");
     await waitFor(() => expect(screen.getAllByRole("button", { name: "Copy" }).length).toBeGreaterThan(0));
     fireEvent.click(screen.getByRole("button", { name: "Bad response" }));
