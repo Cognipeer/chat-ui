@@ -33,7 +33,7 @@ import {
   readSSE,
   type HttpOptions,
 } from "./http";
-import { normalizeBudget, normalizeMessagesPage, normalizeRuntime } from "../utils/runtime";
+import { normalizeBudget, normalizeMessagesPage, normalizeRuntime, readContinuable } from "../utils/runtime";
 import { fileFromRecord, uploadMimeType } from "../utils/files";
 
 /** How `followEvents` reconnects after losing the connection. */
@@ -231,16 +231,20 @@ export class AgentServerClient implements ChatTransport {
     if (options.before) query.set("before", options.before);
     if (options.limit) query.set("limit", String(options.limit));
     const suffix = query.toString();
-    const { messagesPage: rawPage, ...data } = await this.request<{
+    const { messagesPage: rawPage, continuable: rawContinuable, ...data } = await this.request<{
       conversation: Conversation;
       messages: Message[];
       pendingActions?: PendingAction[];
       messagesPage?: unknown;
+      /** Beside the conversation on a server that does not put it inside */
+      continuable?: unknown;
     }>("GET", `/conversations/${conversationId}${suffix ? `?${suffix}` : ""}`);
     const messagesPage = normalizeMessagesPage(rawPage);
     return {
       ...data,
-      conversation: data.conversation ? this.readConversation(data.conversation, conversationId) : data.conversation,
+      conversation: data.conversation
+        ? this.readConversation(data.conversation, conversationId, readContinuable(rawContinuable))
+        : data.conversation,
       ...(messagesPage ? { messagesPage } : {}),
     };
   }
@@ -268,16 +272,26 @@ export class AgentServerClient implements ChatTransport {
     return this.readConversation(updated, conversationId);
   }
 
-  /** Fills what a PATCH answer leaves out and normalizes the runtime / budget it carries. */
-  private readConversation(raw: Partial<Conversation> & { conversation?: Conversation }, id: string): Conversation {
-    const { runtime: rawRuntime, budget: rawBudget, ...rest } = (raw.conversation ?? raw) as Partial<Conversation>;
+  /**
+   * Fills what a PATCH answer leaves out and normalizes the runtime / budget it carries.
+   * `continuable` is read from the conversation, from beside it (`{ conversation, continuable }`)
+   * or from its runtime; it stays absent when the server does not say.
+   */
+  private readConversation(
+    raw: Partial<Conversation> & { conversation?: Conversation; continuable?: unknown },
+    id: string,
+    beside?: boolean
+  ): Conversation {
+    const { runtime: rawRuntime, budget: rawBudget, continuable: ownContinuable, ...rest } = (raw.conversation ?? raw) as Partial<Conversation>;
     const runtime = normalizeRuntime(rawRuntime);
     const budget = rawBudget === undefined ? undefined : normalizeBudget(rawBudget);
+    const continuable = readContinuable(ownContinuable, raw.conversation ? raw.continuable : undefined, beside, rawRuntime);
     return {
       ...(rest as Conversation),
       id: rest.id ?? id,
       ...(runtime ? { runtime } : {}),
       ...(budget !== undefined ? { budget } : {}),
+      ...(continuable !== undefined ? { continuable } : {}),
     };
   }
 

@@ -177,6 +177,29 @@ describe("useChat: a turn that is still running when the conversation opens", ()
     expect(result.current.messages.map((m) => m.id)).toEqual(["u1"]);
   });
 
+  it("the replayed start of the run, which names no run, does not wipe the text the snapshot brought", async () => {
+    const getConversation = vi.fn().mockResolvedValue({
+      conversation: conversation({ runtime: { status: "running", lastEventSeq: 1, activeRunId: "run_1" } }),
+      messages: [user],
+    });
+    const followEvents = vi.fn(async (_id: string, options: FollowEventsOptions) => {
+      options.onEvent(event("agent.message.snapshot", { run_id: "run_1", text: "Half of an ans", user_message: { id: "u1", content: "research it" } }));
+      // the log replayed after the snapshot: the run's own start, with no run id on it
+      options.onEvent(event("session.status_running", { trigger: "message" }, 2));
+      options.onEvent(event("agent.message.delta", { text: "wer", run_id: "run_1" }));
+      await new Promise<void>((resolve) => options.signal?.addEventListener("abort", () => resolve()));
+    });
+    const { result } = renderHook(
+      () => useChat({ transport: makeTransport({ getConversation, followEvents }), agentId: "agent" }),
+      { wrapper }
+    );
+    await act(async () => {
+      await result.current.loadConversation("c1");
+    });
+    await waitFor(() => expect(result.current.streamingText).toBe("Half of an answer"));
+    expect(result.current.isFollowing).toBe(true);
+  });
+
   it("shows the answer of a turn that did not stream once it is written", async () => {
     const getConversation = vi
       .fn()
@@ -968,6 +991,144 @@ describe("useChat: the conversation's usage limit", () => {
     expect(result.current.spentUsd).toBe(20);
     expect(result.current.conversation?.runtime?.status).toBe("idle");
     expect(result.current.messages.map((m) => m.id)).toEqual(["u1", "m2"]);
+  });
+
+  describe("Increase and continue follows the server's `continuable`", () => {
+    const paused = () => ({
+      conversation: conversation({ budget, spentUsd: 1.02, runtime: { status: "budget_paused" as const, stopReason: "budget_reached" as const, lastEventSeq: 3 } }),
+      messages: [message({ id: "u1", role: "user", content: "go" }), message({ id: "m1", content: "partial", status: "incomplete", stopReason: "budget_reached" })],
+    });
+    const open = (getConversation: ReturnType<typeof vi.fn>, updateBudget: ChatTransport["updateBudget"], continueConversation: ReturnType<typeof vi.fn>) =>
+      renderHook(
+        () => useChat({ transport: makeTransport({ getConversation, updateBudget, continueConversation }), agentId: "agent", conversationId: "c1" }),
+        { wrapper }
+      );
+
+    it("a raise that leaves the stopped turn to carry on (still budget_paused, continuable) calls /continue, then reads the conversation again", async () => {
+      let continued = false;
+      const getConversation = vi.fn(async () =>
+        continued
+          ? { conversation: conversation({ budget: { maxCostUsd: 5, onReach: "pause" }, spentUsd: 1.4, runtime: { status: "idle", stopReason: "end_turn", lastEventSeq: 8 }, continuable: false }), messages: [message({ id: "u1", role: "user", content: "go" }), message({ id: "m2", content: "rest" })] }
+          : { ...paused(), conversation: { ...paused().conversation, continuable: true } }
+      );
+      const updateBudget = vi.fn(async (_id: string, next: unknown) =>
+        conversation({ budget: next as typeof budget, spentUsd: 1.02, continuable: true, runtime: { status: "budget_paused", stopReason: "budget_reached", lastEventSeq: 3 } })
+      );
+      const continueConversation = vi.fn(async (_id: string, options?: { callbacks?: StreamCallbacks }) => {
+        options?.callbacks?.onDone?.({ type: "stream.done", conversationId: "c1", messageId: "m2", content: "rest", stopReason: "end_turn", timestamp: 2 });
+        continued = true;
+        return undefined;
+      });
+      const { result } = open(getConversation, updateBudget, continueConversation);
+      await waitFor(() => expect(result.current.conversation?.continuable).toBe(true));
+      await act(async () => {
+        await result.current.updateBudget({ maxCostUsd: 5, onReach: "pause" }, { continue: true });
+      });
+      expect(continueConversation).toHaveBeenCalledTimes(1);
+      // the figure and the meter are the server's after the continuation
+      expect(getConversation).toHaveBeenCalledTimes(2);
+      expect(result.current.spentUsd).toBe(1.4);
+      expect(result.current.conversation?.runtime?.status).toBe("idle");
+      expect(result.current.budgetExhausted).toBe(false);
+    });
+
+    it("a raise the turn did not need (continuable false) only reopens: no /continue, even though the runtime is still paused", async () => {
+      const getConversation = vi.fn(async () => paused());
+      // the answer says it plainly; its runtime does not matter
+      const updateBudget = vi.fn(async (_id: string, next: unknown) =>
+        conversation({ budget: next as typeof budget, spentUsd: 1.02, continuable: false, runtime: { status: "budget_paused", stopReason: "budget_reached", lastEventSeq: 3 } })
+      );
+      const continueConversation = vi.fn(async () => undefined);
+      const { result } = open(getConversation, updateBudget, continueConversation);
+      await waitFor(() => expect(result.current.budgetExhausted).toBe(true));
+      let ok: boolean | undefined;
+      await act(async () => {
+        ok = await result.current.updateBudget({ maxCostUsd: 5, onReach: "pause" }, { continue: true });
+      });
+      expect(ok).toBe(true);
+      expect(continueConversation).not.toHaveBeenCalled();
+      expect(result.current.error).toBeNull();
+      expect(result.current.conversation).toMatchObject({ budget: { maxCostUsd: 5 }, continuable: false });
+    });
+
+    it("continuable true calls /continue although this page did not know the conversation was paused", async () => {
+      const getConversation = vi.fn(async () => ({
+        conversation: conversation({ budget, spentUsd: 1.02, runtime: { status: "idle", stopReason: "end_turn", lastEventSeq: 3 } }),
+        messages: [message({ id: "u1", role: "user", content: "go" })],
+      }));
+      const updateBudget = vi.fn(async (_id: string, next: unknown) =>
+        conversation({ budget: next as typeof budget, spentUsd: 1.02, continuable: true, runtime: { status: "budget_paused", stopReason: "budget_reached", lastEventSeq: 4 } })
+      );
+      const continueConversation = vi.fn(async () => undefined);
+      const { result } = open(getConversation, updateBudget, continueConversation);
+      await waitFor(() => expect(result.current.conversation).not.toBeNull());
+      await act(async () => {
+        await result.current.updateBudget({ maxCostUsd: 5, onReach: "pause" }, { continue: true });
+      });
+      expect(continueConversation).toHaveBeenCalledTimes(1);
+    });
+
+    it("continue: false never continues, whatever the answer says", async () => {
+      const getConversation = vi.fn(async () => paused());
+      const updateBudget = vi.fn(async (_id: string, next: unknown) =>
+        conversation({ budget: next as typeof budget, spentUsd: 1.02, continuable: true, runtime: { status: "budget_paused", stopReason: "budget_reached", lastEventSeq: 3 } })
+      );
+      const continueConversation = vi.fn(async () => undefined);
+      const { result } = open(getConversation, updateBudget, continueConversation);
+      await waitFor(() => expect(result.current.budgetExhausted).toBe(true));
+      await act(async () => {
+        await result.current.updateBudget({ maxCostUsd: 5, onReach: "pause" }, { continue: false });
+      });
+      expect(continueConversation).not.toHaveBeenCalled();
+      // the stopped turn still waits: the conversation says so
+      expect(result.current.conversation?.continuable).toBe(true);
+      expect(result.current.conversation?.runtime?.status).toBe("budget_paused");
+    });
+
+    it("an older server (no `continuable`) is read by the status its answer reports", async () => {
+      const getConversation = vi.fn(async () => paused());
+      const stillPaused = vi.fn(async (_id: string, next: unknown) =>
+        conversation({ budget: next as typeof budget, spentUsd: 1.02, runtime: { status: "budget_paused", stopReason: "budget_reached", lastEventSeq: 3 } })
+      );
+      const idle = vi.fn(async (_id: string, next: unknown) =>
+        conversation({ budget: next as typeof budget, spentUsd: 1.02, runtime: { status: "idle", stopReason: "budget_reached", lastEventSeq: 3 } })
+      );
+      const first = vi.fn(async () => undefined);
+      const a = open(getConversation, stillPaused, first);
+      await waitFor(() => expect(a.result.current.budgetExhausted).toBe(true));
+      await act(async () => {
+        await a.result.current.updateBudget({ maxCostUsd: 5, onReach: "pause" }, { continue: true });
+      });
+      expect(first).toHaveBeenCalledTimes(1);
+
+      const second = vi.fn(async () => undefined);
+      const b = open(getConversation, idle, second);
+      await waitFor(() => expect(b.result.current.budgetExhausted).toBe(true));
+      await act(async () => {
+        await b.result.current.updateBudget({ maxCostUsd: 5, onReach: "pause" }, { continue: true });
+      });
+      expect(second).not.toHaveBeenCalled();
+    });
+
+    it("the flag of an earlier stop does not outlive the next turn", async () => {
+      const getConversation = vi.fn(async () => ({
+        conversation: conversation({ budget: { maxCostUsd: 5, onReach: "pause" }, spentUsd: 1, continuable: false, runtime: { status: "idle", stopReason: "end_turn", lastEventSeq: 3 } }),
+        messages: [message({ id: "u1", role: "user", content: "go" })],
+      }));
+      const sendMessageStream = vi.fn(async (_c: string, _o: unknown, cb: StreamCallbacks) => {
+        cb.onDone?.({ type: "stream.done", conversationId: "c1", messageId: "m2", content: "cut", stopReason: "budget_reached", budget: { maxCostUsd: 5, onReach: "pause" }, spentUsd: 5.1, timestamp: 2 });
+      });
+      const { result } = renderHook(
+        () => useChat({ transport: makeTransport({ getConversation, sendMessageStream }), agentId: "agent", conversationId: "c1" }),
+        { wrapper }
+      );
+      await waitFor(() => expect(result.current.conversation?.continuable).toBe(false));
+      await act(async () => {
+        await result.current.sendMessage("more");
+      });
+      expect(result.current.conversation?.runtime?.status).toBe("budget_paused");
+      expect(result.current.conversation?.continuable).toBeUndefined();
+    });
   });
 
   it("raises the limit but does not ask to continue when the server's answer says the conversation is idle already", async () => {

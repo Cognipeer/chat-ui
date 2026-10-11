@@ -162,6 +162,44 @@ describe("tool calls the turn paused on", () => {
     expect(screen.queryByRole("img", { name: "Waiting for your answer" })).toBeNull();
   });
 
+  it("a card restored with no stored call (a reload) still shows its row, waiting", () => {
+    // a conversation loaded again has the cards, not the calls that led to them
+    const question = message({
+      content: "",
+      status: "requires_action",
+      pendingActions: [{ id: "q1", type: "user_question", questions: [{ question: "Which environment?" }] }],
+    });
+    const { unmount } = render(<ChatMessage message={question} />);
+    expect(screen.getByRole("img", { name: "Waiting for your answer" }).getAttribute("data-chat-tool-status")).toBe("waiting");
+    expect(screen.getByText("Ask User Question")).toBeTruthy();
+    unmount();
+
+    const approval = message({
+      content: "",
+      status: "requires_action",
+      pendingActions: [{ id: "a1", type: "tool_approval", toolName: "deploy_service", toolCallId: "call_1", args: { env: "prod" } }],
+    });
+    render(<ChatMessage message={approval} />);
+    expect(screen.getByRole("img", { name: "Waiting for your answer" })).toBeTruthy();
+    expect(screen.getByText("Deploy Service")).toBeTruthy();
+  });
+
+  it("the row of a restored card goes away once the card has an outcome, and a streamed call is not shown twice", () => {
+    const restored = message({
+      content: "",
+      status: "requires_action",
+      pendingActions: [{ id: "q1", type: "user_question", questions: [{ question: "Which environment?" }] }],
+      actionStates: { q1: { status: "resolved" } },
+    });
+    const { unmount } = render(<ChatMessage message={restored} />);
+    expect(screen.queryByRole("img", { name: "Waiting for your answer" })).toBeNull();
+    expect(screen.queryByText("Ask User Question")).toBeNull();
+    unmount();
+
+    render(<ChatMessage message={ask} />);
+    expect(screen.getAllByText("Ask User Question")).toHaveLength(1);
+  });
+
   it("calls of a message that paused on nothing keep their tick", () => {
     render(<ChatMessage message={message({ content: "done", metadata: { toolCallDetails: [{ id: "t1", name: "search", args: {} }] } })} />);
     expect(screen.queryByRole("img", { name: "Waiting for your answer" })).toBeNull();

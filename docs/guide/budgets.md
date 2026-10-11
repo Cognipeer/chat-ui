@@ -15,7 +15,7 @@ Conversation usage                    $1.25 of $5.00 used
 
 | `onReach` | When the limit is used up |
 | --- | --- |
-| `pause` | The conversation is paused and carries on from where it stopped once the limit is raised. `runtime.status` is `budget_paused`. |
+| `pause` | The conversation is paused and carries on from where it stopped once the limit is raised. `runtime.status` is `budget_paused`, and a turn the limit stopped midway stays that way after the raise until it is continued (or a new message abandons it). |
 | `stop` | The conversation has ended. Raising the limit reopens it, but nothing is carried on. The notice does not promise to. |
 
 In both cases the composer is closed (`composerState` is `budget_paused`) and the last answer carries the "usage limit" notice. A send the server refuses with `budget_reached` (402) makes the page fetch the conversation again, which shows the notice.
@@ -59,7 +59,9 @@ await chat.updateBudget(null);                     // remove the limit
 await chat.continueConversation();                 // carry on a paused turn
 ```
 
-`updateBudget` resolves `false` when the server refused the change and `error` says why. With `continue: true` a conversation that was paused on its limit carries on afterwards, as a new assistant message - but only when the server's answer to the change still says `budget_paused`. When the answer says the conversation is idle (the turn had already finished its answer, or raising the limit released it) there is nothing to carry on and no `continue` request is made; a server that does not report the runtime keeps the old behaviour. When a continuation ends the conversation is fetched again, so what it has cost (`spentUsd`) is the server's figure even where the end of the turn does not carry it. A "nothing to continue" answer (someone else already did, or the agent cannot be continued) is not an error. It resolves `true` once the limit is changed, whatever the continuation then does. `canUpdateBudget` and `canContinue` say whether the transport can do it at all.
+`updateBudget` resolves `false` when the server refused the change and `error` says why. With `continue: true` the turn the limit stopped carries on afterwards, as a new assistant message - but only when the server's answer to the change says it can: `continuable: true`. A turn the limit stopped midway stays `budget_paused` after the raise and is `continuable`; a turn that had already finished its answer before the limit is not (the raise only reopens the conversation), and no `continue` request is made. A server that does not send `continuable` is read by the runtime its answer reports (still `budget_paused` means carry on), and one that reports neither keeps what the page knew. `continuable` is on the answer to the change and on a loaded conversation (`Conversation.continuable`). When a continuation ends the conversation is fetched again, so what it has cost (`spentUsd`) and the meter are the server's figures even where the end of the turn does not carry them. A "nothing to continue" answer (someone else already did, or the agent cannot be continued) is not an error. It resolves `true` once the limit is changed, whatever the continuation then does. `canUpdateBudget` and `canContinue` say whether the transport can do it at all.
+
+A paused conversation whose limit has room again (raised in another window, or here when the continuation failed) shows **Continue** beside the field for a new limit, so a person who can edit the limit does not have to raise it a second time just to carry on.
 
 `onBudgetReached({ conversationId, budget, spentUsd })` is called when a turn ends on the limit.
 

@@ -129,6 +129,57 @@ describe("applyFollowEvent", () => {
       expect(next.text).toBe("");
       expect(next.snapshotRunId).toBeUndefined();
     });
+
+    it("the replayed start of the run, which names no run, keeps what the snapshot brought", () => {
+      // agent-server stamps neither the frame nor its data: the start of the run the snapshot stands for reads `{ trigger }`
+      const start = ev("session.status_running", { trigger: "message" }, 2);
+      const state = fold([snapshot({ run_id: "run_1", text: "Half of an ans" }), start, ev("agent.message.delta", { text: "wer", run_id: "run_1" })]);
+      expect(state.text).toBe("Half of an answer");
+      expect(state.snapshotRunId).toBe("run_1");
+      // it is not marked as a new run either: a repeat of the same start (a reconnect) still keeps the text
+      expect(fold([snapshot({ run_id: "run_1", text: "Half" }), start, start]).text).toBe("Half");
+    });
+
+    it("a snapshot that names no run is kept by a start that names none, and the start's run is adopted", () => {
+      const state = fold([snapshot({ text: "Half" }), ev("session.status_running", {}, 2)]);
+      expect(state.text).toBe("Half");
+      const named = fold([snapshot({ text: "Half" }), { ...ev("session.status_running", {}, 2), runId: "run_9" }]);
+      expect(named.text).toBe("Half");
+      expect(named.snapshotRunId).toBe("run_9");
+      // the run id inside the data counts too
+      expect(fold([snapshot({ run_id: "run_1", text: "Half" }), ev("session.status_running", { run_id: "run_1" }, 2)]).text).toBe("Half");
+      expect(fold([snapshot({ run_id: "run_1", text: "Half" }), ev("session.status_running", { run_id: "run_2" }, 2)]).text).toBe("");
+    });
+
+    it("a different run proves itself on a delta as well: the seeded text is not carried into it", () => {
+      const state = fold([
+        snapshot({ run_id: "run_1", text: "Old answer" }),
+        ev("agent.message.delta", { text: "New ", run_id: "run_2" }),
+        ev("agent.message.delta", { text: "one", run_id: "run_2" }),
+      ]);
+      expect(state.text).toBe("New one");
+      expect(state.snapshotRunId).toBe("run_2");
+      expect(state.seeded).toBe(false);
+      // a delta of the snapshot's own run, or one that names no run, adds to the text
+      expect(fold([snapshot({ run_id: "run_1", text: "Old " }), ev("agent.message.delta", { text: "answer", run_id: "run_1" })]).text).toBe("Old answer");
+      expect(fold([snapshot({ run_id: "run_1", text: "Old " }), ev("agent.message.delta", { text: "answer" })]).text).toBe("Old answer");
+    });
+
+    it("a start after the turn went idle is a new turn, whether or not it names a run", () => {
+      const state = fold([
+        snapshot({ run_id: "run_1", text: "Done" }),
+        ev("session.status_idle", { stop_reason: "end_turn" }, 4),
+        ev("session.status_running", {}, 5),
+      ]);
+      expect(state.text).toBe("");
+      expect(state.idle).toBeUndefined();
+      expect(state.snapshotRunId).toBeUndefined();
+    });
+
+    it("a turn followed without a snapshot starts empty at its start, as before", () => {
+      const state = fold([ev("agent.message.delta", { text: "stale" }), ev("session.status_running", {}, 2), ev("agent.message.delta", { text: "fresh" })]);
+      expect(state.text).toBe("fresh");
+    });
   });
 
   it("never moves the cursor back and does not mutate the state it was given", () => {

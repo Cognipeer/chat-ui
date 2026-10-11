@@ -53,6 +53,7 @@ const {
   canContinue: boolean;               // the transport can carry on a turn the limit stopped
   canUpdateBudget: boolean;
   continueConversation: () => Promise<boolean>;
+  // continue: true calls /continue exactly when the server's answer says continuable (older servers: status budget_paused)
   updateBudget: (budget: ConversationBudget | null, options?: { continue?: boolean }) => Promise<boolean>;
 
   // Direct state control
@@ -181,6 +182,7 @@ interface UseChatReturn {
   canContinue: boolean;               // the transport can carry on a turn the limit stopped
   canUpdateBudget: boolean;
   continueConversation: () => Promise<boolean>;
+  // continue: true calls /continue exactly when the server's answer says continuable (older servers: status budget_paused)
   updateBudget: (budget: ConversationBudget | null, options?: { continue?: boolean }) => Promise<boolean>;
 
   // Direct state control

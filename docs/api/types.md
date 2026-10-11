@@ -172,6 +172,12 @@ interface Conversation {
   /** The spend limit; `null` when it was removed */
   budget?: ConversationBudget | null;
   spentUsd?: number;
+  /**
+   * A turn the limit stopped midway can be carried on (it stays `budget_paused` after a raise until
+   * it is continued). `false`: it had finished its answer, so a raise only reopens the conversation.
+   * Absent on a server that does not say.
+   */
+  continuable?: boolean;
   createdAt: Date;
   updatedAt: Date;
 }

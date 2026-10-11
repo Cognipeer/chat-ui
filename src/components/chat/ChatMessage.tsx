@@ -3,7 +3,7 @@
 import React from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { cn, formatFileSize, imagePartSource, isFileExpired, isImageType, isRasterImageType, safeFileHref, safeImageSrc, messageText, waitingToolCallIds } from "../../utils";
+import { cn, formatFileSize, imagePartSource, isFileExpired, isImageType, isRasterImageType, safeFileHref, safeImageSrc, messageText, waitingToolCallIds, callsWithOpenActions, type ToolCallRow } from "../../utils";
 import {
   insertCitationMarkers,
   parseCitationHref,
@@ -711,12 +711,25 @@ function formatTime(date: Date): string {
   });
 }
 
+/** The tool calls a completed message stored (`metadata.toolCallDetails`) */
+function storedToolCalls(message: Message): ToolCallRow[] {
+  const details = (message.metadata as Record<string, unknown> | undefined)?.toolCallDetails;
+  return Array.isArray(details) ? (details as ToolCallRow[]) : [];
+}
+
+/**
+ * The rows to show for a message: the stored calls, and a row for every open approval or question
+ * that has none (a conversation loaded again knows its cards, not the calls that led to them)
+ */
+function toolCallsOf(message: Message): ToolCallRow[] {
+  return callsWithOpenActions(message, storedToolCalls(message));
+}
+
 /**
  * Check if a message has tool call details
  */
 function hasToolCalls(message: Message): boolean {
-  const details = (message.metadata as Record<string, unknown> | undefined)?.toolCallDetails;
-  return Array.isArray(details) && details.length > 0;
+  return toolCallsOf(message).length > 0;
 }
 
 /**
@@ -724,12 +737,10 @@ function hasToolCalls(message: Message): boolean {
  */
 function MessageToolCalls({ message }: { message: Message }) {
   const meta = message.metadata as Record<string, unknown> | undefined;
-  const details = meta?.toolCallDetails as
-    | Array<{ id: string; name: string; args: Record<string, unknown>; result?: unknown }>
-    | undefined;
+  const details = toolCallsOf(message);
   const durationSeconds = meta?.toolCallDurationSeconds as number | undefined;
 
-  if (!details || details.length === 0) return null;
+  if (details.length === 0) return null;
 
   // A call the turn paused on (an approval or a question that is still open) is not a finished one
   const waitingIds = waitingToolCallIds(message, details);

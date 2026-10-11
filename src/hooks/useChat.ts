@@ -10,6 +10,7 @@ import {
   expireLapsedActions,
   generateId,
   isBudgetExhausted,
+  canContinueAfterRaise,
   isConflictCode,
   isFileExpired,
   isFileTypeAllowed,
@@ -885,8 +886,10 @@ export function useChat(options: UseChatOptions): UseChatReturn {
                 setConversation((prev) => {
                   if (!prev) return prev;
                   const nextBudget = budget === undefined ? prev.budget : budget;
+                  // a new turn ended: whether an earlier stop can be carried on no longer describes the conversation
+                  const { continuable: _earlier, ...current } = prev;
                   return {
-                    ...prev,
+                    ...current,
                     ...(event.title ? { title: event.title } : {}),
                     ...(nextBudget !== undefined ? { budget: nextBudget } : {}),
                     ...(typeof event.spentUsd === "number" ? { spentUsd: event.spentUsd } : {}),
@@ -1031,6 +1034,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         controller.abort();
         return;
       }
+      const previous = state;
       state = applyFollowEvent(state, event);
       switch (event.type) {
         case "user.message":
@@ -1056,6 +1060,11 @@ export function useChat(options: UseChatOptions): UseChatReturn {
           setProgressMessage("");
           streamingTextRef.current = state.text;
           setStreamingText(state.text);
+          // a delta of another run than the snapshot's starts that run's calls afresh
+          if (state.tools !== previous.tools) {
+            activeToolCallsRef.current = new Map(state.tools);
+            setActiveToolCalls(new Map(state.tools));
+          }
           break;
         case "agent.tool_use":
         case "agent.tool_result":
@@ -1830,10 +1839,13 @@ export function useChat(options: UseChatOptions): UseChatReturn {
           if (!prev) return prev;
           const spentUsd = typeof updated.spentUsd === "number" ? updated.spentUsd : prev.spentUsd;
           const stillUsedUp = Boolean(budget && typeof spentUsd === "number" && spentUsd >= budget.maxCostUsd);
+          // what the page knew about carrying on is the server's to restate with every change
+          const { continuable: _previous, ...kept } = prev;
           return {
-            ...prev,
+            ...kept,
             budget,
             ...(spentUsd !== undefined ? { spentUsd } : {}),
+            ...(typeof updated.continuable === "boolean" ? { continuable: updated.continuable } : {}),
             // The server reports the runtime once the limit changed; without it a raised limit frees a paused chat
             runtime:
               updated.runtime ??
@@ -1841,12 +1853,13 @@ export function useChat(options: UseChatOptions): UseChatReturn {
           };
         });
         // The limit is changed. Carrying on is a turn of its own: how it went is in `error` (and nothing
-        // to carry on, a handler agent that cannot be continued, is not worth one). Only a turn the budget
-        // still holds paused is carried on: when the server's answer says the conversation is idle (the turn
-        // had finished, or raising the limit already released it) a continue would only be refused. A server
-        // that does not report the runtime leaves it to what this page knew.
-        const stillPaused = updated.runtime ? updated.runtime.status === "budget_paused" : wasPaused && !usedUpAfter;
-        if (opts.continue && wasPaused && stillPaused) await continueConversation();
+        // to carry on, a handler agent that cannot be continued, is not worth one). The turn a budget
+        // stopped midway stays paused after a raise until it is continued, and the server's answer says so
+        // (`continuable`); a turn that had finished its answer before the limit is not (the raise only
+        // reopens the conversation, a continue would only be refused). An older server says it with the
+        // runtime it reports (still `budget_paused`), and one that reports nothing leaves it to what this
+        // page knew.
+        if (opts.continue && canContinueAfterRaise(updated, wasPaused && !usedUpAfter)) await continueConversation();
         return true;
       } catch (err) {
         if (sessionRef.current !== capturedSession) return true;

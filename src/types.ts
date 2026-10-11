@@ -292,6 +292,13 @@ export interface Conversation {
   budget?: ConversationBudget | null;
   /** What the conversation's turns have cost so far, in USD */
   spentUsd?: number;
+  /**
+   * A turn the budget stopped midway can be carried on (`POST /continue`). It stays `budget_paused`
+   * after the limit was raised until it is continued or a new message abandons it. `false`: the
+   * turn had finished its answer before the limit, so raising the limit only reopens the
+   * conversation. Absent when the server does not say (older servers: `runtime.status` decides).
+   */
+  continuable?: boolean;
   createdAt: Date;
   updatedAt: Date;
 }

@@ -333,12 +333,22 @@ export function actionDeadline(action: Pick<PendingAction, "expiresAt">): number
 /** A tool whose whole job is asking the person something (`ask_user_question`, `AskUserQuestion`, ...). */
 const isQuestionTool = (name: string) => /question|askuser/.test(name.toLowerCase().replace(/[^a-z]/g, ""));
 
+/** The actions of a message that still wait for the person: not settled, and their deadline not passed. */
+function openActionsOf(message: Pick<Message, "pendingActions" | "actionStates">, now: number): PendingAction[] {
+  return (message.pendingActions ?? []).filter((action) => {
+    const status = message.actionStates?.[action.id]?.status;
+    if (status && status !== "pending" && status !== "resolving") return false;
+    const at = actionDeadline(action);
+    return status === "resolving" || at === undefined || at > now;
+  });
+}
+
 /**
  * The tool calls of a paused message that still wait for the person: the ones its open approvals name
- * (`toolCallId`), and, for an open question (which names none), the calls of the question tool that
- * have no result. A call that is waiting is not a finished one, so it must not be drawn with the
- * "done" tick. Nothing is waiting once every card of the message has an outcome (answered, cancelled,
- * expired) or its deadline passed.
+ * (`toolCallId`, or the action's own id for a row `callsWithOpenActions` made), and, for an open
+ * question (which names none), the calls of the question tool that have no result. A call that is
+ * waiting is not a finished one, so it must not be drawn with the "done" tick. Nothing is waiting once
+ * every card of the message has an outcome (answered, cancelled, expired) or its deadline passed.
  */
 export function waitingToolCallIds(
   message: Pick<Message, "pendingActions" | "actionStates">,
@@ -346,12 +356,7 @@ export function waitingToolCallIds(
   now: number = Date.now()
 ): Set<string> {
   const waiting = new Set<string>();
-  const open = (message.pendingActions ?? []).filter((action) => {
-    const status = message.actionStates?.[action.id]?.status;
-    if (status && status !== "pending" && status !== "resolving") return false;
-    const at = actionDeadline(action);
-    return status === "resolving" || at === undefined || at > now;
-  });
+  const open = openActionsOf(message, now);
   if (open.length === 0 || calls.length === 0) return waiting;
 
   const known = new Set(calls.map((call) => call.id));
@@ -359,6 +364,7 @@ export function waitingToolCallIds(
   for (const action of open) {
     const id = (action as { toolCallId?: unknown }).toolCallId;
     if (typeof id === "string" && known.has(id)) waiting.add(id);
+    else if (known.has(action.id)) waiting.add(action.id);
     else if (action.type === "user_question") unnamedQuestions += 1;
   }
   if (unnamedQuestions > 0) {
@@ -366,6 +372,55 @@ export function waitingToolCallIds(
     for (const call of candidates.slice(-unnamedQuestions)) waiting.add(call.id);
   }
   return waiting;
+}
+
+/** A tool call as the message's tool-call row lists it. */
+export interface ToolCallRow {
+  id: string;
+  name: string;
+  args: Record<string, unknown>;
+  result?: unknown;
+  reasoning?: string;
+  displayName?: string;
+}
+
+/** How the call of an open question is named when the host never streamed one. */
+const QUESTION_CALL_NAME = "ask_user_question";
+
+/**
+ * The tool-call rows of a paused message with the ones its open cards stand for. A turn that is live on
+ * this page streamed its calls, so each open card already has its row; a conversation loaded again
+ * (a reload, a second window) has only the cards. Every open approval or question without a row of its
+ * own gets one, which `waitingToolCallIds` then marks as waiting, so the restored card reads like the
+ * live one. Rows are added only while a card is open: an answered one leaves the transcript as stored.
+ */
+export function callsWithOpenActions(
+  message: Pick<Message, "pendingActions" | "actionStates">,
+  calls: ReadonlyArray<ToolCallRow>,
+  now: number = Date.now()
+): ToolCallRow[] {
+  const open = openActionsOf(message, now);
+  if (open.length === 0) return calls.slice();
+
+  const known = new Set(calls.map((call) => call.id));
+  // a question call without a result already stands for one open question
+  let covered = calls.filter((call) => call.result === undefined && isQuestionTool(call.name)).length;
+  const added: ToolCallRow[] = [];
+  for (const action of open) {
+    if (action.type === "tool_approval") {
+      const id = action.toolCallId ?? action.id;
+      if (known.has(id) || known.has(action.id)) continue;
+      added.push({ id, name: action.toolName, args: action.args ?? {} });
+    } else {
+      if (known.has(action.id)) continue;
+      if (covered > 0) {
+        covered -= 1;
+        continue;
+      }
+      added.push({ id: action.id, name: QUESTION_CALL_NAME, args: {} });
+    }
+  }
+  return added.length > 0 ? [...calls, ...added] : calls.slice();
 }
 
 /**

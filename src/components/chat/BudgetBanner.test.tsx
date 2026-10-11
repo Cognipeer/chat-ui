@@ -72,6 +72,24 @@ describe("BudgetBanner when the limit is used up", () => {
     expect(screen.queryByRole("button")).toBeNull();
   });
 
+  it("with room under the limit (raised, the stopped turn still waits) a person who can edit it still gets Continue", () => {
+    const onContinue = vi.fn();
+    render(<BudgetBanner budget={pause} spentUsd={1.02} exhausted canContinue canEdit onContinue={onContinue} onUpdate={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    expect(onContinue).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "Increase and continue" })).toBeTruthy();
+    cleanup();
+
+    // used up: the field is the way forward, not Continue
+    render(<BudgetBanner budget={pause} spentUsd={5.1} exhausted canContinue canEdit onUpdate={vi.fn()} />);
+    expect(screen.queryByRole("button", { name: "Continue" })).toBeNull();
+    cleanup();
+
+    // an ended (stop) conversation never promises to carry on
+    render(<BudgetBanner budget={stop} spentUsd={1.02} exhausted canContinue canEdit onUpdate={vi.fn()} />);
+    expect(screen.queryByRole("button", { name: "Continue" })).toBeNull();
+  });
+
   it("raises the limit and continues, after checking it is above what was spent", () => {
     const onUpdate = vi.fn();
     render(<BudgetBanner budget={pause} spentUsd={5.1} exhausted canEdit onUpdate={onUpdate} />);

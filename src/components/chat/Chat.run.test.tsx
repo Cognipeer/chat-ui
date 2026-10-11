@@ -197,6 +197,25 @@ describe("Chat and the conversation's usage limit", () => {
     expect(screen.getByText("$5.60 of $10.00 used")).toBeTruthy();
   });
 
+  it("Increase and continue only reopens when the server says the turn is not continuable (it had finished its answer)", async () => {
+    const updateBudget = vi.fn(async (_id: string, next: unknown) =>
+      conversation({ budget: next as typeof budget, spentUsd: 5.2, continuable: false, runtime: { status: "idle", stopReason: "budget_reached", lastEventSeq: 4 } })
+    );
+    const continueConversation = vi.fn(async () => undefined);
+    renderChat(
+      transportFor({ conversation: pausedConversation(), messages: [user, message({ id: "m2", content: "a complete answer" })], overrides: { updateBudget, continueConversation } }),
+      { conversationId: "c1", allowBudgetEdit: true }
+    );
+    fireEvent.change((await screen.findByLabelText("New limit (USD)")) as HTMLInputElement, { target: { value: "10" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Increase and continue" }));
+    });
+    expect(updateBudget).toHaveBeenCalledWith("c1", { maxCostUsd: 10, onReach: "pause" });
+    await waitFor(() => expect(textbox().disabled).toBe(false));
+    expect(continueConversation).not.toHaveBeenCalled();
+    expect(screen.getByText("$5.20 of $10.00 used")).toBeTruthy();
+  });
+
   it("the agent can allow Continue on its own", async () => {
     const continueConversation = vi.fn(async () => undefined);
     renderChat(

@@ -163,6 +163,8 @@ export {
   messageStopReason,
   stopNoticeKind,
   isBudgetExhausted,
+  canContinueAfterRaise,
+  readContinuable,
   formatUsd,
   type StopNoticeKind,
 } from "./utils/runtime";

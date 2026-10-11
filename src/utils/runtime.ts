@@ -152,6 +152,36 @@ export function normalizeBudget(value: unknown): ConversationBudget | null | und
   return { maxCostUsd: max, onReach: onReach === "stop" ? "stop" : "pause" };
 }
 
+/**
+ * `continuable` as a server said it: the first candidate that is a boolean, or an object (the
+ * conversation, its runtime) whose `continuable` is one. Undefined when none says, which is an
+ * older server: `runtime.status` then decides.
+ */
+export function readContinuable(...candidates: unknown[]): boolean | undefined {
+  for (const candidate of candidates) {
+    if (typeof candidate === "boolean") return candidate;
+    if (candidate && typeof candidate === "object") {
+      const own = (candidate as { continuable?: unknown }).continuable;
+      if (typeof own === "boolean") return own;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Whether a raised limit leaves a stopped turn to carry on, from the server's answer to the change:
+ * its `continuable` when it says, else (an older server) whether the runtime it reports is still
+ * `budget_paused`. An answer without either leaves it to what the page knew (`fallback`).
+ */
+export function canContinueAfterRaise(
+  answer: Pick<Conversation, "continuable" | "runtime">,
+  fallback: boolean
+): boolean {
+  if (typeof answer.continuable === "boolean") return answer.continuable;
+  if (answer.runtime) return answer.runtime.status === "budget_paused";
+  return fallback;
+}
+
 type WithBudget = Pick<Conversation, "runtime" | "budget" | "spentUsd"> | Pick<ConversationListItem, "runtime" | "budget" | "spentUsd">;
 
 /**

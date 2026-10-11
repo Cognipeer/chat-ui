@@ -16,7 +16,10 @@ export interface BudgetBannerProps {
   exhausted: boolean;
   /** Show the spent / limit bar (also while there is room left) */
   showMeter?: boolean;
-  /** Offer "Continue": for a paused conversation whose limit has room again (raised somewhere else) */
+  /**
+   * Offer "Continue": for a paused conversation whose limit has room again (raised somewhere else, or
+   * here when carrying on failed). Without `canEdit` it is offered whenever the conversation is paused.
+   */
   canContinue?: boolean;
   /** Offer a field to raise the limit, with "Increase and continue" / "Remove limit" */
   canEdit?: boolean;
@@ -70,6 +73,8 @@ export function BudgetBanner({
   };
 
   const fraction = budget && budget.maxCostUsd > 0 ? Math.min(1, spent / budget.maxCostUsd) : 0;
+  // The limit was raised (here or elsewhere) and the stopped turn still waits: it only needs "Continue"
+  const hasRoom = budget !== null && spent < budget.maxCostUsd;
 
   return (
     <div className={cn("space-y-2", className)} data-chat-budget={exhausted ? (stops ? "stopped" : "paused") : "ok"}>
@@ -109,7 +114,7 @@ export function BudgetBanner({
             </div>
           </div>
 
-          {canContinue && !canEdit && !stops && (
+          {canContinue && !stops && (!canEdit || hasRoom) && (
             <div className="mt-3">
               <button type="button" onClick={onContinue} disabled={busy} className={PRIMARY_BUTTON}>
                 {busy && <LoadingIcon className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" />}

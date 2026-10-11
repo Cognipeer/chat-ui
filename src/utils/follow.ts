@@ -24,10 +24,16 @@ export interface FollowState {
   /** The user message of the followed turn, when its `user.message` (or the reattach snapshot) was in the part we saw */
   userMessage?: { id: string; content: string; files?: FileAttachment[] };
   /**
-   * The run a reattach snapshot (`agent.message.snapshot`) seeded the text from. Its own
-   * `session.status_running`, replayed after the snapshot, must not wipe that text.
+   * The run a reattach snapshot (`agent.message.snapshot`) seeded the text from, when it named one.
+   * Its own `session.status_running`, replayed after the snapshot, must not wipe that text.
    */
   snapshotRunId?: string;
+  /**
+   * The text comes from a reattach snapshot and no later run has proved otherwise. While it is set a
+   * replayed `session.status_running` that names no run (or the snapshot's own) keeps the text; only a
+   * different run (named on a start or on a delta), or a start after the turn went idle, begins afresh.
+   */
+  seeded?: boolean;
   /** The turn is over: why, and the runtime's wording */
   idle?: { stopReason?: StopReason; detail?: string; pendingActionIds: string[] };
   error?: { message: string; code?: string };
@@ -38,6 +44,9 @@ export interface FollowState {
 export const newFollowState = (): FollowState => ({ text: "", streamed: false, tools: new Map() });
 
 const asString = (value: unknown): string | undefined => (typeof value === "string" ? value : undefined);
+/** The run an event belongs to: stamped on the frame, or inside its data (a delta carries it there). */
+const runIdOf = (event: ConversationEvent, data: Record<string, unknown>): string | undefined =>
+  asString(event.runId) ?? asString(data.run_id) ?? asString(data.runId);
 const asRecord = (value: unknown): Record<string, unknown> =>
   value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 
@@ -71,14 +80,17 @@ export function applyFollowEvent(state: FollowState, event: ConversationEvent): 
       : state;
 
   switch (event.type) {
-    case "session.status_running":
-      // The run the snapshot seeded is the one that starts here (the log is replayed from before it began):
-      // what the snapshot brought stays
-      if (base.snapshotRunId !== undefined && event.runId === base.snapshotRunId) {
-        return { ...base, idle: undefined, error: undefined };
+    case "session.status_running": {
+      // The log is replayed from before the run began, so the snapshot's own start comes through again: it
+      // names the snapshot's run, or (a server that does not stamp it on the event) no run at all. What the
+      // snapshot brought stays until another run proves itself.
+      const incoming = runIdOf(event, data);
+      if (base.seeded && !base.idle && (incoming === undefined || base.snapshotRunId === undefined || incoming === base.snapshotRunId)) {
+        return { ...base, error: undefined, snapshotRunId: base.snapshotRunId ?? incoming };
       }
       // A new turn begins: nothing of the previous one is on screen any more
-      return { ...base, text: "", streamed: false, tools: new Map(), idle: undefined, error: undefined, messageId: undefined, snapshotRunId: undefined };
+      return { ...base, text: "", streamed: false, tools: new Map(), idle: undefined, error: undefined, messageId: undefined, snapshotRunId: undefined, seeded: false };
+    }
 
     case "agent.message.snapshot": {
       // The server's first frame to a follower that joins a run in progress: everything the run has
@@ -91,7 +103,9 @@ export function applyFollowEvent(state: FollowState, event: ConversationEvent): 
         ...base,
         text,
         streamed: text.length > 0 ? true : base.streamed,
-        snapshotRunId: asString(data.run_id) ?? asString(data.runId) ?? event.runId ?? base.snapshotRunId,
+        snapshotRunId: runIdOf(event, data) ?? base.snapshotRunId,
+        seeded: true,
+        idle: undefined,
         ...(userId ? { userMessage: { id: userId, content: asString(user.content) ?? "", files: filesOf(user.files) } } : {}),
       };
     }
@@ -108,6 +122,17 @@ export function applyFollowEvent(state: FollowState, event: ConversationEvent): 
     case "agent.message.delta": {
       const text = asString(data.text);
       if (!text) return base;
+      if (base.seeded) {
+        const incoming = runIdOf(event, data);
+        // A delta of another run than the snapshot's: that run began without us seeing its start, and
+        // nothing the snapshot seeded belongs to it
+        if (incoming !== undefined && base.snapshotRunId !== undefined && incoming !== base.snapshotRunId) {
+          return { ...base, text, streamed: true, tools: new Map(), idle: undefined, error: undefined, messageId: undefined, snapshotRunId: incoming, seeded: false };
+        }
+        if (incoming !== undefined && base.snapshotRunId === undefined) {
+          return { ...base, text: base.text + text, streamed: true, snapshotRunId: incoming };
+        }
+      }
       return { ...base, text: base.text + text, streamed: true };
     }
 

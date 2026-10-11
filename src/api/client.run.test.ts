@@ -253,6 +253,29 @@ describe("AgentServerClient budget and continue", () => {
     expect(updated).toMatchObject({ id: "c1", budget: { maxCostUsd: 20, onReach: "pause" }, spentUsd: 0.42, runtime: { status: "idle", stopReason: "budget_reached" } });
   });
 
+  it("reads `continuable` from the PATCH answer: on the conversation, beside it, or in its runtime; absent when nothing says", async () => {
+    const answer = async (body: unknown) => {
+      const fetchMock = vi.fn(async () => json(body));
+      return new AgentServerClient({ baseUrl: "http://x", fetch: as(fetchMock) }).updateBudget("c1", { maxCostUsd: 20, onReach: "pause" });
+    };
+    const paused = { status: "budget_paused", stopReason: "budget_reached", lastEventSeq: 4 };
+    expect(await answer({ id: "c1", budget: { maxCostUsd: 20, onReach: "pause" }, continuable: true, runtime: paused })).toMatchObject({ continuable: true, runtime: { status: "budget_paused" } });
+    expect(await answer({ id: "c1", continuable: false, runtime: paused })).toMatchObject({ continuable: false });
+    expect(await answer({ conversation: { id: "c1", runtime: paused }, continuable: true })).toMatchObject({ id: "c1", continuable: true });
+    expect(await answer({ id: "c1", runtime: { ...paused, continuable: false } })).toMatchObject({ continuable: false });
+    expect(await answer({ id: "c1", runtime: paused })).not.toHaveProperty("continuable");
+    expect(await answer({ id: "c1", continuable: "yes" })).not.toHaveProperty("continuable");
+  });
+
+  it("reads `continuable` from a loaded conversation too", async () => {
+    const load = async (body: unknown) =>
+      (await new AgentServerClient({ baseUrl: "http://x", fetch: as(vi.fn(async () => json(body))) }).getConversation("c1")).conversation;
+    const paused = { status: "budget_paused", stopReason: "budget_reached", lastEventSeq: 4 };
+    expect(await load({ conversation: { id: "c1", runtime: paused, continuable: true }, messages: [] })).toMatchObject({ continuable: true });
+    expect(await load({ conversation: { id: "c1", runtime: paused }, continuable: false, messages: [] })).toMatchObject({ continuable: false });
+    expect(await load({ conversation: { id: "c1", runtime: paused }, messages: [] })).not.toHaveProperty("continuable");
+  });
+
   it("removes it with null, and shows the refusal", async () => {
     const fetchMock = vi.fn(async () => json({ id: "c1", budget: null }));
     const client = new AgentServerClient({ baseUrl: "http://x", fetch: as(fetchMock) });

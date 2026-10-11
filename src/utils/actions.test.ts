@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Message, PendingAction } from "../types";
 import {
   actionDeadline,
+  callsWithOpenActions,
   collectPendingActions,
   expireLapsedActions,
   isQuestionRequired,
@@ -358,5 +359,73 @@ describe("waitingToolCallIds", () => {
     expect(waitingToolCallIds(paused({}), calls).size).toBe(0);
     expect(waitingToolCallIds(paused({ pendingActions: [question] }), []).size).toBe(0);
     expect(waitingToolCallIds(paused({ pendingActions: [question] }), [{ id: "t1", name: "search" }]).size).toBe(0);
+  });
+});
+
+describe("callsWithOpenActions", () => {
+  const open = (extra: Partial<Message>): Message => msg({ id: "m1", ...extra });
+
+  it("an open question that has no call gets the question tool's row, which then reads as waiting", () => {
+    const message = open({ pendingActions: [question] });
+    const calls = callsWithOpenActions(message, []);
+    expect(calls).toEqual([{ id: "q1", name: "ask_user_question", args: {} }]);
+    expect(Array.from(waitingToolCallIds(message, calls))).toEqual(["q1"]);
+  });
+
+  it("an open approval gets a row named after its tool (its call id when the action has one)", () => {
+    const named = open({ pendingActions: [{ ...approval, toolCallId: "call_7" }] });
+    expect(callsWithOpenActions(named, [])).toEqual([{ id: "call_7", name: "sandbox_exec", args: { cmd: "ls" } }]);
+    expect(Array.from(waitingToolCallIds(named, callsWithOpenActions(named, [])))).toEqual(["call_7"]);
+
+    const anonymous = open({ pendingActions: [approval] });
+    const calls = callsWithOpenActions(anonymous, []);
+    expect(calls).toEqual([{ id: "a1", name: "sandbox_exec", args: { cmd: "ls" } }]);
+    expect(Array.from(waitingToolCallIds(anonymous, calls))).toEqual(["a1"]);
+  });
+
+  it("a card whose call the turn streamed keeps that call: nothing is added twice", () => {
+    const withCall = open({ pendingActions: [{ ...approval, toolCallId: "call_7" }, question] });
+    const streamed = [
+      { id: "call_7", name: "sandbox_exec", args: { cmd: "ls" } },
+      { id: "t2", name: "ask_user_question", args: {} },
+    ];
+    expect(callsWithOpenActions(withCall, streamed)).toEqual(streamed);
+    // a second open question has no call of its own yet
+    const two = open({ pendingActions: [question, { ...question, id: "q2" }] });
+    const added = callsWithOpenActions(two, [{ id: "t2", name: "ask_user_question", args: {} }]);
+    expect(added.map((c) => c.id)).toEqual(["t2", "q2"]);
+    // a question call that already has its result is not standing for the open question
+    const answered = callsWithOpenActions(open({ pendingActions: [question] }), [{ id: "t2", name: "ask_user_question", args: {}, result: { ok: true } }]);
+    expect(answered.map((c) => c.id)).toEqual(["t2", "q1"]);
+  });
+
+  it("adds nothing for a card that has an outcome or whose deadline passed", () => {
+    for (const status of ["resolved", "cancelled", "expired"] as const) {
+      expect(callsWithOpenActions(open({ pendingActions: [question], actionStates: { q1: { status } } }), [])).toEqual([]);
+    }
+    const lapsed = { ...question, expiresAt: "2026-10-11T09:00:00Z" };
+    expect(callsWithOpenActions(open({ pendingActions: [lapsed] }), [], Date.parse("2026-10-11T10:00:00Z"))).toEqual([]);
+    // an answer being sent still shows its row
+    expect(callsWithOpenActions(open({ pendingActions: [question], actionStates: { q1: { status: "resolving" } } }), [])).toHaveLength(1);
+  });
+
+  it("a conversation restored with an open question and approval has a row for each, and a settled one has none", () => {
+    const restored = restorePendingActions(
+      [msg({ id: "u", role: "user" }), msg({ id: "a", status: "requires_action" })],
+      [question, { ...approval, toolCallId: "call_7" }]
+    );
+    const calls = callsWithOpenActions(restored[1], []);
+    expect(new Set(calls.map((c) => c.name))).toEqual(new Set(["ask_user_question", "sandbox_exec"]));
+    expect(waitingToolCallIds(restored[1], calls).size).toBe(2);
+
+    const settled = restorePendingActions([msg({ id: "a", status: "requires_action" })], []);
+    expect(callsWithOpenActions(settled[0], [])).toEqual([]);
+  });
+
+  it("returns a copy: the stored calls are never changed", () => {
+    const stored = [{ id: "t1", name: "search", args: {} }];
+    const out = callsWithOpenActions(open({}), stored);
+    expect(out).toEqual(stored);
+    expect(out).not.toBe(stored);
   });
 });

@@ -121,7 +121,10 @@ await client.continueConversation(conversationId, { stream: true, callbacks: { o
 const reply = await client.continueConversation(conversationId);            // JSON
 
 // Raise or remove the limit (PATCH /conversations/:id { budget })
+// The answer carries `continuable`: true only when a stopped turn can be resumed (call continueConversation then);
+// false when the turn had finished its answer before the limit, so the raise only reopens the conversation
 const updated = await client.updateBudget(conversationId, { maxCostUsd: 20, onReach: "pause" });
+if (updated.continuable) await client.continueConversation(conversationId);
 await client.updateBudget(conversationId, null);
 ```
 

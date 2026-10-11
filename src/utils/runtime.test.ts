@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  canContinueAfterRaise,
   formatUsd,
   isBudgetExhausted,
   isInterruptedTurn,
@@ -10,6 +11,7 @@ import {
   normalizeMessagesPage,
   normalizeRuntime,
   normalizeStopReason,
+  readContinuable,
   runtimeAfterTurn,
   stopNoticeKind,
 } from "./runtime";
@@ -194,5 +196,38 @@ describe("isInterruptedTurn", () => {
     expect(isInterruptedTurn([user], { status: "requires_action", stopReason: "error" })).toBe(false);
     expect(isInterruptedTurn([user], undefined)).toBe(false);
     expect(isInterruptedTurn([], stopped)).toBe(false);
+  });
+});
+
+describe("readContinuable", () => {
+  it("takes the first source that says it: a boolean, or an object whose `continuable` is one", () => {
+    expect(readContinuable(true)).toBe(true);
+    expect(readContinuable(undefined, { continuable: false }, true)).toBe(false);
+    expect(readContinuable("yes", null, { status: "idle" }, { continuable: true })).toBe(true);
+  });
+
+  it("is undefined when nothing says (an older server)", () => {
+    expect(readContinuable()).toBeUndefined();
+    expect(readContinuable(undefined, null, "true", 1, { continuable: "true" })).toBeUndefined();
+  });
+});
+
+describe("canContinueAfterRaise", () => {
+  const paused = { status: "budget_paused" as const, stopReason: "budget_reached" as const };
+  const idle = { status: "idle" as const, stopReason: "budget_reached" as const };
+
+  it("the server's `continuable` decides, whatever the runtime says", () => {
+    expect(canContinueAfterRaise({ continuable: true, runtime: idle }, false)).toBe(true);
+    expect(canContinueAfterRaise({ continuable: false, runtime: paused }, true)).toBe(false);
+  });
+
+  it("an older server is read by the runtime it reports: still budget_paused is to be carried on", () => {
+    expect(canContinueAfterRaise({ runtime: paused }, false)).toBe(true);
+    expect(canContinueAfterRaise({ runtime: idle }, true)).toBe(false);
+  });
+
+  it("an answer with neither leaves it to what the page knew", () => {
+    expect(canContinueAfterRaise({}, true)).toBe(true);
+    expect(canContinueAfterRaise({}, false)).toBe(false);
   });
 });
