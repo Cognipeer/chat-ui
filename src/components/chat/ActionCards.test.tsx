@@ -285,6 +285,28 @@ describe("ToolApprovalCard: editing the arguments", () => {
     expect(approve().disabled).toBe(false);
   });
 
+  it("says why Approve is off without opening the editor, and ties the reason to the button", () => {
+    // the agent proposed a call that does not fit its own schema
+    const proposed: Approval = { ...withSchema, args: { timeout: 0 } };
+    render(<ToolApprovalCard action={proposed} allowArgumentEdit onResolve={() => {}} />);
+    expect(screen.queryByRole("textbox", { name: "Arguments (JSON)" })).toBeNull();
+    expect(screen.getByText("command is required")).toBeTruthy();
+    expect(screen.getByText("timeout must be at least 1")).toBeTruthy();
+    expect(approve().disabled).toBe(true);
+    const reasons = screen.getByRole("alert");
+    expect(approve().getAttribute("aria-describedby")).toBe(reasons.id);
+
+    // opening the editor does not repeat them
+    open();
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
+    expect(editor().getAttribute("aria-describedby")).toBe(reasons.id);
+
+    fireEvent.change(editor(), { target: { value: '{"command":"ls"}' } });
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(approve().getAttribute("aria-describedby")).toBeNull();
+    expect(approve().disabled).toBe(false);
+  });
+
   it("still lets the person deny while the edit is invalid, without approvedArgs", () => {
     const onResolve = vi.fn();
     render(<ToolApprovalCard action={withSchema} allowArgumentEdit onResolve={onResolve} />);

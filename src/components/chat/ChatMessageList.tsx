@@ -1,11 +1,12 @@
 "use client";
 
-import React, { useRef, useEffect, useMemo, useState } from "react";
+import React, { useRef, useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { cn, collectPendingActions } from "../../utils";
 import type { Message, MessageActionProps, StopNoticeRenderProps } from "../../types";
 import { ChatMessage, type ImageRenderProps, type ResolveFileUrl } from "./ChatMessage";
 import { ToolCalls } from "./ToolCall";
 import type { ChatActionsConfig } from "./ActionCards";
+import { SECONDARY_BUTTON } from "./styles";
 import { useI18n } from "../../hooks/useI18n";
 
 export interface ChatMessageListProps {
@@ -43,7 +44,16 @@ export interface ChatMessageListProps {
   renderStopNotice?: (props: StopNoticeRenderProps) => React.ReactNode;
   /** How to get a URL for a stored file that has none of its own (images are fetched this way to be shown) */
   resolveFileUrl?: ResolveFileUrl;
+  /** Older messages exist than the ones in `messages`: a button above the first one fetches them */
+  hasEarlier?: boolean;
+  /** The older messages are being fetched */
+  isLoadingEarlier?: boolean;
+  /** Fetch the older messages (the button shows only together with `hasEarlier`) */
+  onLoadEarlier?: () => void;
 }
+
+// A layout effect keeps the scroll position steady before the browser paints; on a server there is nothing to scroll
+const useIsomorphicLayoutEffect = typeof window !== "undefined" ? useLayoutEffect : useEffect;
 
 const NO_IDS: ReadonlySet<string> = new Set();
 
@@ -119,22 +129,47 @@ export function ChatMessageList({
   renderImage,
   renderStopNotice,
   resolveFileUrl,
+  hasEarlier = false,
+  isLoadingEarlier = false,
+  onLoadEarlier,
 }: ChatMessageListProps) {
   const { t } = useI18n();
   const containerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  // What the list looked like at the last render, and where it was scrolled when older messages were asked for
+  const shown = useRef<{ first?: string; last?: string; count: number }>({ count: 0 });
+  const anchor = useRef<{ top: number; height: number } | null>(null);
   const { focusIds, announcement } = useNewCards(messages);
   const cardActions = useMemo(
     () => (actions ? { ...actions, focusActionIds: actions.focusActionIds ?? focusIds } : actions),
     [actions, focusIds]
   );
 
-  // Auto-scroll to bottom
-  useEffect(() => {
+  // Auto-scroll to bottom. Older messages added in front keep the reader where they were instead.
+  useIsomorphicLayoutEffect(() => {
+    const first = messages[0]?.id;
+    const last = messages[messages.length - 1]?.id;
+    const before = shown.current;
+    shown.current = { first, last, count: messages.length };
+    const prepended = before.count > 0 && last === before.last && first !== before.first && messages.length > before.count;
+    const container = containerRef.current;
+    if (prepended) {
+      if (container && anchor.current) {
+        container.scrollTop = anchor.current.top + (container.scrollHeight - anchor.current.height);
+      }
+      anchor.current = null;
+      return;
+    }
     if (autoScroll && bottomRef.current) {
       bottomRef.current.scrollIntoView({ behavior: "smooth" });
     }
   }, [messages, streamingText, activeToolCalls, autoScroll]);
+
+  const loadEarlier = () => {
+    const container = containerRef.current;
+    anchor.current = container ? { top: container.scrollTop, height: container.scrollHeight } : null;
+    onLoadEarlier?.();
+  };
 
   if (messages.length === 0 && !isStreaming) {
     return (
@@ -163,21 +198,18 @@ export function ChatMessageList({
         {announcement}
       </div>
       <div className="max-w-3xl mx-auto">
-        {messages.map((message, index) => (
+        {hasEarlier && onLoadEarlier && (
+          <div className="flex justify-center px-4 pt-4">
+            <button type="button" className={SECONDARY_BUTTON} disabled={isLoadingEarlier} onClick={loadEarlier}>
+              {isLoadingEarlier ? t("chat.messages.loadingEarlier") : t("chat.messages.loadEarlier")}
+            </button>
+          </div>
+        )}
+        {/* A stored message always shows what was stored; the turn being streamed is drawn below, never in one of them */}
+        {messages.map((message) => (
           <ChatMessage
             key={message.id}
             message={message}
-            isStreaming={
-              isStreaming &&
-              index === messages.length - 1 &&
-              message.role === "assistant" &&
-              !message.pendingActions
-            }
-            streamingText={
-              index === messages.length - 1 && message.role === "assistant" && !message.pendingActions
-                ? streamingText
-                : undefined
-            }
             renderActions={renderActions}
             renderAvatar={renderAvatar}
             showAvatar={showAvatars}

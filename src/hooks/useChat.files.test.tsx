@@ -507,6 +507,53 @@ describe("useChat: image previews", () => {
     expect(revoked).toEqual([]);
   });
 
+  it("gives no local URL to a picture that can carry script, since an object URL opens in the page's own origin", async () => {
+    const { result } = renderHook(() => useChat({ transport: makeTransport(), agentId: "agent" }), { wrapper });
+    await attach(result, file("logo.svg", "image/svg+xml"), file("cat.png", "image/png"), file("anim.gif", "image/gif"));
+    const [svg, png, gif] = result.current.pendingFiles;
+    expect(svg.previewUrl).toBeUndefined();
+    expect(png.previewUrl).toBeDefined();
+    expect(gif.previewUrl).toBeDefined();
+    expect(created).toHaveLength(2);
+  });
+
+  it.each(["inline", "upload"] as const)("pictures waiting in the composer keep their previews when another conversation is opened (%s)", async (fileTransport) => {
+    const getConversation = vi.fn(async (id: string) => ({
+      conversation: { id, agentId: "agent", createdAt: new Date(), updatedAt: new Date() },
+      messages: [],
+    }));
+    const { result } = renderHook(() => useChat({ transport: makeTransport({ getConversation }), agentId: "agent", fileTransport }), { wrapper });
+    await attach(result, file("cat.png", "image/png"));
+    const waiting = result.current.pendingFiles[0];
+    await act(async () => {
+      await result.current.loadConversation("other");
+    });
+    expect(result.current.pendingFiles.map((f) => f.id)).toEqual([waiting.id]);
+    expect(revoked).toEqual([]);
+
+    // what has left the page is released all the same
+    act(() => result.current.removeFile(waiting.id));
+    expect(revoked).toEqual([waiting.previewUrl]);
+  });
+
+  it("releases the previews of files that are dropped with the conversation they were picked in (upload-on-select)", async () => {
+    const uploadFile = vi.fn(async (p: { file: { name: string } }) => ({ id: `f-${p.file.name}`, name: p.file.name, mimeType: "image/png", size: 5 }));
+    const getConversation = vi.fn(async (id: string) => ({
+      conversation: { id, agentId: "agent", createdAt: new Date(), updatedAt: new Date() },
+      messages: [],
+    }));
+    const { result } = renderHook(
+      () => useChat({ transport: makeTransport({ getConversation, uploadFile }), agentId: "agent", fileTransport: "upload-on-select" }),
+      { wrapper }
+    );
+    await attach(result, file("cat.png", "image/png"));
+    await act(async () => {
+      await result.current.loadConversation("other");
+    });
+    expect(result.current.pendingFiles).toEqual([]);
+    expect(revoked).toEqual(["blob:test/0"]);
+  });
+
   it("works where the browser cannot make object URLs", async () => {
     (URL as { createObjectURL?: unknown }).createObjectURL = undefined;
     const { result } = renderHook(() => useChat({ transport: makeTransport(), agentId: "agent" }), { wrapper });

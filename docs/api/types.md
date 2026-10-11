@@ -198,6 +198,14 @@ interface ConversationRuntime {
   activeRunId?: string;
 }
 
+/** Which part of the history a getConversation answer holds (agent-server pages it) */
+interface MessagesPage {
+  limit: number;
+  order: "asc" | "desc";
+  hasMoreBefore: boolean;           // older messages exist: fetch with getConversation(id, { before })
+  hasMoreAfter: boolean;
+}
+
 type StopReason = "end_turn" | "requires_action" | "cancelled" | "max_turns" | "limit" | "budget_reached" | "error";
 
 interface ConversationBudget {

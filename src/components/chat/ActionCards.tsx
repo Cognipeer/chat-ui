@@ -287,6 +287,14 @@ export function ToolApprovalCard({
             </button>
             {edited && <Badge tone="warning">{t("chat.action.argsEdited")}</Badge>}
           </div>
+          {/* Why Approve is off must be readable with the editor closed too */}
+          {problems.length > 0 && (
+            <ul id={`${uid}-problems`} role="alert" className="mt-2 space-y-0.5 text-xs text-chat-danger">
+              {problems.map((problem) => (
+                <li key={problem}>{problem}</li>
+              ))}
+            </ul>
+          )}
           {showDetails && editable && (
             <div id={`${uid}-details`} className="mt-2 space-y-2">
               <textarea
@@ -304,13 +312,6 @@ export function ToolApprovalCard({
                   FOCUS_RING
                 )}
               />
-              {problems.length > 0 && (
-                <ul id={`${uid}-problems`} role="alert" className="space-y-0.5 text-xs text-chat-danger">
-                  {problems.map((problem) => (
-                    <li key={problem}>{problem}</li>
-                  ))}
-                </ul>
-              )}
               {draft !== proposed && (
                 <button
                   type="button"
@@ -401,6 +402,7 @@ export function ToolApprovalCard({
                 type="button"
                 className={PRIMARY_BUTTON}
                 disabled={resolving || invalid}
+                aria-describedby={invalid ? `${uid}-problems` : undefined}
                 onClick={() => submit("allow")}
               >
                 {t("chat.action.approve")}

@@ -126,6 +126,11 @@ interface UseChatReturn {
   // Conversation
   conversation: Conversation | null;
   
+  // Long conversations: the server sends the newest page of the history
+  hasEarlierMessages: boolean;        // older messages exist than the ones loaded
+  isLoadingEarlierMessages: boolean;
+  loadEarlierMessages: () => Promise<boolean>;   // puts the page just older than the oldest shown in front; false when there is none, one is on its way, or it failed
+
   // Files
   pendingFiles: FileAttachment[];     // images carry a local `previewUrl`; files stored on their own carry status / progress
   isUploading: boolean;               // files are going up (for the message being sent, or stored as they were picked)

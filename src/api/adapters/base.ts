@@ -451,18 +451,48 @@ export abstract class StatelessTransport implements ChatTransport {
     const assistantId = makeId();
     const run = this.makeEmit(callbacks);
 
-    callbacks?.onStart?.(run.event({ type: "stream.start", conversationId, messageId: paused.id }));
-    callbacks?.onActionResolved?.({
-      type: "stream.action_resolved",
-      timestamp: Date.now(),
-      conversationId,
-      actionId,
-      resolution: {
-        type: resolution.type,
-        ...(resolution.type === "tool_approval" ? { decision: resolution.decision } : {}),
-        ...(resolution.type === "user_question" && resolution.cancelled ? { cancelled: true } : {}),
+    // The page treats `stream.start` / `stream.action_resolved` as "the backend took the answer".
+    // They go out with the backend's first output, or when it returns, never before: an answer it
+    // refuses must reach the caller as a plain failure, with the card still open.
+    let announced = false;
+    const announce = () => {
+      if (announced) return;
+      announced = true;
+      callbacks?.onStart?.(run.event({ type: "stream.start", conversationId, messageId: paused.id }));
+      callbacks?.onActionResolved?.({
+        type: "stream.action_resolved",
+        timestamp: Date.now(),
+        conversationId,
+        actionId,
+        resolution: {
+          type: resolution.type,
+          ...(resolution.type === "tool_approval" ? { decision: resolution.decision } : {}),
+          ...(resolution.type === "user_question" && resolution.cancelled ? { cancelled: true } : {}),
+        },
+      });
+    };
+    const emit: RunEmit = {
+      text: (delta) => {
+        if (delta) announce();
+        run.emit.text(delta);
       },
-    });
+      setText: (full) => {
+        announce();
+        run.emit.setText(full);
+      },
+      toolCall: (id, name, args) => {
+        announce();
+        run.emit.toolCall(id, name, args);
+      },
+      toolResult: (id, name, result) => {
+        announce();
+        run.emit.toolResult(id, name, result);
+      },
+      progress: (message) => {
+        announce();
+        run.emit.progress(message);
+      },
+    };
 
     const result = await this.resolve({
       conversation,
@@ -472,8 +502,9 @@ export abstract class StatelessTransport implements ChatTransport {
       resolution,
       stream: Boolean(options.stream),
       signal: options.signal,
-      emit: run.emit,
+      emit,
     });
+    announce();
 
     // The answer was taken: the paused message remembers how the card ended
     const settledState = stateForResolution(resolution);

@@ -341,6 +341,39 @@ describe("AgentServerClient files", () => {
     expect(JSON.parse(init.body as string).file).toEqual({ name: "a.txt", content: "aGVsbG8=", mimeType: "text/plain" });
   });
 
+  it.each([
+    ["application/json", "application/json"],
+    ["application/geo+json", "application/geo+json"],
+    ["Application/LD+JSON; charset=utf-8", "application/ld+json"],
+  ])("a %s file goes up as plain bytes and names its own type, which the server would take for its JSON form otherwise", async (type, sent) => {
+    const fetchMock = vi.fn(async () => json({ file: { id: "f1", name: "data.json", mimeType: sent, size: 2 } }, 201));
+    const client = new AgentServerClient({ baseUrl: "http://x", fetch: as(fetchMock) });
+    const blob = new Blob(["{}"], { type });
+    await client.uploadFile({ file: { name: "data.json", mimeType: type, blob }, conversationId: "c1" });
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe(`http://x/files?name=data.json&conversationId=c1&mimeType=${encodeURIComponent(sent)}`);
+    expect((init.headers as Record<string, string>)["Content-Type"]).toBe("application/octet-stream");
+    expect(init.body).toBe(blob);
+  });
+
+  it("leaves the type of other files in the Content-Type header and out of the query", async () => {
+    const fetchMock = vi.fn(async () => json({ file: { id: "f1", name: "a.txt", mimeType: "text/plain", size: 1 } }, 201));
+    const client = new AgentServerClient({ baseUrl: "http://x", fetch: as(fetchMock) });
+    await client.uploadFile({ file: { name: "a.txt", mimeType: "text/plain", blob: new Blob(["x"]) }, conversationId: "c1" });
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).not.toContain("mimeType=");
+    expect((init.headers as Record<string, string>)["Content-Type"]).toBe("text/plain");
+  });
+
+  it("a connection that never answered is a coded upload failure, not a browser's English TypeError", async () => {
+    const offline = vi.fn(async () => {
+      throw new TypeError("Failed to fetch");
+    });
+    const client = new AgentServerClient({ baseUrl: "http://x", fetch: as(offline) });
+    await expect(client.uploadFile({ file: { name: "a.txt", mimeType: "text/plain", blob: new Blob(["x"]) }, conversationId: "c1" })).rejects.toMatchObject({ code: "upload_failed" });
+    await expect(client.uploadFile({ file: { name: "a.txt", mimeType: "text/plain", content: "eA==" }, conversationId: "c1" })).rejects.toMatchObject({ code: "upload_failed" });
+  });
+
   it("an upload the server refuses throws its code, and one aborted before it starts never leaves", async () => {
     const refused = vi.fn(async () => json({ error: { code: "too_many_files", message: "full", details: { maxFiles: 3, held: 3 } } }, 409));
     await expect(
@@ -447,6 +480,30 @@ describe("AgentServerClient raw upload with progress", () => {
     await expect(html).rejects.toMatchObject({ status: 502, message: "Request failed (502)" });
   });
 
+  it("sends a JSON file as plain bytes with its type in the query on this path too", async () => {
+    vi.stubGlobal("XMLHttpRequest", FakeXhr);
+    const client = new AgentServerClient({ baseUrl: "http://x" });
+    const done = client.uploadFile({
+      file: { name: "data.json", mimeType: "application/json", blob: new Blob(["{}"], { type: "application/json" }) },
+      conversationId: "c1",
+      onProgress: () => {},
+    });
+    await vi.waitFor(() => expect(FakeXhr.last?.body).toBeDefined());
+    expect(FakeXhr.last.url).toBe("http://x/files?name=data.json&conversationId=c1&mimeType=application%2Fjson");
+    expect(FakeXhr.last.headers["Content-Type"]).toBe("application/octet-stream");
+    FakeXhr.last.respond(201, { file: { id: "f1", name: "data.json", mimeType: "application/json", size: 2 } });
+    await expect(done).resolves.toMatchObject({ id: "f1" });
+  });
+
+  it("a network failure carries the upload_failed code", async () => {
+    vi.stubGlobal("XMLHttpRequest", FakeXhr);
+    const client = new AgentServerClient({ baseUrl: "http://x" });
+    const offline = client.uploadFile({ file: { name: "a.pdf", mimeType: "application/pdf", blob: blob() }, onProgress: () => {} });
+    await vi.waitFor(() => expect(FakeXhr.last?.body).toBeDefined());
+    FakeXhr.last.onerror?.();
+    await expect(offline).rejects.toMatchObject({ code: "upload_failed" });
+  });
+
   it("aborts the transfer when the signal fires", async () => {
     vi.stubGlobal("XMLHttpRequest", FakeXhr);
     const client = new AgentServerClient({ baseUrl: "http://x" });
@@ -519,7 +576,63 @@ describe("AgentServerClient.getFileUrl", () => {
     const client = new AgentServerClient({ baseUrl: "http://x", authorization: "Bearer t", fetch: as(fetchMock) });
     await expect(client.getFileUrl({ id: "f1" })).rejects.toMatchObject({ code: "NOT_FOUND" });
     expect(await client.getFileUrl({ id: "f1" })).toBe("blob:fake-1");
+    expect(client.holdsFileUrls).toBe(true);
     client.dispose();
+    expect(client.holdsFileUrls).toBe(false);
     await vi.waitFor(() => expect(revoke).toHaveBeenCalledWith("blob:fake-1"));
+  });
+});
+
+describe("AgentServerClient.getFileUrl memory", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps only the most recently used blob URLs alive and releases the rest", async () => {
+    const revoke = vi.fn();
+    let n = 0;
+    vi.stubGlobal("URL", Object.assign(URL, { createObjectURL: () => `blob:fake-${++n}`, revokeObjectURL: revoke }));
+    const fetchMock = vi.fn(async () => new Response(new Blob([new Uint8Array([1])], { type: "image/png" }), { status: 200 }));
+    const client = new AgentServerClient({ baseUrl: "http://x", authorization: "Bearer t", fetch: as(fetchMock) });
+    for (let i = 0; i < 201; i++) await client.getFileUrl({ id: `f${i}` });
+    // the first one was the least recently used
+    await vi.waitFor(() => expect(revoke).toHaveBeenCalledWith("blob:fake-1"));
+    expect(revoke).toHaveBeenCalledTimes(1);
+    // asking again for the oldest survivor makes it the newest: the next eviction takes f2
+    await client.getFileUrl({ id: "f1" });
+    await client.getFileUrl({ id: "f-new" });
+    await vi.waitFor(() => expect(revoke).toHaveBeenCalledTimes(2));
+    expect(revoke).toHaveBeenLastCalledWith("blob:fake-3");
+  });
+});
+
+describe("AgentServerClient.getConversation paging", () => {
+  const body = (extra: Record<string, unknown> = {}) => ({
+    conversation: { id: "c1", agentId: "a", createdAt: "2026-10-11T10:00:00.000Z", updatedAt: "2026-10-11T10:00:00.000Z" },
+    messages: [{ id: "m5", conversationId: "c1", role: "user", content: "hi" }],
+    ...extra,
+  });
+
+  it("returns which part of the history it holds", async () => {
+    const fetchMock = vi.fn(async () => json(body({ messagesPage: { limit: 100, order: "asc", hasMoreBefore: true, hasMoreAfter: false } })));
+    const client = new AgentServerClient({ baseUrl: "http://x", fetch: as(fetchMock) });
+    const loaded = await client.getConversation("c1");
+    expect((fetchMock.mock.calls[0] as unknown as [string])[0]).toBe("http://x/conversations/c1");
+    expect(loaded.messagesPage).toEqual({ limit: 100, order: "asc", hasMoreBefore: true, hasMoreAfter: false });
+    expect(loaded.messages).toHaveLength(1);
+  });
+
+  it("asks for the page just older than a message", async () => {
+    const fetchMock = vi.fn(async () => json(body({ messagesPage: { limit: 25, order: "asc", hasMoreBefore: false, hasMoreAfter: true } })));
+    const client = new AgentServerClient({ baseUrl: "http://x", fetch: as(fetchMock) });
+    const older = await client.getConversation("c1", { before: "m 5", limit: 25 });
+    expect((fetchMock.mock.calls[0] as unknown as [string])[0]).toBe("http://x/conversations/c1?before=m+5&limit=25");
+    expect(older.messagesPage?.hasMoreBefore).toBe(false);
+  });
+
+  it("has no page for a server that does not page its history", async () => {
+    const fetchMock = vi.fn(async () => json(body()));
+    const loaded = await new AgentServerClient({ baseUrl: "http://x", fetch: as(fetchMock) }).getConversation("c1");
+    expect("messagesPage" in loaded).toBe(false);
   });
 });

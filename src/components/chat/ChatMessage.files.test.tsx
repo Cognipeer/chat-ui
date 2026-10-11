@@ -54,6 +54,42 @@ describe("file chips that are no longer good", () => {
   });
 });
 
+describe("pictures that cannot be drawn", () => {
+  const svg = (extra: Partial<FileAttachment> = {}): FileAttachment => ({ id: "s1", name: "logo.svg", mimeType: "image/svg+xml", size: 300, ...extra });
+
+  it("an SVG is a file chip, never a thumbnail or a link to a local object URL", () => {
+    const resolve = vi.fn(async () => "blob:fetched");
+    render(<ChatMessage message={message([svg({ url: "https://x/s1", previewUrl: "blob:mine" }), svg({ id: "s2", name: "mark.svg" })])} resolveFileUrl={resolve} />);
+    expect(screen.queryByRole("img")).toBeNull();
+    expect(document.querySelector('a[href^="blob:"]')).toBeNull();
+    // each is a chip with its own download, not a picture
+    expect(screen.getAllByText("Download")).toHaveLength(2);
+    expect(screen.getByText("logo")).toBeTruthy();
+    expect(screen.getByText("mark")).toBeTruthy();
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
+  it("a thumbnail that fails to load falls back to the next copy, then to the chip", () => {
+    render(<ChatMessage message={message([png({ previewUrl: "blob:released", url: "https://x/i1" })])} />);
+    expect(screen.getByRole("img", { name: "cat.png" }).getAttribute("src")).toBe("blob:released");
+    fireEvent.error(screen.getByRole("img", { name: "cat.png" }));
+    expect(screen.getByRole("img", { name: "cat.png" }).getAttribute("src")).toBe("https://x/i1");
+    fireEvent.error(screen.getByRole("img", { name: "cat.png" }));
+    expect(screen.queryByRole("img", { name: "cat.png" })).toBeNull();
+    expect(screen.getByText("cat")).toBeTruthy();
+  });
+
+  it("asks the transport for the stored copy when the copies it holds do not load", async () => {
+    const resolve = vi.fn(async () => "blob:fetched");
+    render(<ChatMessage message={message([png({ previewUrl: "blob:released" })])} resolveFileUrl={resolve} />);
+    expect(resolve).not.toHaveBeenCalled();
+    fireEvent.error(screen.getByRole("img", { name: "cat.png" }));
+    const img = await screen.findByRole("img", { name: "cat.png" });
+    expect(img.getAttribute("src")).toBe("blob:fetched");
+    expect(resolve).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("files without a URL of their own", () => {
   it("a stored picture is fetched through the transport and shown", async () => {
     const resolve = vi.fn(async () => "blob:fetched");

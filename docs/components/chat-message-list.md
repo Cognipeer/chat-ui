@@ -41,6 +41,7 @@ const chat = useChat({ baseUrl: "/api/agents", agentId: "assistant" });
 | `renderImage` | `(props: ImageRenderProps) => ReactNode` | - | Draw images yourself |
 | `renderStopNotice` | `(props: StopNoticeRenderProps) => ReactNode` | - | Replace the notice under an answer that stopped early |
 | `resolveFileUrl` | `(file, { disposition? }) => Promise<string \| undefined>` | - | How stored files without a URL are shown and downloaded; pass `chat.resolveFileUrl` |
+| `hasEarlier`, `isLoadingEarlier`, `onLoadEarlier` | `boolean`, `boolean`, `() => void` | `false`, `false`, - | A "Show earlier messages" button above the first message; pass `chat.hasEarlierMessages`, `chat.isLoadingEarlierMessages` and `chat.loadEarlierMessages`. The list keeps the reader's place when the older page arrives |
 | `emptyState` | `ReactNode` | built-in | Shown when there are no messages |
 | `className` | `string` | - | Container class name |
 

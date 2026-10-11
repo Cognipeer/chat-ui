@@ -6,6 +6,7 @@ import type {
   ConversationEvent,
   ConversationListItem,
   ConversationRuntime,
+  MessagesPage,
   AgentInfo,
   StreamEvent,
   PendingAction,
@@ -14,6 +15,14 @@ import type {
   StopReason,
   TurnWarning,
 } from "../types";
+
+/** What `ChatTransport.getConversation` can be asked for besides the conversation. */
+export interface GetConversationOptions {
+  /** Id of the oldest message already shown: the page of messages just older than it is returned */
+  before?: string;
+  /** How many messages (default: the server's page size) */
+  limit?: number;
+}
 
 export interface PaginatedResponse<T> {
   data?: T[];
@@ -160,11 +169,17 @@ export interface ChatTransport {
     metadata?: Record<string, unknown>;
   }): Promise<Conversation>;
 
-  getConversation(conversationId: string): Promise<{
+  /**
+   * A conversation with its messages: the newest page when the server pages its history
+   * (see `messagesPage`), or with `options.before` the page just older than that message.
+   */
+  getConversation(conversationId: string, options?: GetConversationOptions): Promise<{
     conversation: Conversation;
     messages: Message[];
     /** Actions still waiting for an answer, when the server reports them */
     pendingActions?: PendingAction[];
+    /** Which part of the history `messages` is, when the server pages it */
+    messagesPage?: MessagesPage;
   }>;
 
   deleteConversation(conversationId: string): Promise<void>;

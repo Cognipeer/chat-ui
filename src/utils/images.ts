@@ -9,6 +9,15 @@ export function isImageType(mimeType: string | undefined): boolean {
 }
 
 /**
+ * True for the picture types a browser shows without running anything: PNG, JPEG, GIF and WebP.
+ * SVG and the like are images too (`isImageType`) but can carry script, so they are never shown
+ * inline or linked from a local object URL.
+ */
+export function isRasterImageType(mimeType: string | undefined): boolean {
+  return typeof mimeType === "string" && RASTER_MIME.test(mimeType.split(";")[0]!.trim());
+}
+
+/**
  * A URL that is safe to put in an `<img src>`, or undefined. Allowed: `https:`, `blob:`,
  * relative / same-origin URLs, `http:` when the page itself is served over http (local
  * development), and base64 `data:` URLs of PNG / JPEG / GIF / WebP. Everything else is
@@ -36,12 +45,28 @@ export function safeImageSrc(url: unknown): string | undefined {
   return undefined;
 }
 
-/** A link target for a file download: http(s), `blob:` or relative; never `javascript:` and the like. */
+/**
+ * A link target for a file download: http(s), `blob:` or relative; never `javascript:` and the like.
+ * The check is made on what the browser's URL parser will see: it drops tabs and line breaks anywhere
+ * in the string and control characters or spaces at its start, so `java\nscript:` is a script URL.
+ * The result is the parsed address, not the raw string.
+ */
 export function safeFileHref(url: unknown): string | undefined {
   if (typeof url !== "string") return undefined;
-  const value = url.trim();
+  // eslint-disable-next-line no-control-regex
+  const value = url.replace(/[\t\n\r]/g, "").replace(/^[\u0000-\u0020]+/, "").replace(/[\u0000-\u0020]+$/, "");
   if (!value) return undefined;
-  return /^(https?:|blob:)/i.test(value) || !/^[a-z][a-z0-9+.-]*:/i.test(value) ? value : undefined;
+
+  const page = typeof window !== "undefined" ? window.location : undefined;
+  let parsed: URL;
+  try {
+    parsed = new URL(value, page?.href ?? "https://localhost/");
+  } catch {
+    return undefined;
+  }
+  // No scheme of its own: a relative link, which can only land on the page's own scheme
+  if (!/^[a-z][a-z0-9+.-]*:/i.test(value)) return value;
+  return parsed.protocol === "https:" || parsed.protocol === "http:" || parsed.protocol === "blob:" ? parsed.href : undefined;
 }
 
 /** The image a content part shows, or undefined for any other kind of part (or an unsafe URL). */

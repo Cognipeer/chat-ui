@@ -204,6 +204,36 @@ describe("Chat and the conversation's usage limit", () => {
     expect(continueConversation).toHaveBeenCalledWith("c1", expect.objectContaining({ stream: true }));
   });
 
+  it("shows the continuation as the live turn, next to the answer it carries on instead of over it", async () => {
+    let finish!: () => void;
+    const continueConversation = vi.fn(async (_id: string, options?: { callbacks?: StreamCallbacks }) => {
+      options?.callbacks?.onStart?.({ type: "stream.start", conversationId: "c1", messageId: "m2", timestamp: 1 });
+      options?.callbacks?.onText?.("and the rest", "and the rest");
+      await new Promise<void>((resolve) => (finish = resolve));
+      options?.callbacks?.onDone?.({ type: "stream.done", conversationId: "c1", messageId: "m3", content: "and the rest", stopReason: "end_turn", timestamp: 2 });
+      return undefined;
+    });
+    renderChat(
+      transportFor({
+        agents: [agent({ capabilities: { budget: { allowContinue: true } } })],
+        conversation: pausedConversation(),
+        messages: [user, message({ id: "m2", content: "The answer was cut", status: "incomplete", stopReason: "budget_reached" })],
+        overrides: { continueConversation },
+      }),
+      { conversationId: "c1" }
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
+    await screen.findByText("and the rest");
+    // once, and the answer it carries on is still there
+    expect(screen.getAllByText("and the rest")).toHaveLength(1);
+    expect(screen.getByText("The answer was cut")).toBeTruthy();
+    await act(async () => {
+      finish();
+    });
+    await waitFor(() => expect(screen.getAllByText("and the rest")).toHaveLength(1));
+    expect(screen.getByText("The answer was cut")).toBeTruthy();
+  });
+
   it("the history marks a conversation stopped on its limit", async () => {
     renderChat(transportFor({ conversations: [row({ budget, spentUsd: 6, runtime: { status: "budget_paused", lastEventSeq: 1 } })] }));
     expect(await screen.findByText("Limit reached")).toBeTruthy();

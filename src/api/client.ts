@@ -4,6 +4,7 @@ import type {
   ConversationBudget,
   ConversationEvent,
   ConversationListItem,
+  MessagesPage,
   AgentInfo,
   FileAttachment,
   StreamEvent,
@@ -16,6 +17,7 @@ import type {
   ChatTransport,
   ContinueOptions,
   FollowEventsOptions,
+  GetConversationOptions,
   ListFilesResult,
   PaginatedResponse,
   ResolveActionOptions,
@@ -31,7 +33,7 @@ import {
   readSSE,
   type HttpOptions,
 } from "./http";
-import { normalizeBudget, normalizeRuntime } from "../utils/runtime";
+import { normalizeBudget, normalizeMessagesPage, normalizeRuntime } from "../utils/runtime";
 import { fileFromRecord, uploadMimeType } from "../utils/files";
 
 /** How `followEvents` reconnects after losing the connection. */
@@ -74,6 +76,30 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 }
 
 const abortError = () => new DOMException("The upload was aborted", "AbortError");
+
+/** An upload that never reached the server: coded, so the UI can say it in the person's language. */
+const uploadNetworkError = (cause?: unknown) =>
+  Object.assign(new Error("Network error while uploading the file"), { code: "upload_failed", cause });
+
+/** `httpFetch` for an upload: a connection that failed outright becomes a coded `upload_failed`. */
+async function uploadFetch(http: HttpOptions, url: string, init: RequestInit): Promise<Response> {
+  try {
+    return await httpFetch(http, url, init);
+  } catch (err) {
+    // `fetch` rejects with a TypeError ("Failed to fetch") when there was no answer at all
+    if (err instanceof TypeError) throw uploadNetworkError(err);
+    throw err;
+  }
+}
+
+/** `application/json` and the `+json` types: what the server takes for its JSON upload form. */
+function isJsonMimeType(mimeType: string): boolean {
+  const base = mimeType.split(";")[0]!.trim().toLowerCase();
+  return base === "application/json" || base.endsWith("+json");
+}
+
+/** How many blob URLs `getFileUrl` keeps alive at once; the least recently used are released first. */
+const MAX_FILE_URLS = 200;
 
 /** Raster pictures are the only blobs that keep their own type: anything else could run in the page's origin. */
 const SAFE_BLOB_TYPE = /^image\/(png|jpe?g|gif|webp)$/i;
@@ -195,19 +221,27 @@ export class AgentServerClient implements ChatTransport {
     return response.conversation;
   }
 
-  async getConversation(conversationId: string): Promise<{
+  async getConversation(conversationId: string, options: GetConversationOptions = {}): Promise<{
     conversation: Conversation;
     messages: Message[];
     pendingActions?: PendingAction[];
+    messagesPage?: MessagesPage;
   }> {
-    const data = await this.request<{
+    const query = new URLSearchParams();
+    if (options.before) query.set("before", options.before);
+    if (options.limit) query.set("limit", String(options.limit));
+    const suffix = query.toString();
+    const { messagesPage: rawPage, ...data } = await this.request<{
       conversation: Conversation;
       messages: Message[];
       pendingActions?: PendingAction[];
-    }>("GET", `/conversations/${conversationId}`);
+      messagesPage?: unknown;
+    }>("GET", `/conversations/${conversationId}${suffix ? `?${suffix}` : ""}`);
+    const messagesPage = normalizeMessagesPage(rawPage);
     return {
       ...data,
       conversation: data.conversation ? this.readConversation(data.conversation, conversationId) : data.conversation,
+      ...(messagesPage ? { messagesPage } : {}),
     };
   }
 
@@ -551,7 +585,7 @@ export class AgentServerClient implements ChatTransport {
     if (content === undefined && file.blob) content = await blobToBase64(file.blob);
     if (content === undefined) throw new Error("uploadFile needs file.blob or file.content");
     if (params.signal?.aborted) throw abortError();
-    const response = await httpFetch(this.http, `${this.baseUrl}/files`, {
+    const response = await uploadFetch(this.http, `${this.baseUrl}/files`, {
       method: "POST",
       headers: await buildHeaders(this.http),
       body: JSON.stringify({
@@ -570,14 +604,18 @@ export class AgentServerClient implements ChatTransport {
     const query = new URLSearchParams({ name: params.file.name });
     if (params.conversationId) query.set("conversationId", params.conversationId);
     const mimeType = params.file.mimeType || uploadMimeType(blob);
+    // The server reads a JSON content type as its JSON form of the upload, so a JSON file goes up
+    // as plain bytes and names its own type in the query instead
+    const jsonLike = isJsonMimeType(mimeType);
+    if (jsonLike) query.set("mimeType", mimeType.split(";")[0]!.trim().toLowerCase());
     const url = `${this.baseUrl}/files?${query.toString()}`;
-    const headers = await buildHeaders(this.http, { "Content-Type": mimeType });
+    const headers = await buildHeaders(this.http, { "Content-Type": jsonLike ? "application/octet-stream" : mimeType });
     if (params.signal?.aborted) throw abortError();
 
     // XHR is the one browser API that reports upload progress; a host with its own `fetch` keeps using it
     const useXhr = Boolean(params.onProgress) && !this.http.fetch && typeof XMLHttpRequest !== "undefined";
     if (!useXhr) {
-      const response = await httpFetch(this.http, url, { method: "POST", headers, body: blob, signal: params.signal });
+      const response = await uploadFetch(this.http, url, { method: "POST", headers, body: blob, signal: params.signal });
       if (!response.ok) throw await errorFromResponse(response);
       params.onProgress?.({ loaded: blob.size, total: blob.size });
       return fileFromRecord(((await response.json()) as { file?: unknown }).file);
@@ -618,7 +656,7 @@ export class AgentServerClient implements ChatTransport {
       };
       xhr.onerror = () => {
         done();
-        reject(new Error("Network error while uploading the file"));
+        reject(uploadNetworkError());
       };
       xhr.onabort = () => {
         done();
@@ -685,7 +723,11 @@ export class AgentServerClient implements ChatTransport {
 
     const key = `${file.id}:${disposition}`;
     let pending = this.fileUrls.get(key);
-    if (!pending) {
+    if (pending) {
+      // most recently used goes last
+      this.fileUrls.delete(key);
+      this.fileUrls.set(key, pending);
+    } else {
       pending = (async () => {
         const response = await httpFetch(this.http, url, { method: "GET", headers: await this.headersWithout("Content-Type") });
         if (!response.ok) throw await errorFromResponse(response);
@@ -696,8 +738,20 @@ export class AgentServerClient implements ChatTransport {
       this.fileUrls.set(key, pending);
       // A failed fetch must not be cached
       pending.catch(() => this.fileUrls.delete(key));
+      // The blobs live in the browser until revoked: keep only the most recent ones
+      while (this.fileUrls.size > MAX_FILE_URLS) {
+        const oldest = this.fileUrls.keys().next().value as string;
+        const evicted = this.fileUrls.get(oldest);
+        this.fileUrls.delete(oldest);
+        evicted?.then((url) => URL.revokeObjectURL(url)).catch(() => undefined);
+      }
     }
     return pending;
+  }
+
+  /** Whether `getFileUrl` holds blob URLs that `dispose()` would release. */
+  get holdsFileUrls(): boolean {
+    return this.fileUrls.size > 0;
   }
 
   /** Release the blob URLs made by `getFileUrl`. The client stays usable. */

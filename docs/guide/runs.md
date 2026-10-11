@@ -5,7 +5,7 @@ With `@cognipeer/agent-server` 0.3.0 or later a turn is a **run**: it goes on wh
 | | |
 | --- | --- |
 | **Reload in the middle of a turn** | The conversation opens, sees that a turn is still running and follows it: tool calls and text appear as they happen, then the stored answer replaces them. |
-| **A turn started in another window** | The same. The composer says the conversation is answering elsewhere, and offers Stop. |
+| **A turn running in another window** | A conversation opened or reloaded while that turn runs follows it the same way. The composer says the conversation is answering elsewhere, and offers Stop. |
 | **A dropped connection** | Not an error. The turn goes on without the page, so the page looks again: it follows what is still running, or shows what finished. Only a conversation that cannot be reached shows a message. |
 | **Stop** | Stops the run on the server, not just this page's connection: tools stop running and spending stops. What was written so far is kept as an answer marked "Stopped". |
 | **Why an answer ended** | A notice under the answer says when it was stopped, hit a limit, used up the conversation's usage limit or failed. |

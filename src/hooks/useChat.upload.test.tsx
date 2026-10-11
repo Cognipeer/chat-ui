@@ -154,6 +154,55 @@ describe("useChat: files sent as themselves", () => {
     expect(result.current.isUploading).toBe(false);
   });
 
+  it("Stop while the file is still going up does not ask the server to cancel anything: the message was never sent", async () => {
+    const uploadFile = vi.fn((p: UploadFileParams) =>
+      new Promise<FileAttachment>((_resolve, reject) => p.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError"))))
+    );
+    const cancel = vi.fn(async () => ({ cancelled: true, settled: true }));
+    const { result } = renderHook(
+      () => useChat({ transport: makeTransport({ uploadFile, cancel, supportsRawUpload: true }), agentId: "agent", fileTransport: "upload" }),
+      { wrapper }
+    );
+    await attach(result, file("big.bin", "application/octet-stream"));
+    let sending!: Promise<boolean>;
+    act(() => {
+      sending = result.current.sendMessage("here");
+    });
+    await waitFor(() => expect(uploadFile).toHaveBeenCalled());
+    act(() => result.current.stop());
+    await act(async () => {
+      await sending;
+    });
+    expect(cancel).not.toHaveBeenCalled();
+  });
+
+  it("Stop once the message is on its way still asks the server to cancel the run", async () => {
+    const uploadFile = vi.fn(async (p: UploadFileParams) => stored(p.file.name));
+    const cancel = vi.fn(async () => ({ cancelled: true, settled: true }));
+    let signal: AbortSignal | undefined;
+    const sendMessageStream = vi.fn((_c: string, _o: unknown, cb: StreamCallbacks, s?: AbortSignal) => {
+      signal = s;
+      cb.onStart?.({ type: "stream.start", conversationId: "c1", messageId: "u1", timestamp: 1 });
+      return new Promise<void>((_resolve, reject) => s?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError"))));
+    });
+    const { result } = renderHook(
+      () => useChat({ transport: makeTransport({ uploadFile, cancel, sendMessageStream, supportsRawUpload: true }), agentId: "agent", fileTransport: "upload" }),
+      { wrapper }
+    );
+    await attach(result, file("a.txt"));
+    let sending!: Promise<boolean>;
+    act(() => {
+      sending = result.current.sendMessage("here");
+    });
+    await waitFor(() => expect(sendMessageStream).toHaveBeenCalled());
+    act(() => result.current.stop());
+    await act(async () => {
+      await sending;
+    });
+    expect(signal?.aborted).toBe(true);
+    expect(cancel).toHaveBeenCalledWith("c1");
+  });
+
   it("falls back to base64 when the transport does not take raw uploads", async () => {
     const uploadFile = vi.fn(async (p: UploadFileParams) => stored(p.file.name));
     const { result } = renderHook(

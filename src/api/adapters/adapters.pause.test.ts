@@ -3,6 +3,7 @@ import { A2ATransport } from "./a2a";
 import { AgentSdkTransport, type AgentSdkAgent } from "./agentSdk";
 import { ChatCompletionsTransport } from "./chatCompletions";
 import { ResponsesTransport } from "./responses";
+import { StatelessTransport, type ResolveInput, type RunResult } from "./base";
 import type { StreamEvent } from "../../types";
 
 const json = (body: unknown, status = 200) =>
@@ -378,5 +379,69 @@ describe("AgentSdkTransport and an agent that pauses", () => {
     await transport.sendMessageStream(conversation.id, { message: "go" }, {}, controller.signal);
     const { messages } = await transport.getConversation(conversation.id);
     expect(messages[1]).toMatchObject({ content: "half", status: "cancelled", stopReason: "cancelled" });
+  });
+});
+
+describe("StatelessTransport answering an action", () => {
+  const card = { id: "a1", type: "tool_approval" as const, toolName: "sandbox_exec" };
+
+  class Backend extends StatelessTransport {
+    constructor(private readonly answer: (input: ResolveInput) => Promise<RunResult>) {
+      super({ defaultAgentId: "agent" });
+    }
+    protected async run(): Promise<RunResult> {
+      return { content: "", pendingActions: [card] };
+    }
+    protected resolve(input: ResolveInput): Promise<RunResult> {
+      return this.answer(input);
+    }
+  }
+
+  async function paused(backend: Backend) {
+    const conversation = await backend.createConversation({ agentId: "agent" });
+    await backend.sendMessage(conversation.id, { message: "go" });
+    return conversation;
+  }
+
+  it("announces the answer as taken only once the backend has started on it", async () => {
+    const backend = new Backend(async ({ emit }) => {
+      emit.text("Working");
+      return { content: "Working" };
+    });
+    const conversation = await paused(backend);
+    const events: string[] = [];
+    await backend.resolveAction!(conversation.id, "a1", { type: "tool_approval", decision: "allow" }, {
+      stream: true,
+      callbacks: { onStart: () => events.push("start"), onActionResolved: () => events.push("resolved"), onText: (_t, full) => events.push(full), onDone: (e) => events.push(e.type) },
+    });
+    expect(events).toEqual(["start", "resolved", "Working", "stream.done"]);
+  });
+
+  it("announces it when the backend returns without any output", async () => {
+    const backend = new Backend(async () => ({ content: "Done." }));
+    const conversation = await paused(backend);
+    const events: string[] = [];
+    await backend.resolveAction!(conversation.id, "a1", { type: "tool_approval", decision: "allow" }, {
+      stream: true,
+      callbacks: { onStart: () => events.push("start"), onActionResolved: () => events.push("resolved"), onDone: (e) => events.push(e.type) },
+    });
+    expect(events).toEqual(["start", "resolved", "stream.done"]);
+  });
+
+  it("announces nothing and leaves the card open when the backend refuses the answer", async () => {
+    const backend = new Backend(async () => {
+      throw Object.assign(new Error("no"), { status: 403, code: "forbidden" });
+    });
+    const conversation = await paused(backend);
+    const events: string[] = [];
+    await expect(
+      backend.resolveAction!(conversation.id, "a1", { type: "tool_approval", decision: "allow" }, {
+        stream: true,
+        callbacks: { onStart: () => events.push("start"), onActionResolved: () => events.push("resolved"), onDone: (e) => events.push(e.type) },
+      })
+    ).rejects.toMatchObject({ code: "forbidden", status: 403 });
+    expect(events).toEqual([]);
+    const { messages } = await backend.getConversation(conversation.id);
+    expect(messages[1].actionStates?.a1).toBeUndefined();
   });
 });

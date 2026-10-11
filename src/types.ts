@@ -208,6 +208,20 @@ export interface ConversationRuntime {
   activeRunId?: string;
 }
 
+/**
+ * Which part of a conversation's history a `getConversation` answer holds. agent-server sends the
+ * newest page (`limits.messagePageSize`, 100 by default) and says whether older messages exist;
+ * they are fetched with `before=<id of the oldest message shown>`.
+ */
+export interface MessagesPage {
+  limit: number;
+  order: "asc" | "desc";
+  /** Older messages exist than the ones returned */
+  hasMoreBefore: boolean;
+  /** Newer messages exist than the ones returned */
+  hasMoreAfter: boolean;
+}
+
 /** A spend limit on a conversation. */
 export interface ConversationBudget {
   maxCostUsd: number;
@@ -317,7 +331,11 @@ export interface AgentInfo {
   capabilities?: AgentCapabilities;
 }
 
-/** What an agent takes as attachments (`AgentInfo.capabilities.attachments`, filled by agent-server). */
+/**
+ * What an agent takes as attachments (`AgentInfo.capabilities.attachments`). agent-server fills `enabled`,
+ * `maxFiles`, `maxFileSize`, `allowedMimeTypes` and `acceptsImages`; the other fields come from a host
+ * that sets them (or, for the retention hint, from `metadata.fileRetentionDays`).
+ */
 export interface AgentAttachmentsCapability {
   /** `false` hides the paperclip */
   enabled?: boolean;
@@ -329,7 +347,10 @@ export interface AgentAttachmentsCapability {
   allowedMimeTypes?: string[];
   /** `false`: the agent's model does not look at images; an attached image gets a warning */
   acceptsImages?: boolean;
-  /** Days an uploaded file is kept; shown as a hint under the composer */
+  /**
+   * Days an uploaded file is kept; shown as a hint under the composer. agent-server does not send it:
+   * a host sets it here or as `metadata.fileRetentionDays`, and without it there is no hint.
+   */
   retentionDays?: number;
   /** What `maxFiles` counts: files per `conversation` (agent-server) or per `message`. Default `conversation`. */
   maxFilesScope?: "conversation" | "message";

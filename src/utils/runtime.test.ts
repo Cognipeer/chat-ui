@@ -6,6 +6,7 @@ import {
   messageStopReason,
   messageWarnings,
   normalizeBudget,
+  normalizeMessagesPage,
   normalizeRuntime,
   normalizeStopReason,
   runtimeAfterTurn,
@@ -141,5 +142,28 @@ describe("formatUsd", () => {
     expect(formatUsd(0.0042, "en")).toBe("$0.0042");
     expect(formatUsd(0, "en")).toBe("$0.00");
     expect(formatUsd(12, "en")).toBe("$12.00");
+  });
+});
+
+describe("normalizeMessagesPage", () => {
+  it("reads what a paging server reports", () => {
+    expect(normalizeMessagesPage({ limit: 100, order: "asc", hasMoreBefore: true, hasMoreAfter: false })).toEqual({
+      limit: 100,
+      order: "asc",
+      hasMoreBefore: true,
+      hasMoreAfter: false,
+    });
+    expect(normalizeMessagesPage({ limit: 5, order: "desc", hasMoreBefore: false, hasMoreAfter: true })).toEqual({
+      limit: 5,
+      order: "desc",
+      hasMoreBefore: false,
+      hasMoreAfter: true,
+    });
+  });
+
+  it("is undefined when the server does not say whether older messages exist", () => {
+    for (const value of [undefined, null, "x", {}, { limit: 100 }, { hasMoreBefore: "yes" }]) {
+      expect(normalizeMessagesPage(value)).toBeUndefined();
+    }
   });
 });

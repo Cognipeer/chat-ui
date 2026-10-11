@@ -291,6 +291,95 @@ describe("useChat: a turn that is still running when the conversation opens", ()
   });
 });
 
+describe("useChat: a followed turn that has just ended", () => {
+  const user = message({ id: "u1", role: "user", content: "go" });
+  const answer = message({ id: "m2", content: "done" });
+
+  /** A follower that streams one turn up to its idle event (seq 12) and ends; later ones wait until aborted. */
+  function followers() {
+    let calls = 0;
+    return vi.fn(async (_id: string, options: FollowEventsOptions) => {
+      calls += 1;
+      if (calls === 1) {
+        options.onEvent(event("agent.message", { content: "done", message_id: "m2" }, 11));
+        options.onEvent(event("session.status_idle", { stop_reason: "end_turn" }, 12));
+        return;
+      }
+      await new Promise<void>((resolve) => options.signal?.addEventListener("abort", () => resolve()));
+    });
+  }
+
+  it("does not follow the run again when the store still reads running right after it said idle", async () => {
+    const getConversation = vi
+      .fn()
+      .mockResolvedValueOnce({ conversation: conversation({ runtime: { status: "running", lastEventSeq: 7 } }), messages: [user] })
+      // the store has not caught up: still running, nothing newer than the idle event
+      .mockResolvedValue({ conversation: conversation({ runtime: { status: "running", lastEventSeq: 12 } }), messages: [user, answer] });
+    const followEvents = followers();
+    const { result } = renderHook(
+      () => useChat({ transport: makeTransport({ getConversation, followEvents }), agentId: "agent", followSettleRetryMs: 5 }),
+      { wrapper }
+    );
+    await act(async () => {
+      await result.current.loadConversation("c1");
+    });
+    // the first look, and the one more after a short wait
+    await waitFor(() => expect(getConversation).toHaveBeenCalledTimes(3));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 40));
+    });
+    expect(followEvents).toHaveBeenCalledTimes(1);
+    expect(getConversation).toHaveBeenCalledTimes(3);
+    expect(result.current.isFollowing).toBe(false);
+    expect(result.current.isStreaming).toBe(false);
+    expect(result.current.composerState).toBe("open");
+    expect(result.current.messages.map((m) => m.id)).toEqual(["u1", "m2"]);
+  });
+
+  it("follows a turn that started after the idle one (a newer event), from where it stands", async () => {
+    const getConversation = vi
+      .fn()
+      .mockResolvedValueOnce({ conversation: conversation({ runtime: { status: "running", lastEventSeq: 7 } }), messages: [user] })
+      .mockResolvedValue({ conversation: conversation({ runtime: { status: "running", lastEventSeq: 15, activeRunId: "run_2" } }), messages: [user, answer] });
+    const followEvents = followers();
+    const { result } = renderHook(
+      () => useChat({ transport: makeTransport({ getConversation, followEvents }), agentId: "agent", followSettleRetryMs: 5 }),
+      { wrapper }
+    );
+    await act(async () => {
+      await result.current.loadConversation("c1");
+    });
+    await waitFor(() => expect(followEvents).toHaveBeenCalledTimes(2));
+    expect(followEvents.mock.calls[1][1].after).toBe(15);
+    await waitFor(() => expect(result.current.isFollowing).toBe(true));
+  });
+
+  it("Stop on a turn the server has nothing to cancel in stops watching and shows what the server holds", async () => {
+    const getConversation = vi.fn(async () => ({
+      conversation: conversation({ runtime: { status: "running", lastEventSeq: 7 } }),
+      messages: [user, answer],
+    }));
+    const followEvents = vi.fn((_id: string, options: FollowEventsOptions) => new Promise<void>((resolve) => options.signal?.addEventListener("abort", () => resolve())));
+    const cancel = vi.fn(async () => ({ cancelled: false, settled: true }));
+    const { result } = renderHook(
+      () => useChat({ transport: makeTransport({ getConversation, followEvents, cancel }), agentId: "agent" }),
+      { wrapper }
+    );
+    await act(async () => {
+      await result.current.loadConversation("c1");
+    });
+    await waitFor(() => expect(result.current.isFollowing).toBe(true));
+    act(() => result.current.stop());
+    await waitFor(() => expect(result.current.isFollowing).toBe(false));
+    expect(cancel).toHaveBeenCalledWith("c1");
+    // looked again, and did not attach to the same run a second time
+    await waitFor(() => expect(getConversation).toHaveBeenCalledTimes(2));
+    expect(followEvents).toHaveBeenCalledTimes(1);
+    expect(result.current.isStreaming).toBe(false);
+    expect(result.current.composerState).toBe("open");
+  });
+});
+
 describe("useChat: a send refused because the conversation is running elsewhere", () => {
   it("follows the running turn instead of only showing the banner", async () => {
     const user = message({ id: "u1", role: "user", content: "earlier" });
@@ -434,7 +523,9 @@ describe("useChat: a connection that drops while the server is answering", () =>
       cb.onDone?.({ type: "stream.done", conversationId: "c1", messageId: "m1", content: "", status: "requires_action", pendingActions: [approval], timestamp: 1 });
     });
     const resolveAction = vi.fn(async (_c: string, _a: string, _r: unknown, options?: { callbacks?: StreamCallbacks }) => {
+      // the server opens its stream with the start and the resolved event together
       options?.callbacks?.onStart?.({ type: "stream.start", conversationId: "c1", messageId: "m1", timestamp: 1 });
+      options?.callbacks?.onActionResolved?.({ type: "stream.action_resolved", conversationId: "c1", actionId: "a1", resolution: { type: "tool_approval", decision: "allow" }, timestamp: 1 });
       throw drop();
     });
     const getConversation = vi.fn(async () => ({

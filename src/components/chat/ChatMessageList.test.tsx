@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { cleanup, render as rtlRender, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render as rtlRender, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { ChatI18nProvider } from "../../providers";
 import { ChatMessageList } from "./ChatMessageList";
@@ -123,5 +123,59 @@ describe("ChatMessageList announcements", () => {
     expect(one).toBe("The assistant needs your approval: sandbox_exec");
     expect(two).not.toBe(one);
     expect(two?.replace("​", "")).toBe(one);
+  });
+});
+
+describe("ChatMessageList: the turn being streamed", () => {
+  it("is drawn once, below the stored messages, which keep what was stored", () => {
+    const stored = [msg("u1", { role: "user", content: "go" }), msg("m1", { content: "The stored answer" })];
+    rtlRender(wrap(<ChatMessageList messages={stored} isStreaming streamingText="Live words" />));
+    expect(screen.getAllByText("Live words")).toHaveLength(1);
+    expect(screen.getByText("The stored answer")).toBeTruthy();
+    // the live turn comes after the last stored message
+    const all = Array.from(document.querySelectorAll("p")).map((p) => p.textContent);
+    expect(all).toEqual(["go", "The stored answer", "Live words"]);
+  });
+});
+
+describe("ChatMessageList: older messages", () => {
+  const history = [msg("u9", { role: "user", content: "newer question" }), msg("m9", { content: "newer answer" })];
+
+  it("offers to fetch them above the first message, and says so while it does", () => {
+    const onLoadEarlier = vi.fn();
+    const view = rtlRender(wrap(<ChatMessageList messages={history} hasEarlier onLoadEarlier={onLoadEarlier} />));
+    fireEvent.click(screen.getByRole("button", { name: "Show earlier messages" }));
+    expect(onLoadEarlier).toHaveBeenCalledTimes(1);
+
+    view.rerender(wrap(<ChatMessageList messages={history} hasEarlier isLoadingEarlier onLoadEarlier={onLoadEarlier} />));
+    const busy = screen.getByRole("button", { name: "Loading earlier messages..." }) as HTMLButtonElement;
+    expect(busy.disabled).toBe(true);
+  });
+
+  it("shows no button when nothing older exists or nobody can fetch it", () => {
+    const view = rtlRender(wrap(<ChatMessageList messages={history} onLoadEarlier={() => {}} />));
+    expect(screen.queryByRole("button", { name: /earlier messages/i })).toBeNull();
+    view.rerender(wrap(<ChatMessageList messages={history} hasEarlier />));
+    expect(screen.queryByRole("button", { name: /earlier messages/i })).toBeNull();
+  });
+
+  it("keeps the reader where they were when older messages arrive, and does not jump to the end", () => {
+    const scrollIntoView = Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>;
+    const view = rtlRender(wrap(<ChatMessageList messages={history} hasEarlier onLoadEarlier={() => {}} />));
+    const log = screen.getByRole("log") as HTMLElement;
+    let height = 1000;
+    Object.defineProperty(log, "scrollHeight", { configurable: true, get: () => height });
+    log.scrollTop = 40;
+
+    fireEvent.click(screen.getByRole("button", { name: "Show earlier messages" }));
+    scrollIntoView.mockClear();
+    height = 1900; // the older page made the list 900px taller
+    view.rerender(wrap(<ChatMessageList messages={[msg("u1", { role: "user", content: "old" }), msg("m1", { content: "older" }), ...history]} hasEarlier onLoadEarlier={() => {}} />));
+    expect(log.scrollTop).toBe(940);
+    expect(scrollIntoView).not.toHaveBeenCalled();
+
+    // a new message at the end scrolls down as before
+    view.rerender(wrap(<ChatMessageList messages={[msg("u1", { role: "user", content: "old" }), msg("m1", { content: "older" }), ...history, msg("m10", { content: "latest" })]} onLoadEarlier={() => {}} />));
+    expect(scrollIntoView).toHaveBeenCalled();
   });
 });

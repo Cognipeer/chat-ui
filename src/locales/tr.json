@@ -234,5 +234,8 @@
   "chat.error.code.conversation_conflict": "Sohbet işlem sırasında değişti. Yeniden deneyin.",
   "chat.error.code.lease_lost": "Sohbeti başka bir sunucu devraldı. Yeniden deneyin.",
   "chat.error.code.storage_limit_exceeded": "Depolama dolu olduğundan dosya saklanamadı.",
-  "chat.error.code.budget_misconfigured": "Bu asistan için kullanım sınırları doğru kurulmamış."
+  "chat.error.code.budget_misconfigured": "Bu asistan için kullanım sınırları doğru kurulmamış.",
+  "chat.messages.loadEarlier": "Önceki mesajları göster",
+  "chat.messages.loadingEarlier": "Önceki mesajlar yükleniyor...",
+  "chat.error.loadEarlierFailed": "Önceki mesajlar yüklenemedi"
 }

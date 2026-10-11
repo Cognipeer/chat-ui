@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { ChatI18nProvider } from "../providers";
 import { useChat } from "./useChat";
 import type { ChatTransport, StreamCallbacks } from "../api";
+import { StatelessTransport, type RunResult } from "../api/adapters";
 import type { PendingAction } from "../types";
 
 const approval: PendingAction = { id: "a1", type: "tool_approval", toolName: "sandbox_exec", args: { cmd: "ls" } };
@@ -325,5 +326,37 @@ describe("useChat approvals", () => {
     });
     expect(sent).toBe(true);
     expect(result.current.messages[result.current.messages.length - 1]).toMatchObject({ id: "m3", content: "ok" });
+  });
+});
+
+describe("useChat: a backend that refuses the answer", () => {
+  class Refusing extends StatelessTransport {
+    constructor() {
+      super({ defaultAgentId: "agent" });
+    }
+    protected async run(): Promise<RunResult> {
+      return { content: "", pendingActions: [approval] };
+    }
+    protected async resolve(): Promise<RunResult> {
+      throw Object.assign(new Error("Forbidden"), { status: 403, code: "forbidden" });
+    }
+  }
+
+  it.each([true, false])("keeps the card open and returns false (streaming: %s)", async (streaming) => {
+    const transport = new Refusing();
+    const { result } = renderHook(() => useChat({ transport, agentId: "agent", streaming }), { wrapper });
+    await act(async () => {
+      await result.current.sendMessage("go");
+    });
+    expect(result.current.awaitingAction).toBe(true);
+
+    let taken: boolean | undefined;
+    await act(async () => {
+      taken = await result.current.resolveAction("a1", { type: "tool_approval", decision: "allow" });
+    });
+    expect(taken).toBe(false);
+    expect(result.current.error?.message).toBe("You do not have permission to do that.");
+    expect(result.current.awaitingAction).toBe(true);
+    expect(result.current.messages.find((m) => m.id !== undefined && m.pendingActions)?.actionStates?.a1).toEqual({ status: "pending" });
   });
 });

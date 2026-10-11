@@ -325,6 +325,25 @@ export function actionDeadline(action: Pick<PendingAction, "expiresAt">): number
   return Number.isFinite(at) ? at : undefined;
 }
 
+/**
+ * Marks as Expired the actions that are still open in `messages` although their deadline has passed.
+ * A server only settles a lapsed action when its own sweep runs (a minute apart by default), so a
+ * conversation fetched in between still lists it as open; the card has already shown Expired and
+ * must not come back to life. An action the UI has settled or is sending an answer for is left alone.
+ */
+export function expireLapsedActions(messages: Message[], now: number = Date.now()): Message[] {
+  return messages.map((message) => {
+    let lapsed: Record<string, ActionState> | undefined;
+    for (const action of message.pendingActions ?? []) {
+      const status = message.actionStates?.[action.id]?.status;
+      if (status !== undefined && status !== "pending") continue;
+      const at = actionDeadline(action);
+      if (at !== undefined && at <= now) (lapsed ??= {})[action.id] = { status: "expired" };
+    }
+    return lapsed ? { ...message, actionStates: { ...message.actionStates, ...lapsed } } : message;
+  });
+}
+
 export type CountdownUnit = "day" | "hour" | "minute" | "second";
 
 /**

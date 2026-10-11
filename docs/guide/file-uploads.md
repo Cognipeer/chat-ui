@@ -63,7 +63,7 @@ Enable file attachments in your chat.
 | `maxFiles` | How many files **one conversation** may hold (unless `maxFilesScope: "message"`). The chat counts what the conversation holds - the server's file list, or the files of the loaded messages - and shows "3 of 10 files in this chat" |
 | `maxFileSize`, `allowedMimeTypes` | Checked before a file is attached, with the limit in the message |
 | `acceptsImages: false` | An attached image gets a warning (below) |
-| `retentionDays` | Shown under the composer: "Files are kept for 30 days" |
+| `retentionDays` | Shown under the composer: "Files are kept for 30 days". agent-server does not send it; set it from your own agent listing or as `metadata.fileRetentionDays`, and without it there is no hint |
 
 The older keys (`metadata.enableFileUpload`, `maxFileSize`, `maxFiles`, `allowedFileTypes`, `acceptsImages`, `maxFilesScope`, `fileRetentionDays`) keep working.
 
@@ -133,7 +133,7 @@ Each file is stored the moment it is picked, dropped or pasted, so a large file 
 
 ### Raw bodies and progress
 
-A transport with `supportsRawUpload` (`AgentServerClient`) is given the file as itself: the bytes are the request body with the file's own `Content-Type` (`POST /files?name=...&conversationId=...`), not base64 in JSON. That avoids the 33% inflation and giant strings in memory, and reports progress. Progress uses `XMLHttpRequest` (the one browser API with upload progress); a host that gives its own `fetch` keeps using it and sees progress only at the end. A file with no type goes up as `application/octet-stream` and the server guesses from the name.
+A transport with `supportsRawUpload` (`AgentServerClient`) is given the file as itself: the bytes are the request body with the file's own `Content-Type` (`POST /files?name=...&conversationId=...`), not base64 in JSON. That avoids the 33% inflation and giant strings in memory, and reports progress. Progress uses `XMLHttpRequest` (the one browser API with upload progress); a host that gives its own `fetch` keeps using it and sees progress only at the end. A file with no type goes up as `application/octet-stream` and the server guesses from the name. A JSON file (`application/json`, `application/*+json`) goes up as `application/octet-stream` with `?mimeType=application/json` in the query, because the server reads a JSON `Content-Type` as its base64 JSON form of the upload. A request that never gets an answer (no network) fails with the code `upload_failed`, shown in the person's language.
 
 ```ts
 new AgentServerClient({ baseUrl: "/api/agents", rawUpload: false });   // a server that only takes JSON
@@ -219,7 +219,7 @@ Files and images are displayed in messages with:
 - **Download** - A link on the chip when the file has a safe `url` (http(s), `blob:` or relative), or a button that fetches it through the transport
 - **Images in the content** - A message whose `content` has `image_url` / `input_image` / `image` parts shows those images below its text
 
-Only safe image URLs are drawn: `https:`, `blob:`, relative or same-origin, `http:` on a page served over http, and base64 PNG / JPEG / GIF / WebP. `javascript:` URLs, SVG data URLs and other schemes are dropped. If your image URLs need something an `<img>` cannot send, draw the image yourself with `renderImage`, or give the transport `getFileUrl`:
+Only safe image URLs are drawn: `https:`, `blob:`, relative or same-origin, `http:` on a page served over http, and base64 PNG / JPEG / GIF / WebP. `javascript:` URLs, SVG data URLs and other schemes are dropped. Only PNG, JPEG, GIF and WebP attachments become thumbnails (and get a local preview URL); an SVG or another image type is a file chip with its download. A thumbnail that fails to load falls back to the next copy (the local preview, then the file's URL, then the stored copy through `getFileUrl`) and finally to the chip. File links accept `http:`, `https:`, `blob:` and relative addresses only, so a `data:` URL (such as the inline bytes of an A2A file) has no Download link. If your image URLs need something an `<img>` cannot send, draw the image yourself with `renderImage`, or give the transport `getFileUrl`:
 
 ```tsx
 <Chat

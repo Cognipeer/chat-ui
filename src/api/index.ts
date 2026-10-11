@@ -9,6 +9,7 @@ export type {
   FollowEventsOptions,
   CancelResult,
   ListFilesResult,
+  GetConversationOptions,
   UploadFileParams,
   PaginatedResponse,
 } from "./transport";

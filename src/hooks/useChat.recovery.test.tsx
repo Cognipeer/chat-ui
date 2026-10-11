@@ -272,6 +272,51 @@ describe("useChat: a card past its deadline", () => {
     expect(result.current.messages[0].actionStates?.a1.status).toBe("expired");
   });
 
+  it("stays Expired, and stops fetching, while the server has not swept the card and still lists it as open", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-11T10:00:00Z"));
+    const deadline = new Date(Date.now() + 5_000).toISOString();
+    // the server's sweep has not run: every fetch says the card is open
+    const getConversation = vi.fn(async () => loaded(deadline));
+    const { result } = await open(getConversation);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(result.current.awaitingAction).toBe(false);
+
+    const seen: boolean[] = [];
+    for (let i = 0; i < 40; i++) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+      seen.push(result.current.awaitingAction);
+    }
+    // the first look, and the one after the deadline - not one every second and a half
+    expect(getConversation).toHaveBeenCalledTimes(2);
+    expect(seen.every((waiting) => !waiting)).toBe(true);
+    expect(result.current.messages[0].actionStates?.a1.status).toBe("expired");
+  });
+
+  it("a fetched card whose deadline lies ahead is still open (a later deadline than the one it had)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-11T10:00:00Z"));
+    let deadline = new Date(Date.now() + 5_000).toISOString();
+    const getConversation = vi.fn(async () => loaded(deadline));
+    const { result } = await open(getConversation);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(result.current.awaitingAction).toBe(false);
+    // the server extended it before the page looked again
+    deadline = new Date(Date.now() + 60_000).toISOString();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_500);
+    });
+    expect(getConversation).toHaveBeenCalledTimes(2);
+    expect(result.current.awaitingAction).toBe(true);
+  });
+
   it("waits as long as it is told before fetching again", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-10-11T10:00:00Z"));

@@ -3,6 +3,7 @@ import type { Message, PendingAction } from "../types";
 import {
   actionDeadline,
   collectPendingActions,
+  expireLapsedActions,
   isQuestionRequired,
   keepSettledDetail,
   normalizeActions,
@@ -258,5 +259,43 @@ describe("a request that lapsed and was refused by the server on its own", () =>
   it("leaves a denial by a person, or by another system actor, as it is", () => {
     expect(settledStateOf({ id: "a1", type: "tool_approval", status: "resolved", resolution: { decision: "deny" }, resolvedBy: "user_1" })?.status).toBe("resolved");
     expect(settledStateOf({ id: "a1", type: "tool_approval", status: "cancelled", resolvedBy: "system" })?.status).toBe("cancelled");
+  });
+});
+
+describe("expireLapsedActions", () => {
+  const now = Date.parse("2026-10-11T10:00:00Z");
+  const open = (expiresAt?: string): Message => msg({ id: "m1", status: "requires_action", pendingActions: [{ ...approval, ...(expiresAt ? { expiresAt } : {}) }] });
+
+  it("marks an open action past its deadline as expired, and leaves the rest alone", () => {
+    const [lapsed] = expireLapsedActions([open("2026-10-11T09:59:59Z")], now);
+    expect(lapsed.actionStates?.a1).toEqual({ status: "expired" });
+    const future = open("2026-10-11T10:00:01Z");
+    const noDeadline = open();
+    expect(expireLapsedActions([future, noDeadline], now)).toEqual([future, noDeadline]);
+    expect(expireLapsedActions([future], now)[0]).toBe(future);
+  });
+
+  it("takes an action whose deadline is exactly now, and one the UI had put back to pending", () => {
+    expect(expireLapsedActions([open("2026-10-11T10:00:00Z")], now)[0].actionStates?.a1.status).toBe("expired");
+    const back = { ...open("2026-10-11T09:00:00Z"), actionStates: { a1: { status: "pending" as const } } };
+    expect(expireLapsedActions([back], now)[0].actionStates?.a1.status).toBe("expired");
+  });
+
+  it("leaves an action alone that the UI has settled or is sending an answer for", () => {
+    for (const status of ["resolving", "resolved", "cancelled", "expired"] as const) {
+      const message = { ...open("2026-10-11T09:00:00Z"), actionStates: { a1: { status } } };
+      expect(expireLapsedActions([message], now)[0], status).toBe(message);
+    }
+  });
+
+  it("only touches the lapsed action of a message that holds several", () => {
+    const message = msg({
+      id: "m1",
+      pendingActions: [
+        { ...approval, id: "late", expiresAt: "2026-10-11T09:00:00Z" },
+        { ...approval, id: "soon", expiresAt: "2026-10-11T11:00:00Z" },
+      ],
+    });
+    expect(expireLapsedActions([message], now)[0].actionStates).toEqual({ late: { status: "expired" } });
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { imagePartSource, isImageType, safeFileHref, safeImageSrc } from "./images";
+import { imagePartSource, isImageType, isRasterImageType, safeFileHref, safeImageSrc } from "./images";
 
 describe("safeImageSrc", () => {
   it("allows https, blob, relative and same-origin URLs and raster data URLs", () => {
@@ -70,5 +70,66 @@ describe("isImageType / safeFileHref", () => {
     expect(safeFileHref("javascript:alert(1)")).toBeUndefined();
     expect(safeFileHref("data:text/html,x")).toBeUndefined();
     expect(safeFileHref(undefined)).toBeUndefined();
+  });
+});
+
+describe("safeFileHref and the URL parser", () => {
+  it("rejects script URLs written with characters the browser's URL parser ignores", () => {
+    for (const url of [
+      "java\nscript:alert(1)",
+      "java\tscript:alert(1)",
+      "java\rscript:alert(1)",
+      "jav\n\tascript:alert(1)",
+      "\u0001javascript:alert(1)",
+      "\u0000javascript:alert(1)",
+      "\u001f javascript:alert(1)",
+      " \n javascript:alert(1)",
+      "JAVASCRIPT:alert(1)",
+      "vbscript:msgbox(1)",
+      "data:text/html;base64,PGgxPg==",
+      "file:///etc/passwd",
+    ]) {
+      expect(safeFileHref(url), JSON.stringify(url)).toBeUndefined();
+    }
+  });
+
+  it("also rejects them after leading and trailing whitespace", () => {
+    expect(safeFileHref("  javascript:alert(1)  ")).toBeUndefined();
+    expect(safeFileHref("\n\tjava\nscript:alert(1)")).toBeUndefined();
+  });
+
+  it("returns the address the browser will use, not the raw string", () => {
+    expect(safeFileHref("  https://x.test/f  ")).toBe("https://x.test/f");
+    expect(safeFileHref("ht\ntps://x.test/f")).toBe("https://x.test/f");
+    expect(safeFileHref("https://x.test")).toBe("https://x.test/");
+    expect(safeFileHref("HTTPS://X.TEST/F")).toBe("https://x.test/F");
+  });
+
+  it("keeps relative links, with the characters the parser would drop taken out", () => {
+    expect(safeFileHref("/files/1")).toBe("/files/1");
+    expect(safeFileHref("files/a b")).toBe("files/a b");
+    expect(safeFileHref("/files/\n1")).toBe("/files/1");
+    expect(safeFileHref("a/b:c")).toBe("a/b:c");
+  });
+
+  it("rejects anything that is not a string or is empty after cleaning", () => {
+    expect(safeFileHref("")).toBeUndefined();
+    expect(safeFileHref(" \n\t ")).toBeUndefined();
+    expect(safeFileHref(null)).toBeUndefined();
+    expect(safeFileHref(7)).toBeUndefined();
+  });
+});
+
+describe("isRasterImageType", () => {
+  it("is true for the pictures a browser shows without running anything", () => {
+    for (const type of ["image/png", "IMAGE/JPEG", "image/jpg", "image/gif", "image/webp", "image/png; charset=binary"]) {
+      expect(isRasterImageType(type), type).toBe(true);
+    }
+  });
+
+  it("is false for SVG and other types", () => {
+    for (const type of ["image/svg+xml", "image/heic", "image/tiff", "application/pdf", "", undefined]) {
+      expect(isRasterImageType(type), String(type)).toBe(false);
+    }
   });
 });

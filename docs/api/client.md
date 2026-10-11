@@ -41,12 +41,13 @@ const { conversations, total, limit, offset, hasMore } =
 
 const conversation = await client.createConversation({ agentId: "support", title?, userId?, metadata? });
 
-const { conversation, messages, pendingActions } = await client.getConversation(conversationId);
+const { conversation, messages, pendingActions, messagesPage } = await client.getConversation(conversationId);
+const older = await client.getConversation(conversationId, { before: messages[0].id, limit?: 50 });   // the page just older than a message
 await client.updateConversation(conversationId, { title?, metadata?, budget? });
 await client.deleteConversation(conversationId);
 ```
 
-`pendingActions` lists the approvals and questions still waiting for an answer (agent-server 0.3.0+). `conversation.runtime` (`{ status, stopReason?, lastEventSeq, pendingActionIds, activeRunId? }`), `conversation.budget` and `conversation.spentUsd` come with the conversation and with each item of the list; a `runtime` or `budget` that is not well-formed is dropped.
+`messages` is the newest page of the history (agent-server sends `limits.messagePageSize`, 100 by default); `messagesPage` (`{ limit, order, hasMoreBefore, hasMoreAfter }`) says whether older messages exist, and `before` fetches them. `useChat` does this for you: see `hasEarlierMessages` and `loadEarlierMessages`. `pendingActions` lists the approvals and questions still waiting for an answer (agent-server 0.3.0+). `conversation.runtime` (`{ status, stopReason?, lastEventSeq, pendingActionIds, activeRunId? }`), `conversation.budget` and `conversation.spentUsd` come with the conversation and with each item of the list; a `runtime` or `budget` that is not well-formed is dropped.
 
 ### Messages
 
@@ -152,7 +153,7 @@ client.dispose();                                    // release the blob URLs ge
 
 `uploadFile` resolves to a `FileAttachment` (`id`, `name`, `mimeType`, `size`, `expiresAt?`, `conversionStatus?`). `supportsRawUpload` is `true` unless `rawUpload: false`; a `blob` given to a client that does not send raw bodies is read as base64.
 
-`getFileUrl` is the file route itself when no credentials are configured. With `authorization`, `headers`, `getHeaders` or a custom `fetch`, the bytes are fetched with them and handed back as a blob URL, cached per file. Only raster pictures keep their own type; any other blob is typed `application/octet-stream`, so a stored HTML or SVG file can not run on your page.
+`getFileUrl` is the file route itself when no credentials are configured. With `authorization`, `headers`, `getHeaders` or a custom `fetch`, the bytes are fetched with them and handed back as a blob URL, cached per file (the 200 most recently used are kept; `dispose()` releases them all, and `useChat` does so when a conversation is left). Only raster pictures keep their own type; any other blob is typed `application/octet-stream`, so a stored HTML or SVG file can not run on your page.
 
 ## Errors
 

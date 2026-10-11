@@ -234,5 +234,8 @@
   "chat.error.code.conversation_conflict": "The conversation changed while that was happening. Try again.",
   "chat.error.code.lease_lost": "Another server took this conversation over. Try again.",
   "chat.error.code.storage_limit_exceeded": "The storage is full, so the file could not be kept.",
-  "chat.error.code.budget_misconfigured": "Usage limits are not set up correctly for this assistant."
+  "chat.error.code.budget_misconfigured": "Usage limits are not set up correctly for this assistant.",
+  "chat.messages.loadEarlier": "Show earlier messages",
+  "chat.messages.loadingEarlier": "Loading earlier messages...",
+  "chat.error.loadEarlierFailed": "Failed to load earlier messages"
 }

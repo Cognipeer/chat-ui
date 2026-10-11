@@ -4,6 +4,7 @@ import type {
   ConversationListItem,
   ConversationRuntime,
   Message,
+  MessagesPage,
   RuntimeStatus,
   StopReason,
   TurnWarning,
@@ -107,6 +108,19 @@ export function normalizeRuntime(value: unknown): ConversationRuntime | undefine
       ? { pendingActionIds: raw.pendingActionIds.filter((id): id is string => typeof id === "string") }
       : {}),
     ...(typeof raw.activeRunId === "string" ? { activeRunId: raw.activeRunId } : {}),
+  };
+}
+
+/** `messagesPage` of a conversation answer, or undefined when the server does not page its history. */
+export function normalizeMessagesPage(value: unknown): MessagesPage | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const raw = value as Record<string, unknown>;
+  if (typeof raw.hasMoreBefore !== "boolean") return undefined;
+  return {
+    limit: typeof raw.limit === "number" && Number.isFinite(raw.limit) ? raw.limit : 0,
+    order: raw.order === "desc" ? "desc" : "asc",
+    hasMoreBefore: raw.hasMoreBefore,
+    hasMoreAfter: raw.hasMoreAfter === true,
   };
 }
 

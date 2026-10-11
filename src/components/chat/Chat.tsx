@@ -640,6 +640,9 @@ function ChatContent({
               renderImage={renderImage}
               renderStopNotice={renderStopNotice}
               resolveFileUrl={chat.resolveFileUrl}
+              hasEarlier={chat.hasEarlierMessages}
+              isLoadingEarlier={chat.isLoadingEarlierMessages}
+              onLoadEarlier={chat.loadEarlierMessages}
               emptyState={renderEmptyState?.()}
             />
           )}

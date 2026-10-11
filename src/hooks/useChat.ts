@@ -7,11 +7,12 @@ import {
   applyFileList,
   applyFollowEvent,
   countMessageFiles,
+  expireLapsedActions,
   generateId,
   isBudgetExhausted,
   isConflictCode,
   isFileTypeAllowed,
-  isImageType,
+  isRasterImageType,
   keepSettledDetail,
   localizeError,
   newFollowState,
@@ -46,6 +47,7 @@ import type {
 } from "../types";
 import {
   AgentServerClient,
+  type CancelResult,
   type ChatTransport,
   type ListFilesResult,
   type SendMessageResponse,
@@ -182,6 +184,15 @@ export interface UseChatReturn {
   heldFiles: number;
   /** The server's own limit of files per conversation, when it says */
   heldFilesMax: number | undefined;
+  /** The server pages a long conversation: older messages exist than the ones loaded (see `loadEarlierMessages`) */
+  hasEarlierMessages: boolean;
+  /** True while `loadEarlierMessages` is fetching */
+  isLoadingEarlierMessages: boolean;
+  /**
+   * Fetch the page of history just older than the oldest message shown and put it in front. Resolves
+   * `false` when there is nothing older, a fetch is already under way, or it failed (`error` says why).
+   */
+  loadEarlierMessages: () => Promise<boolean>;
   /** A URL to show or download a stored file from (undefined when the transport cannot make one) */
   resolveFileUrl: ((file: FileAttachment, options?: { disposition?: "inline" | "attachment" }) => Promise<string | undefined>) | undefined;
   /** Set error */
@@ -217,9 +228,13 @@ function withActions(
 /** `setTimeout` cannot wait longer than this; a longer deadline is re-armed when it fires. */
 const MAX_TIMER_MS = 2 ** 31 - 1;
 
-/** Local preview of an image still on this device; revoked by the hook. */
+/**
+ * Local preview of a picture still on this device; revoked by the hook. Only raster types get one:
+ * an object URL opened in its own tab belongs to the page's origin, so an SVG (which can carry
+ * script) must not be given one.
+ */
 function createPreviewUrl(file: File): string | undefined {
-  if (!isImageType(file.type)) return undefined;
+  if (!isRasterImageType(file.type)) return undefined;
   try {
     return typeof URL !== "undefined" && typeof URL.createObjectURL === "function"
       ? URL.createObjectURL(file)
@@ -312,6 +327,9 @@ export function useChat(options: UseChatOptions): UseChatReturn {
   const [isResolvingAction, setIsResolvingAction] = useState(false);
   // What the server says the conversation holds (null: it cannot say, the messages are counted)
   const [fileList, setFileList] = useState<{ total: number; max?: number } | null>(null);
+  // The server pages a long history: older messages exist than the ones loaded
+  const [hasEarlierMessages, setHasEarlierMessages] = useState(false);
+  const [isLoadingEarlierMessages, setIsLoadingEarlierMessages] = useState(false);
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const lastUserMessageRef = useRef<string>("");
@@ -329,9 +347,13 @@ export function useChat(options: UseChatOptions): UseChatReturn {
   const sendUploadRef = useRef<AbortController | null>(null);
   // Object URLs made for image previews; released when the conversation is left or the hook unmounts
   const previewUrlsRef = useRef<Set<string>>(new Set());
-  const releasePreviews = useCallback(() => {
-    for (const url of previewUrlsRef.current) revokePreviewUrl(url);
-    previewUrlsRef.current.clear();
+  /** Revoke the previews, except the ones in `keep` (pictures still waiting in the composer). */
+  const releasePreviews = useCallback((keep?: ReadonlySet<string>) => {
+    for (const url of Array.from(previewUrlsRef.current)) {
+      if (keep?.has(url)) continue;
+      revokePreviewUrl(url);
+      previewUrlsRef.current.delete(url);
+    }
   }, []);
 
   // Session counter — incremented on every navigation (new chat, load conversation).
@@ -357,18 +379,48 @@ export function useChat(options: UseChatOptions): UseChatReturn {
   const creatingRef = useRef<Promise<Conversation> | null>(null);
   // Actions announced by `stream.action_required` during the current turn
   const streamActionsRef = useRef<PendingAction[]>([]);
+  // The newest event of the last followed turn that ended as idle: a conversation the store still
+  // calls running without anything newer is the store catching up, not another turn to follow
+  const followedIdleRef = useRef<{ conversationId: string; seq: number } | null>(null);
+  const idleGuardHitRef = useRef(false);
+  // Whether older messages can be fetched, and a fetch of them is under way (for callbacks)
+  const hasEarlierRef = useRef(false);
+  const loadingEarlierRef = useRef(false);
+  const setEarlier = useCallback((more: boolean) => {
+    hasEarlierRef.current = more;
+    setHasEarlierMessages(more);
+  }, []);
+
+  // The client this hook built itself (none when the host passed a transport), and the ones it replaced
+  const ownClientRef = useRef<AgentServerClient | null>(null);
+  const retiredClientsRef = useRef<AgentServerClient[]>([]);
 
   // Keep a stable client reference that updates synchronously when config changes
   useMemo(() => {
-    clientRef.current = transport ?? new AgentServerClient({
-      baseUrl,
-      agentId: agentId || "",
-      authorization,
-      headers,
-      getHeaders,
-      fetch: customFetch,
-    });
+    const own = transport
+      ? null
+      : new AgentServerClient({
+          baseUrl,
+          agentId: agentId || "",
+          authorization,
+          headers,
+          getHeaders,
+          fetch: customFetch,
+        });
+    // A replaced client that made blob URLs is not let go at once: pictures on screen still use them.
+    // (One that made none has nothing to release; a host that builds new options every render would
+    // otherwise pile up a client per render.)
+    const replaced = ownClientRef.current;
+    if (replaced && replaced !== own && replaced.holdsFileUrls) retiredClientsRef.current.push(replaced);
+    ownClientRef.current = own;
+    clientRef.current = transport ?? own;
   }, [transport, baseUrl, agentId, authorization, headers, getHeaders, customFetch]);
+
+  /** Release the blob URLs of the stored files the hook's own clients made (the pictures using them are gone). */
+  const releaseFileUrls = useCallback(() => {
+    for (const old of retiredClientsRef.current.splice(0)) old.dispose();
+    ownClientRef.current?.dispose();
+  }, []);
 
   /** Stop watching a turn that runs elsewhere (the run itself goes on). */
   const stopFollowing = useCallback(() => {
@@ -406,11 +458,10 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       }
       for (const controller of uploadsRef.current.values()) controller.abort();
       uploadsRef.current.clear();
-      // The blob URLs of a client this hook made itself
-      if (!transport) (clientRef.current as AgentServerClient | null)?.dispose?.();
+      // The blob URLs of the clients this hook made itself
+      releaseFileUrls();
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [releasePreviews]
+    [releasePreviews, releaseFileUrls]
   );
 
   // ---------------------------------------------------------------------------
@@ -442,6 +493,12 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     if (!loaded || !client?.followEvents) return;
     if (loaded.runtime?.status !== "running") return;
     if (turnSessionRef.current === session || followRef.current) return;
+    const idle = followedIdleRef.current;
+    if (idle && idle.conversationId === loaded.id && (loaded.runtime.lastEventSeq ?? 0) <= idle.seq) {
+      // The run said it was idle and nothing has happened since: the store has not caught up yet
+      idleGuardHitRef.current = true;
+      return;
+    }
     void followRunRef.current(loaded.id, loaded.runtime.lastEventSeq ?? 0, session);
   }, []);
 
@@ -461,13 +518,17 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     // the background so the server persists the response). Session counter
     // invalidates all stale callbacks.
     resetStreamingState();
-    releasePreviews();
     if (fileTransport === "upload-on-select") {
+      releasePreviews();
       // files stored for this conversation's next message do not follow us to another one
       discardStoredFiles();
       rawFilesRef.current.clear();
       setPendingFiles([]);
+    } else {
+      // pictures still waiting in the composer go along with the person, and keep their previews
+      releasePreviews(new Set(pendingFilesRef.current.flatMap((f) => (f.previewUrl ? [f.previewUrl] : []))));
     }
+    releaseFileUrls();
     sessionRef.current += 1;
     const capturedSession = sessionRef.current;
 
@@ -476,6 +537,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       setMessages([]);
       setConversation(null);
       setFileList(null);
+      setEarlier(false);
       setError(null);
       const [data, listing] = await Promise.all([
         clientRef.current.getConversation(conversationId),
@@ -491,6 +553,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         )
       );
       setFileList(listing ? { total: listing.total, max: listing.maxFiles } : null);
+      setEarlier(data.messagesPage?.hasMoreBefore === true);
       // A turn that was still running when the page opened: pick it up
       followIfRunning(data.conversation, capturedSession);
     } catch (err) {
@@ -504,7 +567,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         setIsLoadingConversation(false);
       }
     }
-  }, [t, has, fileTransport, onError, resetStreamingState, releasePreviews, discardStoredFiles, listFilesFor, withFileList, followIfRunning]);
+  }, [t, has, fileTransport, onError, resetStreamingState, releasePreviews, releaseFileUrls, discardStoredFiles, listFilesFor, withFileList, followIfRunning, setEarlier]);
 
   // Load initial conversation if provided
   useEffect(() => {
@@ -530,12 +593,23 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     try {
       const [data, listing] = await Promise.all([client.getConversation(conversationId), listFilesFor(conversationId)]);
       if (sessionRef.current !== session) return undefined;
-      const restored = withFileList(
-        restorePendingActions(data.messages, data.pendingActions ?? data.conversation?.pendingActions),
-        listing
+      // A card past its deadline stays Expired even when the server has not swept it yet
+      const restored = expireLapsedActions(
+        withFileList(
+          restorePendingActions(data.messages, data.pendingActions ?? data.conversation?.pendingActions),
+          listing
+        )
       );
       setConversation(data.conversation);
-      setMessages((prev) => keepSettledDetail(restored, prev));
+      // The fetch brings the newest page; older pages the person already scrolled back to stay in front of it
+      const newest = restored[0]?.id;
+      const keepsEarlier = newest !== undefined && messagesRef.current.findIndex((m) => m.id === newest) > 0;
+      setMessages((prev) => {
+        const next = keepSettledDetail(restored, prev);
+        const at = newest === undefined ? -1 : prev.findIndex((m) => m.id === newest);
+        return at > 0 ? [...prev.slice(0, at), ...next] : next;
+      });
+      setEarlier(keepsEarlier ? hasEarlierRef.current : data.messagesPage?.hasMoreBefore === true);
       if (listing) setFileList({ total: listing.total, max: listing.maxFiles });
       if (options.follow !== false) followIfRunning(data.conversation, session);
       return restored;
@@ -543,7 +617,41 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       // the banner already says what went wrong
       return undefined;
     }
-  }, [listFilesFor, withFileList, followIfRunning]);
+  }, [listFilesFor, withFileList, followIfRunning, setEarlier]);
+
+  /** Fetches the page of history just older than the oldest message shown and puts it in front. */
+  const loadEarlierMessages = useCallback(async (): Promise<boolean> => {
+    const client = clientRef.current;
+    const conv = conversationRef.current;
+    const oldest = messagesRef.current[0];
+    if (!client || !conv || !oldest || !hasEarlierRef.current || loadingEarlierRef.current) return false;
+    const session = sessionRef.current;
+    loadingEarlierRef.current = true;
+    setIsLoadingEarlierMessages(true);
+    try {
+      const [data, listing] = await Promise.all([client.getConversation(conv.id, { before: oldest.id }), listFilesFor(conv.id)]);
+      if (sessionRef.current !== session) return false;
+      // Nothing in an older page is waiting for an answer any more: an empty report settles every card in it
+      const older = withFileList(restorePendingActions(data.messages, []), listing);
+      setMessages((prev) => {
+        const known = new Set(prev.map((m) => m.id));
+        const added = older.filter((m) => !known.has(m.id));
+        return added.length > 0 ? [...added, ...prev] : prev;
+      });
+      setEarlier(data.messagesPage?.hasMoreBefore === true);
+      return true;
+    } catch (err) {
+      if (sessionRef.current === session && !isAbort(err)) {
+        const shown = friendly(err instanceof Error ? err : new Error(t("chat.error.loadEarlierFailed")));
+        setError(shown);
+        onError?.(shown);
+      }
+      return false;
+    } finally {
+      loadingEarlierRef.current = false;
+      if (sessionRef.current === session) setIsLoadingEarlierMessages(false);
+    }
+  }, [t, has, onError, listFilesFor, withFileList, setEarlier]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /** Looks at what the conversation holds after files were attached to a message. */
   const refreshFileList = useCallback(async (conversationId: string, session: number) => {
@@ -585,9 +693,10 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     conversationRef.current = conv;
     setConversation(conv);
     setMessages([]);
+    setEarlier(false);
     onConversationCreated?.(conv);
     return conv;
-  }, [t, agentId, onConversationCreated]);
+  }, [t, agentId, onConversationCreated, setEarlier]);
 
   // ---------------------------------------------------------------------------
   // Handlers shared by sendMessage, resolveAction and continueConversation
@@ -953,10 +1062,14 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     // The turn ended (or the connection is gone): what the server stored is the truth now. A follower
     // that was stopped on purpose has nothing to settle; looking again would only attach to the same run.
     if (state.idle || failed) {
+      if (state.idle && state.lastSeq !== undefined) followedIdleRef.current = { conversationId, seq: state.lastSeq };
+      idleGuardHitRef.current = false;
       const loaded = await refreshConversation(conversationId, session, { follow: Boolean(state.idle) });
       if (stale()) return;
-      if (loaded && state.messageId && !loaded.some((m) => m.id === state.messageId)) {
-        // the answer was not stored yet when we looked
+      const notStoredYet = loaded && state.messageId && !loaded.some((m) => m.id === state.messageId);
+      if (notStoredYet || idleGuardHitRef.current) {
+        // the answer was not stored yet when we looked, or the run still read as running right after it ended
+        idleGuardHitRef.current = false;
         await sleep(followSettleRetryMs);
         if (stale()) return;
         await refreshConversation(conversationId, session, { follow: true });
@@ -1518,7 +1631,9 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     toolCallStartTimeRef.current = null;
     setProgressMessage("");
 
-    // Once the server has started answering, the action is spent even if the stream later breaks
+    // Once the server has started answering, the action is spent even if the stream later breaks.
+    // `stream.start` alone does not say so (a transport may announce it before the backend has
+    // looked at the answer); the first output, or the resolved event the server follows it with, does.
     let accepted = false;
     try {
       if (streaming) {
@@ -1530,7 +1645,6 @@ export function useChat(options: UseChatOptions): UseChatReturn {
           signal: abortController.signal,
           callbacks: {
             ...base,
-            onStart: (e) => { accepted = true; base.onStart?.(e); },
             onText: (text, full) => { accepted = true; base.onText?.(text, full); },
             onActionResolved: (e) => { accepted = true; base.onActionResolved?.(e); },
             onDone: (e) => { accepted = true; base.onDone?.(e); },
@@ -1700,16 +1814,18 @@ export function useChat(options: UseChatOptions): UseChatReturn {
   const clearMessages = useCallback(() => {
     resetStreamingState();
     releasePreviews();
+    releaseFileUrls();
     discardStoredFiles();
     sessionRef.current += 1;
     setMessages([]);
     setConversation(null);
     setFileList(null);
+    setEarlier(false);
     setError(null);
     setPendingFiles([]);
     rawFilesRef.current.clear();
     lastUserMessageRef.current = "";
-  }, [resetStreamingState, releasePreviews, discardStoredFiles]);
+  }, [resetStreamingState, releasePreviews, releaseFileUrls, discardStoredFiles, setEarlier]);
 
   const retry = useCallback(async () => {
     if (lastUserMessageRef.current) {
@@ -1726,12 +1842,14 @@ export function useChat(options: UseChatOptions): UseChatReturn {
 
   /** Tell the server to stop the run. Quiet when the route is missing (an older server); anything else is shown. */
   const cancelOnServer = useCallback(
-    async (conversationId: string, session: number, thenRefresh: boolean) => {
+    async (conversationId: string, session: number, thenRefresh: boolean): Promise<CancelResult | undefined> => {
       const client = clientRef.current;
-      if (!client?.cancel) return;
+      if (!client?.cancel) return undefined;
+      let outcome: CancelResult | undefined;
       try {
         const result = await client.cancel(conversationId);
-        if (sessionRef.current !== session) return;
+        if (sessionRef.current !== session) return result;
+        outcome = result;
         if (result.runtime) {
           setConversation((prev) => (prev && prev.id === conversationId ? { ...prev, runtime: result.runtime } : prev));
         }
@@ -1745,6 +1863,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       }
       // What the server kept (the cancelled answer, with its stop reason) replaces the local partial
       if (thenRefresh && sessionRef.current === session) await refreshConversation(conversationId, session);
+      return outcome;
     },
     [t, has, onError, refreshConversation] // eslint-disable-line react-hooks/exhaustive-deps
   );
@@ -1756,8 +1875,16 @@ export function useChat(options: UseChatOptions): UseChatReturn {
 
     // Watching a turn that runs elsewhere: stopping it is the server's job; the follower then sees it end
     if (followRef.current) {
-      if (canCancel && conv) void cancelOnServer(conv.id, session, false);
-      else stopFollowing();
+      if (canCancel && conv) {
+        void cancelOnServer(conv.id, session, false).then((result) => {
+          // Nothing was running to stop: the turn being watched is over already, so watching it any
+          // longer would show nothing new. Look at what the server holds instead.
+          if (result && !result.cancelled && sessionRef.current === session && followRef.current) {
+            stopFollowing();
+            void refreshConversation(conv.id, session, { follow: false });
+          }
+        });
+      } else stopFollowing();
       if (!canCancel) {
         setIsStreaming(false);
         streamingTextRef.current = "";
@@ -1769,9 +1896,12 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     }
 
     // Files of the message being sent stop going up
-    sendUploadRef.current?.abort();
-    // The server stops the run (this page's connection is closed too, right below)
-    if (canCancel && conv) void cancelOnServer(conv.id, session, true);
+    const uploading = sendUploadRef.current;
+    uploading?.abort();
+    // The server stops the run (this page's connection is closed too, right below). While the files
+    // are still going up the message has not been sent: there is no run of it to stop, and a stop
+    // request would end whatever else the conversation is waiting on.
+    if (canCancel && conv && !uploading) void cancelOnServer(conv.id, session, true);
 
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
@@ -1808,7 +1938,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     setActiveToolCalls(new Map());
     setProgressMessage("");
     setIsStreaming(false);
-  }, [cancelOnServer, stopFollowing]);
+  }, [cancelOnServer, stopFollowing, refreshConversation]);
 
   const pendingActions = useMemo(() => collectPendingActions(messages), [messages]);
 
@@ -1930,6 +2060,9 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     updateBudget,
     heldFiles,
     heldFilesMax: fileList?.max,
+    hasEarlierMessages,
+    isLoadingEarlierMessages,
+    loadEarlierMessages,
     resolveFileUrl,
     setError,
     setMessages,

@@ -3,7 +3,7 @@
 import React from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { cn, formatFileSize, imagePartSource, isFileExpired, isImageType, safeFileHref, safeImageSrc } from "../../utils";
+import { cn, formatFileSize, imagePartSource, isFileExpired, isImageType, isRasterImageType, safeFileHref, safeImageSrc } from "../../utils";
 import {
   insertCitationMarkers,
   parseCitationHref,
@@ -238,12 +238,15 @@ function ImageThumb({
   className,
   renderImage,
   file,
+  onError,
 }: {
   src: string;
   alt: string;
   className?: string;
   renderImage?: (props: ImageRenderProps) => React.ReactNode;
   file?: FileAttachment;
+  /** The picture could not be loaded (not called for a host's own `renderImage`) */
+  onError?: () => void;
 }) {
   const { t } = useI18n();
   if (renderImage) return <>{renderImage({ src, alt, file })}</>;
@@ -255,7 +258,7 @@ function ImageThumb({
       aria-label={t("chat.message.openImage", { name: alt })}
       className="inline-block rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-chat-accent-primary"
     >
-      <img src={src} alt={alt} loading="lazy" className={cn("rounded-lg object-contain bg-chat-bg-tertiary", className)} />
+      <img src={src} alt={alt} loading="lazy" onError={onError} className={cn("rounded-lg object-contain bg-chat-bg-tertiary", className)} />
     </a>
   );
 }
@@ -325,16 +328,28 @@ function FileAttachmentItem({
   const [downloadFailed, setDownloadFailed] = React.useState(false);
   const expired = isFileExpired(file);
   const image = isImageType(file.mimeType);
-  const local = safeImageSrc(file.previewUrl);
-  const ownUrl = safeImageSrc(file.url);
+  // Only pictures a browser shows without running anything become thumbnails; an SVG or the like is a file chip
+  const raster = isRasterImageType(file.mimeType);
+  // Addresses that did not load (a preview that was released, a stored copy the browser cannot draw)
+  const [failedSrc, setFailedSrc] = React.useState<readonly string[]>([]);
+  const usable = (src: string | undefined) => (src && !failedSrc.includes(src) ? src : undefined);
+  const local = raster ? usable(safeImageSrc(file.previewUrl)) : undefined;
+  const ownUrl = raster ? usable(safeImageSrc(file.url)) : undefined;
   // A picture that is still on this device shows even if its server copy is gone
-  const stored = useStoredFileUrl(file, resolveFileUrl, image && !local && !ownUrl && !expired);
-  const thumb = image ? local ?? (expired ? undefined : ownUrl ?? stored.src) : undefined;
+  const stored = useStoredFileUrl(file, resolveFileUrl, raster && !local && !ownUrl && !expired);
+  const thumb = raster ? local ?? (expired ? undefined : ownUrl ?? usable(stored.src)) : undefined;
 
   if (thumb) {
     return (
       <figure className="m-0 max-w-full">
-        <ImageThumb src={thumb} alt={file.name} className="max-h-48 max-w-full" renderImage={renderImage} file={file} />
+        <ImageThumb
+          src={thumb}
+          alt={file.name}
+          className="max-h-48 max-w-full"
+          renderImage={renderImage}
+          file={file}
+          onError={() => setFailedSrc((prev) => [...prev, thumb])}
+        />
         <figcaption className="mt-1 text-xs text-chat-text-secondary truncate max-w-[16rem]" title={file.name}>
           {file.name} · {formatFileSize(file.size)}
         </figcaption>
