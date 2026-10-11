@@ -1,8 +1,8 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
-import { cn, formatRelativeTime } from "../../utils";
-import type { ConversationListItem } from "../../types";
+import React, { useMemo, useRef, useState } from "react";
+import { cn, formatRelativeTime, isBudgetExhausted } from "../../utils";
+import type { ConversationListItem, RuntimeStatus } from "../../types";
 import { ChatIcon, TrashIcon, PlusIcon, SearchIcon, XIcon } from "./Icons";
 import { useI18n } from "../../hooks";
 
@@ -40,6 +40,38 @@ export interface ChatHistoryProps {
    * Defaults to true when not specified.
    */
   showAgentName?: boolean;
+  /**
+   * Show a status badge on conversations that are working, waiting for the person, or stopped on
+   * their usage limit (from each item's `runtime`). Default true.
+   */
+  showStatus?: boolean;
+  /**
+   * What the selected conversation is doing right now, as this page knows it (it may be ahead of
+   * the list the server sent). Replaces the badge of the selected row.
+   */
+  selectedStatus?: RuntimeStatus;
+}
+
+type BadgeKind = "running" | "waiting" | "budgetPaused";
+
+const BADGE_LABEL: Record<BadgeKind, string> = {
+  running: "chat.history.status.running",
+  waiting: "chat.history.status.waiting",
+  budgetPaused: "chat.history.status.budgetPaused",
+};
+
+const BADGE_TONE: Record<BadgeKind, string> = {
+  running: "bg-chat-info-bg text-chat-info",
+  waiting: "bg-chat-warning-bg text-chat-warning",
+  budgetPaused: "bg-chat-danger-bg text-chat-danger",
+};
+
+/** The badge a conversation earns, or undefined for one that is idle. */
+function badgeFor(status: RuntimeStatus | undefined, exhausted: boolean): BadgeKind | undefined {
+  if (status === "running") return "running";
+  if (status === "requires_action") return "waiting";
+  if (status === "budget_paused" || exhausted) return "budgetPaused";
+  return undefined;
 }
 
 /**
@@ -61,9 +93,28 @@ export function ChatHistory({
   footer,
   enableSearch = false,
   showAgentName = false,
+  showStatus = true,
+  selectedStatus,
 }: ChatHistoryProps) {
   const { t } = useI18n();
   const [searchQuery, setSearchQuery] = useState("");
+  const listRef = useRef<HTMLDivElement>(null);
+
+  // Arrow keys move between the rows (each row is a real button, so Tab, Enter and Space work as well)
+  const handleListKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp" && event.key !== "Home" && event.key !== "End") return;
+    const rows = Array.from(listRef.current?.querySelectorAll<HTMLElement>("[data-chat-conversation]") ?? []);
+    if (rows.length === 0) return;
+    const at = rows.indexOf(document.activeElement as HTMLElement);
+    if (at === -1 && (event.key === "ArrowDown" || event.key === "ArrowUp")) return;
+    event.preventDefault();
+    const next =
+      event.key === "Home" ? 0
+      : event.key === "End" ? rows.length - 1
+      : event.key === "ArrowDown" ? Math.min(rows.length - 1, at + 1)
+      : Math.max(0, at - 1);
+    rows[next].focus();
+  };
 
   const normalizedQuery = searchQuery.trim().toLowerCase();
   const filteredConversations = useMemo(() => {
@@ -82,6 +133,7 @@ export function ChatHistory({
       {/* Mobile overlay */}
       {isOpen && onClose && (
         <div
+          aria-hidden="true"
           className="fixed inset-0 bg-black/50 z-40 md:hidden"
           onClick={onClose}
         />
@@ -95,6 +147,9 @@ export function ChatHistory({
           isOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0",
           className
         )}
+        onKeyDown={(event) => {
+          if (event.key === "Escape" && isOpen && onClose) onClose();
+        }}
       >
         {/* Header — fixed height to align border with main chat header */}
         {header || (
@@ -143,17 +198,27 @@ export function ChatHistory({
               {normalizedQuery ? t("chat.history.noMatchingConversations") : t("chat.history.noConversations")}
             </div>
           ) : (
-            <div className="p-2">
-              {filteredConversations.map((conversation) => (
-                <ConversationItem
-                  key={conversation.id}
-                  conversation={conversation}
-                  isSelected={conversation.id === selectedId}
-                  onSelect={() => onSelect(conversation)}
-                  onDelete={onDelete ? () => onDelete(conversation.id) : undefined}
-                  showAgentName={showAgentName}
-                />
-              ))}
+            <div className="p-2" ref={listRef} onKeyDown={handleListKeyDown}>
+              <ul aria-label={t("chat.history.list")} className="m-0 list-none space-y-0.5 p-0">
+                {filteredConversations.map((conversation) => (
+                  <ConversationItem
+                    key={conversation.id}
+                    conversation={conversation}
+                    isSelected={conversation.id === selectedId}
+                    onSelect={() => onSelect(conversation)}
+                    onDelete={onDelete ? () => onDelete(conversation.id) : undefined}
+                    showAgentName={showAgentName}
+                    badge={
+                      showStatus
+                        ? badgeFor(
+                            conversation.id === selectedId && selectedStatus ? selectedStatus : conversation.runtime?.status,
+                            conversation.id === selectedId && selectedStatus ? false : isBudgetExhausted(conversation)
+                          )
+                        : undefined
+                    }
+                  />
+                ))}
+              </ul>
 
               {/* Load more button */}
               {hasMore && !isLoading && (
@@ -187,7 +252,7 @@ export function ChatHistory({
 }
 
 /**
- * Individual conversation item
+ * Individual conversation item: a button to open it, and - beside it, not inside it - a button to delete it
  */
 interface ConversationItemProps {
   conversation: ConversationListItem;
@@ -195,6 +260,7 @@ interface ConversationItemProps {
   onSelect: () => void;
   onDelete?: () => void;
   showAgentName?: boolean;
+  badge?: BadgeKind;
 }
 
 function ConversationItem({
@@ -203,48 +269,75 @@ function ConversationItem({
   onSelect,
   onDelete,
   showAgentName = false,
+  badge,
 }: ConversationItemProps) {
   const { t } = useI18n();
-  
+  const title = conversation.title || t("chat.history.newChat");
+
   return (
-    <div
+    <li
       className={cn(
-        "group flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer transition-colors",
-        isSelected
-          ? "bg-chat-bg-hover"
-          : "hover:bg-chat-bg-tertiary"
+        "group relative flex items-center rounded-lg transition-colors",
+        isSelected ? "bg-chat-bg-hover" : "hover:bg-chat-bg-tertiary"
       )}
-      onClick={onSelect}
     >
-      <ChatIcon className="w-4 h-4 text-chat-text-tertiary flex-shrink-0" />
-      <div className="flex-1 min-w-0">
-        <div className="text-sm text-chat-text-primary truncate">
-          {conversation.title || t("chat.history.newChat")}
-        </div>
-        <div className="text-xs text-chat-text-tertiary flex items-center gap-1 min-w-0">
-          {conversation.agentName && showAgentName && (
-            <>
-              <span className="truncate">{conversation.agentName}</span>
-              <span className="flex-shrink-0 opacity-50">·</span>
-            </>
-          )}
-          <span className="flex-shrink-0">{formatRelativeTime(new Date(conversation.updatedAt))}</span>
-        </div>
-      </div>
+      <button
+        type="button"
+        data-chat-conversation={conversation.id}
+        aria-current={isSelected ? "true" : undefined}
+        onClick={onSelect}
+        className={cn(
+          "flex min-w-0 flex-1 items-center gap-2 rounded-lg px-3 py-2 text-left",
+          onDelete && "pr-9",
+          "focus:outline-none focus-visible:ring-2 focus-visible:ring-chat-accent-primary"
+        )}
+      >
+        <ChatIcon className="w-4 h-4 text-chat-text-tertiary flex-shrink-0" />
+        <span className="flex-1 min-w-0">
+          <span className="block text-sm text-chat-text-primary truncate">{title}</span>
+          <span className="flex items-center gap-1 min-w-0 text-xs text-chat-text-tertiary">
+            {conversation.agentName && showAgentName && (
+              <>
+                <span className="truncate">{conversation.agentName}</span>
+                <span className="flex-shrink-0 opacity-50">·</span>
+              </>
+            )}
+            <span className="flex-shrink-0">{formatRelativeTime(new Date(conversation.updatedAt))}</span>
+          </span>
+        </span>
+        {badge && (
+          <span
+            data-chat-status={badge}
+            className={cn(
+              "inline-flex flex-shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium leading-none",
+              BADGE_TONE[badge]
+            )}
+          >
+            <span
+              aria-hidden="true"
+              className={cn("h-1.5 w-1.5 rounded-full bg-current", badge === "running" && "animate-pulse motion-reduce:animate-none")}
+            />
+            <span>{t(BADGE_LABEL[badge])}</span>
+          </span>
+        )}
+      </button>
       {onDelete && (
         <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onDelete();
-          }}
-          className="opacity-0 group-hover:opacity-100 p-1 hover:bg-chat-bg-hover rounded transition-all"
+          type="button"
+          onClick={onDelete}
+          className={cn(
+            "absolute right-1 top-1/2 -translate-y-1/2 rounded p-1 transition-all",
+            // visible on hover, and for a keyboard user as soon as the row or the button has focus
+            "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100",
+            "hover:bg-chat-bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-chat-accent-primary"
+          )}
           title={t("chat.history.deleteConversation")}
-          aria-label={t("chat.history.deleteConversation")}
+          aria-label={`${t("chat.history.deleteConversation")}: ${title}`}
         >
-          <TrashIcon className="w-4 h-4 text-chat-text-tertiary hover:text-red-400" />
+          <TrashIcon className="w-4 h-4 text-chat-text-tertiary hover:text-chat-danger" />
         </button>
       )}
-    </div>
+    </li>
   );
 }
 

@@ -2,8 +2,8 @@
 
 import React, { useState, useRef, useCallback, useEffect, useImperativeHandle, forwardRef, KeyboardEvent, ChangeEvent, ClipboardEvent, DragEvent } from "react";
 import { cn, formatFileSize, isImageType, safeImageSrc } from "../../utils";
-import type { FileAttachment } from "../../types";
-import { SendIcon, PaperclipIcon, XIcon, StopIcon, FileIcon, ImageIcon, LoadingIcon } from "./Icons";
+import type { ComposerState, FileAttachment } from "../../types";
+import { SendIcon, PaperclipIcon, XIcon, StopIcon, FileIcon, ImageIcon, LoadingIcon, CheckIcon, RefreshIcon } from "./Icons";
 import { useI18n } from "../../hooks";
 
 export interface ChatInputHandle {
@@ -23,8 +23,10 @@ export interface ChatInputProps {
   onStop?: () => void;
   /** Callback when files are added (picked, dropped or pasted) */
   onFilesAdd?: (files: File[]) => void;
-  /** Callback when a pending file is removed */
+  /** Callback when a pending file is removed (while it is going up, that stops the upload) */
   onFileRemove?: (fileId: string) => void;
+  /** Callback to upload a file again after it failed (its chip then offers a retry button) */
+  onFileRetry?: (fileId: string) => void;
   /** Whether currently loading/streaming */
   isLoading?: boolean;
   /** True while the attached files are being uploaded for a message: attaching and sending wait */
@@ -37,8 +39,14 @@ export interface ChatInputProps {
   enableFileUpload?: boolean;
   /** Allowed file types */
   allowedFileTypes?: string[];
-  /** Maximum files */
+  /** Maximum files (per message, or per conversation with `filesHeld`) */
   maxFiles?: number;
+  /** Files the conversation already holds; they count against `maxFiles` */
+  filesHeld?: number;
+  /** Show "3 of 10 files in this chat" next to the attached files */
+  fileCounter?: boolean;
+  /** Days the server keeps an uploaded file; shown as a hint under the composer */
+  retentionDays?: number;
   /** Warn that an attached image may be ignored (the agent does not read images) */
   imagesIgnored?: boolean;
   /** Whether input is disabled */
@@ -55,8 +63,17 @@ export interface ChatInputProps {
    * What the composer does while the assistant waits for an approval or answer.
    * `blocked` disables input, `cancel` allows a message that cancels the request,
    * `answer` sends the text as the answer to the open question.
+   * (`state` covers the same cases and more; `pendingMode` is kept for existing callers.)
    */
   pendingMode?: "blocked" | "cancel" | "answer";
+  /**
+   * What the composer is doing, as one value: `open`, a card is waiting (`blocked`, `cancel`,
+   * `answer`), the turn runs in another window (`following`), the conversation's usage limit is
+   * used up (`budget_paused`), or the chat is a transcript (`readonly`). Every state but `open`,
+   * `cancel` and `answer` closes the textarea, the paperclip and the send button; the stop
+   * button stays while a turn runs. Wins over `pendingMode`.
+   */
+  state?: ComposerState;
 }
 
 /** True when a drag carries files (not text or a link). */
@@ -84,6 +101,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   onStop,
   onFilesAdd,
   onFileRemove,
+  onFileRetry,
   isLoading = false,
   isUploading = false,
   pendingFiles = [],
@@ -91,6 +109,9 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   enableFileUpload = true,
   allowedFileTypes,
   maxFiles = 10,
+  filesHeld = 0,
+  fileCounter = false,
+  retentionDays,
   imagesIgnored = false,
   disabled = false,
   className,
@@ -98,6 +119,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   renderStopButton,
   autoFocus = false,
   pendingMode,
+  state,
 }, ref) {
   const { t } = useI18n();
   const [value, setValue] = useState("");
@@ -106,24 +128,44 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const blocked = pendingMode === "blocked";
-  const defaultPlaceholder = blocked
-    ? t("chat.input.waitingPlaceholder")
-    : placeholder ?? t("chat.input.placeholder");
+  const mode: ComposerState = state ?? pendingMode ?? "open";
+  // These close the composer: a card has to be answered first, or the turn runs elsewhere, or the limit is used up
+  const blocked = mode === "blocked" || mode === "following" || mode === "budget_paused" || mode === "readonly";
+  const defaultPlaceholder =
+    mode === "blocked"
+      ? t("chat.input.waitingPlaceholder")
+      : mode === "following"
+        ? t("chat.input.followingPlaceholder")
+        : mode === "budget_paused"
+          ? t("chat.input.budgetPlaceholder")
+          : mode === "readonly"
+            ? t("chat.input.readOnlyPlaceholder")
+            : placeholder ?? t("chat.input.placeholder");
+  // The usage-limit banner explains itself; every other state says what it is in a line above the box
   const pendingNotice =
-    pendingMode === "blocked"
+    mode === "blocked"
       ? t("chat.input.waitingNotice")
-      : pendingMode === "cancel"
+      : mode === "cancel"
         ? t("chat.input.cancelNotice")
-        : pendingMode === "answer"
+        : mode === "answer"
           ? t("chat.input.answerNotice")
-          : null;
+          : mode === "following"
+            ? t("chat.input.followingNotice")
+            : mode === "readonly"
+              ? t("chat.input.readOnlyNotice")
+              : null;
+
+  // Files going up for the message being sent (their chips carry no state) close the composer; files stored
+  // as soon as they were picked show their own progress and only hold the send back
+  const messageUploading = isUploading && !pendingFiles.some((f) => f.status);
+  const filesBusy = messageUploading || pendingFiles.some((f) => f.status === "uploading" || f.status === "queued");
+  const filesFailed = pendingFiles.some((f) => f.status === "failed");
 
   // Files can be added unless the composer is closed or a message is still uploading them
-  const attachable = enableFileUpload && Boolean(onFilesAdd) && !disabled && !blocked && !isUploading;
-  const canAddMore = pendingFiles.length < maxFiles;
+  const attachable = enableFileUpload && Boolean(onFilesAdd) && !disabled && !blocked && !messageUploading;
+  const canAddMore = filesHeld + pendingFiles.length < maxFiles;
   // Files alone make a message, except as the answer to a question (that needs words)
-  const hasSendable = value.trim().length > 0 || (pendingFiles.length > 0 && pendingMode !== "answer");
+  const hasSendable = value.trim().length > 0 || (pendingFiles.length > 0 && mode !== "answer");
   const hasImages = pendingFiles.some((f) => isImageType(f.mimeType));
 
   // Expose focus method to parent via ref
@@ -158,7 +200,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   }, [value, fitHeight]);
 
   const handleSend = useCallback(() => {
-    if (hasSendable && !isLoading && !isUploading && !disabled && !blocked) {
+    if (hasSendable && !isLoading && !filesBusy && !filesFailed && !disabled && !blocked) {
       const text = value.trim();
       const outcome = onSend(text);
       setValue("");
@@ -177,7 +219,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
         keep(outcome);
       }
     }
-  }, [value, hasSendable, isLoading, isUploading, disabled, blocked, onSend]);
+  }, [value, hasSendable, isLoading, filesBusy, filesFailed, disabled, blocked, onSend]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -264,7 +306,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     [attachable, onFilesAdd]
   );
 
-  const canSend = hasSendable && !isLoading && !isUploading && !disabled && !blocked;
+  const canSend = hasSendable && !isLoading && !filesBusy && !filesFailed && !disabled && !blocked;
   const attachDisabled = !attachable || !canAddMore;
 
   return (
@@ -301,13 +343,27 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
               const isImage = isImageType(file.mimeType);
               const thumb = isImage ? safeImageSrc(file.previewUrl ?? file.url) : undefined;
               const ignored = imagesIgnored && isImage;
+              const uploading = file.status === "uploading" || file.status === "queued";
+              const failed = file.status === "failed";
+              const percent = Math.round(Math.min(1, Math.max(0, file.progress ?? 0)) * 100);
+              const noText = file.conversionStatus === "failed" || file.conversionStatus === "skipped";
+              const title = failed
+                ? t("chat.input.fileFailed", { fileName: file.name, reason: file.uploadError ?? "" })
+                : ignored
+                  ? t("chat.input.imageIgnored", { fileName: file.name })
+                  : noText
+                    ? t("chat.file.noTextTitle", { fileName: file.name })
+                    : undefined;
+              // Files for the message being sent show a spinner; files stored on their own show their own state
+              const sending = messageUploading && !file.status;
               return (
                 <li
                   key={file.id}
-                  title={ignored ? t("chat.input.imageIgnored", { fileName: file.name }) : undefined}
+                  title={title}
+                  data-chat-file-status={file.status}
                   className={cn(
-                    "flex items-center gap-2 px-3 py-1.5 bg-chat-bg-tertiary rounded-lg text-sm border",
-                    ignored ? "border-chat-warning" : "border-transparent"
+                    "relative flex items-center gap-2 overflow-hidden px-3 py-1.5 bg-chat-bg-tertiary rounded-lg text-sm border",
+                    failed ? "border-chat-danger" : ignored || noText ? "border-chat-warning" : "border-transparent"
                   )}
                 >
                   {thumb ? (
@@ -323,12 +379,33 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
                   <span className="text-chat-text-tertiary text-xs">
                     {formatFileSize(file.size)}
                   </span>
-                  {isUploading && (
+                  {uploading && (
+                    <span className="text-chat-text-tertiary text-xs tabular-nums" aria-hidden="true">
+                      {percent}%
+                    </span>
+                  )}
+                  {sending && (
                     <span role="status" aria-label={t("chat.input.fileUploading", { fileName: file.name })}>
                       <LoadingIcon className="w-3.5 h-3.5 text-chat-text-tertiary animate-spin motion-reduce:animate-none" />
                     </span>
                   )}
-                  {onFileRemove && !isUploading && (
+                  {file.status === "ready" && (
+                    <span role="img" aria-label={t("chat.input.fileReady", { fileName: file.name })}>
+                      <CheckIcon className="w-3.5 h-3.5 text-chat-success" />
+                    </span>
+                  )}
+                  {failed && onFileRetry && (
+                    <button
+                      type="button"
+                      onClick={() => onFileRetry(file.id)}
+                      className="p-0.5 hover:bg-chat-bg-hover rounded"
+                      title={t("chat.input.retryFile")}
+                      aria-label={`${t("chat.input.retryFile")}: ${file.name}`}
+                    >
+                      <RefreshIcon className="w-3.5 h-3.5 text-chat-danger" />
+                    </button>
+                  )}
+                  {onFileRemove && !sending && (
                     <button
                       type="button"
                       onClick={() => onFileRemove(file.id)}
@@ -339,10 +416,36 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
                       <XIcon className="w-3.5 h-3.5 text-chat-text-tertiary" />
                     </button>
                   )}
+                  {uploading && (
+                    <span
+                      role="progressbar"
+                      aria-label={`${t("chat.a11y.uploadProgress")}: ${file.name}`}
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={percent}
+                      className="absolute inset-x-0 bottom-0 h-0.5 bg-chat-bg-hover"
+                    >
+                      <span className="block h-full bg-chat-accent-primary transition-all" style={{ width: `${percent}%` }} />
+                    </span>
+                  )}
                 </li>
               );
             })}
           </ul>
+        )}
+
+        {/* How many files this chat holds, next to what is about to be added */}
+        {fileCounter && Number.isFinite(maxFiles) && filesHeld + pendingFiles.length > 0 && (
+          <div className="mb-2 text-xs text-chat-text-tertiary">
+            {t("chat.input.fileCounter", { count: filesHeld + pendingFiles.length, max: maxFiles })}
+          </div>
+        )}
+
+        {/* Files that did not go up, or still do */}
+        {filesFailed && (
+          <div role="status" className="mb-3 rounded-lg border border-chat-danger bg-chat-danger-bg px-3 py-2 text-xs text-chat-danger">
+            {t("chat.input.filesFailedNotice")}
+          </div>
         )}
 
         {/* An attached image the agent may not read */}
@@ -444,6 +547,9 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
         {/* Helper text */}
         <div className="text-center mt-2 text-xs text-chat-text-tertiary">
           {t("chat.input.helper")}
+          {retentionDays !== undefined && retentionDays > 0 && enableFileUpload && onFilesAdd
+            ? ` · ${t("chat.input.fileRetention", { days: retentionDays })}`
+            : ""}
         </div>
       </div>
     </div>

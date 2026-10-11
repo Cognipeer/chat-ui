@@ -4,19 +4,30 @@ import { useState, useCallback, useRef, useEffect, useMemo, type Dispatch, type 
 import { flushSync } from "react-dom";
 import {
   actionDeadline,
+  applyFileList,
+  applyFollowEvent,
+  countMessageFiles,
   generateId,
+  isBudgetExhausted,
   isConflictCode,
+  isFileTypeAllowed,
   isImageType,
   keepSettledDetail,
   localizeError,
+  newFollowState,
   normalizeActions,
+  normalizeBudget,
+  normalizeStopReason,
   collectPendingActions,
   singleFreeTextQuestion,
   restorePendingActions,
+  runtimeAfterTurn,
   setActionStates,
   stateForResolution,
   stateForSpentAction,
+  uploadMimeType,
   formatFileSize,
+  type FollowState,
   type PendingActionEntry,
 } from "../utils";
 import type {
@@ -24,14 +35,22 @@ import type {
   FileAttachment,
   ChatConfig,
   ChatCallbacks,
+  ComposerState,
   Conversation,
+  ConversationBudget,
   PendingAction,
   ActionResolution,
   ActionState,
   StreamEvent,
   UserQuestion,
 } from "../types";
-import { AgentServerClient, type ChatTransport, type StreamCallbacks } from "../api";
+import {
+  AgentServerClient,
+  type ChatTransport,
+  type ListFilesResult,
+  type SendMessageResponse,
+  type StreamCallbacks,
+} from "../api";
 import { useI18n } from "./useI18n";
 
 export interface UseChatOptions extends ChatConfig, ChatCallbacks {
@@ -50,6 +69,15 @@ export interface UseChatOptions extends ChatConfig, ChatCallbacks {
    * carries on by itself (deny and continue) shows its continuation. Default 1500 ms.
    */
   actionExpiryRefreshMs?: number;
+  /**
+   * How long to wait before looking once more for the answer of a followed turn that was not in
+   * the first fetch after the turn ended. Default 1500 ms.
+   */
+  followSettleRetryMs?: number;
+  /** A lone free-text question is answered from the composer (default true). Off: the card answers it. */
+  enableQuestions?: boolean;
+  /** The chat is a transcript: `composerState` is `readonly` and nothing can be sent */
+  readOnly?: boolean;
 }
 
 export interface UseChatReturn {
@@ -59,10 +87,16 @@ export interface UseChatReturn {
   conversation: Conversation | null;
   /** Whether a message is being sent/streamed (backwards compat: isStreaming || isLoadingConversation) */
   isLoading: boolean;
-  /** Whether the AI is currently generating a response */
+  /** Whether the AI is currently generating a response (also true while following a turn another window started) */
   isStreaming: boolean;
   /** Whether a conversation is being loaded */
   isLoadingConversation: boolean;
+  /**
+   * True while this page only watches a turn that runs elsewhere: it was still running when the
+   * conversation was opened (or the page was reloaded), or another window started it. The text,
+   * tool calls and cards arrive from the conversation's event log.
+   */
+  isFollowing: boolean;
   /** Current streaming text */
   streamingText: string;
   /** Current progress message (from stream.progress events) */
@@ -71,7 +105,7 @@ export interface UseChatReturn {
   error: Error | null;
   /** Pending files for next message */
   pendingFiles: FileAttachment[];
-  /** True while the pending files are being read or uploaded for a message that is being sent */
+  /** True while pending files are going up (to be sent, or stored as soon as they were picked) */
   isUploading: boolean;
   /** Active tool calls */
   activeToolCalls: Map<string, { name: string; args: Record<string, unknown>; result?: unknown; reasoning?: string; displayName?: string }>;
@@ -85,8 +119,10 @@ export interface UseChatReturn {
   sendMessage: (content: string) => Promise<boolean>;
   /** Add files to pending */
   addFiles: (files: File[]) => Promise<void>;
-  /** Remove a pending file */
+  /** Remove a pending file (a file already stored for the message is deleted from the server) */
   removeFile: (fileId: string) => void;
+  /** Upload a pending file again after it failed */
+  retryFile: (fileId: string) => Promise<void>;
   /** Clear all messages */
   clearMessages: () => void;
   /** Load a conversation */
@@ -95,7 +131,11 @@ export interface UseChatReturn {
   createConversation: (title?: string) => Promise<Conversation>;
   /** Retry the last message */
   retry: () => Promise<void>;
-  /** Stop the current stream */
+  /**
+   * Stop the turn. Where the transport can (`ChatTransport.cancel`, agent-server) the run is
+   * stopped on the server, so tools stop running and spending stops; the partial answer is kept
+   * as a cancelled message. Without it only this page's connection is closed.
+   */
   stop: () => void;
   /** Approvals / questions waiting for an answer, oldest first */
   pendingActions: PendingActionEntry[];
@@ -114,6 +154,36 @@ export interface UseChatReturn {
    * that the request expired / was cancelled / was answered elsewhere).
    */
   resolveAction: (actionId: string, resolution: ActionResolution) => Promise<boolean>;
+  /** What the composer is doing; one value for every reason it may not take a plain message */
+  composerState: ComposerState;
+  /** The conversation's spend limit, when it has one */
+  budget: ConversationBudget | null;
+  /** What the conversation has cost so far (USD), when the server says */
+  spentUsd: number | undefined;
+  /** The spend limit is used up: the composer is closed until it is raised */
+  budgetExhausted: boolean;
+  /** The transport can carry on a turn the budget stopped */
+  canContinue: boolean;
+  /** The transport can change the spend limit */
+  canUpdateBudget: boolean;
+  /**
+   * Carry on the turn the budget stopped (the budget must have room first). The continuation streams
+   * into a new assistant message. Resolves `false` when the server refused.
+   */
+  continueConversation: () => Promise<boolean>;
+  /**
+   * Set (or with `null` remove) the conversation's spend limit. With `continue: true` a conversation
+   * that was paused on its budget carries on afterwards. Resolves `false` when the server refused the
+   * change (`budget_forbidden`, `invalid_budget`); `error` says why. Resolves `true` once the limit is
+   * changed, whatever the continuation then does (how it went is in `error`, if it failed).
+   */
+  updateBudget: (budget: ConversationBudget | null, options?: { continue?: boolean }) => Promise<boolean>;
+  /** Files the conversation holds: the server's count, or those of the loaded messages */
+  heldFiles: number;
+  /** The server's own limit of files per conversation, when it says */
+  heldFilesMax: number | undefined;
+  /** A URL to show or download a stored file from (undefined when the transport cannot make one) */
+  resolveFileUrl: ((file: FileAttachment, options?: { disposition?: "inline" | "attachment" }) => Promise<string | undefined>) | undefined;
   /** Set error */
   setError: (error: Error | null) => void;
   /** Directly override message state */
@@ -131,6 +201,8 @@ export interface UseChatReturn {
   /** Directly override active tool calls */
   setActiveToolCalls: Dispatch<SetStateAction<Map<string, { name: string; args: Record<string, unknown>; result?: unknown; reasoning?: string; displayName?: string }>>>;
 }
+
+type ToolCallMap = Map<string, { name: string; args: Record<string, unknown>; result?: unknown; reasoning?: string; displayName?: string }>;
 
 /** Attaches the pause info a non-streaming response carries next to the message. */
 function withActions(
@@ -165,6 +237,24 @@ function revokePreviewUrl(url: string) {
   }
 }
 
+/** The file as base64 (the JSON upload form and inline files). */
+function readBase64(rawFile: File): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      // result is "data:<mime>;base64,<data>" - extract just the base64 part
+      const result = reader.result as string;
+      const commaIdx = result.indexOf(",");
+      resolve(commaIdx >= 0 ? result.slice(commaIdx + 1) : result);
+    };
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(rawFile);
+  });
+}
+
+const isAbort = (err: unknown) => err instanceof DOMException && err.name === "AbortError";
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
 /**
  * Hook for managing chat state and interactions
  */
@@ -185,12 +275,16 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     allowedFileTypes,
     maxFileSize = 10 * 1024 * 1024, // 10MB
     maxFiles = 10,
+    maxFilesScope = "message",
     fileTransport = "inline",
     conversationId: initialConversationId,
     initialMessages = [],
     pendingActionComposerMode = "block",
     attachmentsOnlyMessage,
     actionExpiryRefreshMs = 1500,
+    followSettleRetryMs = 1500,
+    enableQuestions = true,
+    readOnly = false,
     onMessageSent,
     onMessageReceived,
     onStreamText,
@@ -200,37 +294,45 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     onConversationCreated,
     onConversationTitleGenerated,
     onBackgroundStreamCompleted,
+    onBudgetReached,
     onActionResolved,
   } = options;
 
   const [messages, setMessages] = useState<Message[]>(initialMessages);
   const [conversation, setConversation] = useState<Conversation | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
+  const [isFollowing, setIsFollowing] = useState(false);
   const [isLoadingConversation, setIsLoadingConversation] = useState(false);
   const [streamingText, setStreamingText] = useState("");
   const [error, setError] = useState<Error | null>(null);
   const [pendingFiles, setPendingFiles] = useState<FileAttachment[]>([]);
-  const [isUploading, setIsUploading] = useState(false);
-  const [activeToolCalls, setActiveToolCalls] = useState<
-    Map<string, { name: string; args: Record<string, unknown>; result?: unknown; reasoning?: string; displayName?: string }>
-  >(new Map());
+  const [isUploadingMessage, setIsUploadingMessage] = useState(false);
+  const [activeToolCalls, setActiveToolCalls] = useState<ToolCallMap>(new Map());
   const [progressMessage, setProgressMessage] = useState<string>("");
   const [isResolvingAction, setIsResolvingAction] = useState(false);
+  // What the server says the conversation holds (null: it cannot say, the messages are counted)
+  const [fileList, setFileList] = useState<{ total: number; max?: number } | null>(null);
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const lastUserMessageRef = useRef<string>("");
   const clientRef = useRef<ChatTransport | null>(null);
-  const activeToolCallsRef = useRef<Map<string, { name: string; args: Record<string, unknown>; result?: unknown; reasoning?: string; displayName?: string }>>(new Map());
+  const activeToolCallsRef = useRef<ToolCallMap>(new Map());
+  const streamingTextRef = useRef("");
   const toolCallStartTimeRef = useRef<number | null>(null);
   // Map file attachment IDs to raw File objects so we can read base64 later
   const rawFilesRef = useRef<Map<string, File>>(new Map());
+  // Pending file id -> id of its stored copy (files uploaded as soon as they were picked)
+  const storedFilesRef = useRef<Map<string, string>>(new Map());
+  // Uploads in flight, by pending file id (removing the chip aborts its upload)
+  const uploadsRef = useRef<Map<string, AbortController>>(new Map());
+  // The files of the message being sent go up under this one; Stop aborts it
+  const sendUploadRef = useRef<AbortController | null>(null);
   // Object URLs made for image previews; released when the conversation is left or the hook unmounts
   const previewUrlsRef = useRef<Set<string>>(new Set());
   const releasePreviews = useCallback(() => {
     for (const url of previewUrlsRef.current) revokePreviewUrl(url);
     previewUrlsRef.current.clear();
   }, []);
-  useEffect(() => releasePreviews, [releasePreviews]);
 
   // Session counter — incremented on every navigation (new chat, load conversation).
   // Async stream callbacks capture the value at call-time; if it differs from the
@@ -246,6 +348,13 @@ export function useChat(options: UseChatOptions): UseChatReturn {
   pendingFilesRef.current = pendingFiles;
   const isStreamingRef = useRef(false);
   isStreamingRef.current = isStreaming;
+  // The session (navigation counter) of the turn this page started - a message, an answer, a
+  // continuation - while it is in flight. A turn left behind by switching conversations is not "active" there.
+  const turnSessionRef = useRef<number | null>(null);
+  // The follower of a turn that runs elsewhere
+  const followRef = useRef<{ controller: AbortController } | null>(null);
+  // A conversation being created for the first file, so two files do not make two
+  const creatingRef = useRef<Promise<Conversation> | null>(null);
   // Actions announced by `stream.action_required` during the current turn
   const streamActionsRef = useRef<PendingAction[]>([]);
 
@@ -261,6 +370,15 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     });
   }, [transport, baseUrl, agentId, authorization, headers, getHeaders, customFetch]);
 
+  /** Stop watching a turn that runs elsewhere (the run itself goes on). */
+  const stopFollowing = useCallback(() => {
+    if (followRef.current) {
+      followRef.current.controller.abort();
+      followRef.current = null;
+    }
+    setIsFollowing(false);
+  }, []);
+
   /**
    * Reset transient streaming UI state without aborting the HTTP request.
    * The in-flight stream continues in the background so the server can
@@ -269,20 +387,72 @@ export function useChat(options: UseChatOptions): UseChatReturn {
    * polluting the new session's state.
    */
   const resetStreamingState = useCallback(() => {
+    stopFollowing();
+    streamingTextRef.current = "";
     setStreamingText("");
     activeToolCallsRef.current = new Map();
     toolCallStartTimeRef.current = null;
     setActiveToolCalls(new Map());
     setProgressMessage("");
     setIsStreaming(false);
+  }, [stopFollowing]);
+
+  useEffect(
+    () => () => {
+      releasePreviews();
+      if (followRef.current) {
+        followRef.current.controller.abort();
+        followRef.current = null;
+      }
+      for (const controller of uploadsRef.current.values()) controller.abort();
+      uploadsRef.current.clear();
+      // The blob URLs of a client this hook made itself
+      if (!transport) (clientRef.current as AgentServerClient | null)?.dispose?.();
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [releasePreviews]
+  );
+
+  // ---------------------------------------------------------------------------
+  // Loading, refreshing and following a conversation
+  // ---------------------------------------------------------------------------
+
+  const listFilesFor = useCallback(async (conversationId: string): Promise<ListFilesResult | undefined> => {
+    const client = clientRef.current;
+    if (!client?.listFiles) return undefined;
+    try {
+      return await client.listFiles(conversationId);
+    } catch {
+      // the count falls back to the loaded messages
+      return undefined;
+    }
   }, []);
 
-  // Load initial conversation if provided
-  useEffect(() => {
-    if (initialConversationId && clientRef.current) {
-      loadConversation(initialConversationId);
-    }
-  }, [initialConversationId]);
+  /** Messages as loaded, with how the listed files stand (deadlines, gone files). */
+  const withFileList = useCallback((loaded: Message[], listing: ListFilesResult | undefined): Message[] => {
+    return listing ? applyFileList(loaded, listing.files, !listing.hasMore) : loaded;
+  }, []);
+
+  // Set by the follower below; the loaders start it, and it loads again when the turn ends
+  const followRunRef = useRef<(conversationId: string, after: number, session: number) => Promise<void>>(async () => {});
+
+  /** Start following when the server says a turn is running here that we are not part of. */
+  const followIfRunning = useCallback((loaded: Conversation | undefined, session: number) => {
+    const client = clientRef.current;
+    if (!loaded || !client?.followEvents) return;
+    if (loaded.runtime?.status !== "running") return;
+    if (turnSessionRef.current === session || followRef.current) return;
+    void followRunRef.current(loaded.id, loaded.runtime.lastEventSeq ?? 0, session);
+  }, []);
+
+  /** Throw away eagerly stored files that belong to the conversation being left. */
+  const discardStoredFiles = useCallback(() => {
+    const client = clientRef.current;
+    for (const controller of uploadsRef.current.values()) controller.abort();
+    uploadsRef.current.clear();
+    for (const stored of storedFilesRef.current.values()) void client?.deleteFile?.(stored).catch(() => undefined);
+    storedFilesRef.current.clear();
+  }, []);
 
   const loadConversation = useCallback(async (conversationId: string) => {
     if (!clientRef.current) return;
@@ -292,6 +462,12 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     // invalidates all stale callbacks.
     resetStreamingState();
     releasePreviews();
+    if (fileTransport === "upload-on-select") {
+      // files stored for this conversation's next message do not follow us to another one
+      discardStoredFiles();
+      rawFilesRef.current.clear();
+      setPendingFiles([]);
+    }
     sessionRef.current += 1;
     const capturedSession = sessionRef.current;
 
@@ -299,20 +475,27 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       setIsLoadingConversation(true);
       setMessages([]);
       setConversation(null);
+      setFileList(null);
       setError(null);
-      const data = await clientRef.current.getConversation(conversationId);
+      const [data, listing] = await Promise.all([
+        clientRef.current.getConversation(conversationId),
+        listFilesFor(conversationId),
+      ]);
       // If user navigated away while we were loading, discard the result
       if (sessionRef.current !== capturedSession) return;
       setConversation(data.conversation);
       setMessages(
-        restorePendingActions(
-          data.messages,
-          data.pendingActions ?? data.conversation?.pendingActions
+        withFileList(
+          restorePendingActions(data.messages, data.pendingActions ?? data.conversation?.pendingActions),
+          listing
         )
       );
+      setFileList(listing ? { total: listing.total, max: listing.maxFiles } : null);
+      // A turn that was still running when the page opened: pick it up
+      followIfRunning(data.conversation, capturedSession);
     } catch (err) {
       if (sessionRef.current !== capturedSession) return;
-      if (err instanceof DOMException && err.name === 'AbortError') return;
+      if (isAbort(err)) return;
       const error = friendly(err instanceof Error ? err : new Error(t("chat.error.loadConversationFailed")));
       setError(error);
       onError?.(error);
@@ -321,30 +504,73 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         setIsLoadingConversation(false);
       }
     }
-  }, [t, has, onError, resetStreamingState, releasePreviews]);
+  }, [t, has, fileTransport, onError, resetStreamingState, releasePreviews, discardStoredFiles, listFilesFor, withFileList, followIfRunning]);
+
+  // Load initial conversation if provided
+  useEffect(() => {
+    if (initialConversationId && clientRef.current) {
+      loadConversation(initialConversationId);
+    }
+  }, [initialConversationId]);
 
   /**
    * Fetches the conversation again and shows what the server says: used when a send was
-   * refused because a card is waiting or a turn is running (the page did not know), and
-   * after a card's deadline. Quiet on failure: the error that led here is already shown.
+   * refused because a card is waiting or a turn is running (the page did not know), after a
+   * card's deadline, and when a followed turn ended. A turn that is running somewhere else is
+   * followed (unless `follow` is false). Quiet on failure: the error that led here is already
+   * shown. Resolves with the messages it loaded, or undefined when it could not.
    */
-  const refreshConversation = useCallback(async (conversationId: string, session: number) => {
+  const refreshConversation = useCallback(async (
+    conversationId: string,
+    session: number,
+    options: { follow?: boolean } = {}
+  ): Promise<Message[] | undefined> => {
     const client = clientRef.current;
-    if (!client) return;
+    if (!client) return undefined;
     try {
-      const data = await client.getConversation(conversationId);
-      if (sessionRef.current !== session) return;
-      setConversation(data.conversation);
-      setMessages((prev) =>
-        keepSettledDetail(
-          restorePendingActions(data.messages, data.pendingActions ?? data.conversation?.pendingActions),
-          prev
-        )
+      const [data, listing] = await Promise.all([client.getConversation(conversationId), listFilesFor(conversationId)]);
+      if (sessionRef.current !== session) return undefined;
+      const restored = withFileList(
+        restorePendingActions(data.messages, data.pendingActions ?? data.conversation?.pendingActions),
+        listing
       );
+      setConversation(data.conversation);
+      setMessages((prev) => keepSettledDetail(restored, prev));
+      if (listing) setFileList({ total: listing.total, max: listing.maxFiles });
+      if (options.follow !== false) followIfRunning(data.conversation, session);
+      return restored;
     } catch {
       // the banner already says what went wrong
+      return undefined;
     }
+  }, [listFilesFor, withFileList, followIfRunning]);
+
+  /** Looks at what the conversation holds after files were attached to a message. */
+  const refreshFileList = useCallback(async (conversationId: string, session: number) => {
+    const listing = await listFilesFor(conversationId);
+    if (listing && sessionRef.current === session) setFileList({ total: listing.total, max: listing.maxFiles });
+  }, [listFilesFor]);
+
+  /**
+   * The connection broke while the server was answering. Where runs outlive their connection
+   * (the transport can follow events) the turn is still going, or is done: look at the conversation
+   * instead of reporting a failure. Only a conversation that cannot be reached shows the error.
+   */
+  const dropped = useCallback((err: unknown): boolean => {
+    const e = err as { code?: unknown; status?: unknown } | null;
+    return typeof clientRef.current?.followEvents === "function" && !e?.code && !e?.status;
   }, []);
+
+  const recoverDroppedTurn = useCallback((conversationId: string, session: number, original: Error) => {
+    void (async () => {
+      const loaded = await refreshConversation(conversationId, session);
+      if (loaded === undefined && sessionRef.current === session) {
+        const shown = friendly(original);
+        setError(shown);
+        onError?.(shown);
+      }
+    })();
+  }, [refreshConversation, onError, t, has]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const createConversation = useCallback(async (title?: string, overrideAgentId?: string): Promise<Conversation> => {
     if (!clientRef.current) {
@@ -355,14 +581,19 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       agentId: overrideAgentId || agentId || "",
       title,
     });
+    // The ref is what other callers look at before the next render
+    conversationRef.current = conv;
     setConversation(conv);
     setMessages([]);
     onConversationCreated?.(conv);
     return conv;
   }, [t, agentId, onConversationCreated]);
 
-  // Handlers shared by sendMessage and resolveAction: both stream a turn into the
-  // transcript. Kept in a ref so they always see the latest callback props.
+  // ---------------------------------------------------------------------------
+  // Handlers shared by sendMessage, resolveAction and continueConversation
+  // ---------------------------------------------------------------------------
+
+  // All three stream a turn into the transcript. Kept in a ref so they always see the latest callback props.
   const createStreamCallbacksRef = useRef<(isStale: () => boolean) => StreamCallbacks>(
     () => ({})
   );
@@ -375,6 +606,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
               if (isStale()) return;
               // Use flushSync to force immediate render during streaming
               setProgressMessage(""); // Clear progress when text arrives
+              streamingTextRef.current = fullText;
               flushSync(() => {
                 setStreamingText(fullText);
               });
@@ -470,6 +702,9 @@ export function useChat(options: UseChatOptions): UseChatReturn {
                 const freshActions = Array.from(announced.values()).filter((a) => !shown.has(a.id));
                 const paused = event.status === "requires_action" || announced.size > 0;
                 const hasBody = Boolean(event.content) || currentToolCalls.size > 0 || Boolean(event.files?.length);
+                const stopReason = normalizeStopReason(event.stopReason);
+                const shownStop = stopReason && stopReason !== "end_turn" && stopReason !== "requires_action" ? stopReason : undefined;
+                const warnings = Array.isArray(event.warnings) && event.warnings.length > 0 ? event.warnings : undefined;
 
                 const assistantMessage: Message = {
                   id: event.messageId,
@@ -485,31 +720,61 @@ export function useChat(options: UseChatOptions): UseChatReturn {
                     : event.status && event.status !== "completed" && event.status !== "requires_action"
                       ? { status: event.status }
                       : {}),
-                  metadata: currentToolCalls.size > 0
+                  ...(shownStop ? { stopReason: shownStop } : {}),
+                  metadata: currentToolCalls.size > 0 || warnings
                     ? {
-                        toolCallDetails: Array.from(currentToolCalls.entries()).map(([id, call]) => ({
-                          id,
-                          name: call.name,
-                          args: call.args,
-                          result: call.result,
-                        })),
-                        toolCallDurationSeconds,
+                        ...(currentToolCalls.size > 0
+                          ? {
+                              toolCallDetails: Array.from(currentToolCalls.entries()).map(([id, call]) => ({
+                                id,
+                                name: call.name,
+                                args: call.args,
+                                result: call.result,
+                              })),
+                              toolCallDurationSeconds,
+                            }
+                          : {}),
+                        ...(warnings ? { warnings } : {}),
                       }
                     : undefined,
                   createdAt: new Date(),
                   updatedAt: new Date(),
                 };
                 // Clear streaming first, then add message
+                streamingTextRef.current = "";
                 setStreamingText("");
                 activeToolCallsRef.current = new Map();
                 toolCallStartTimeRef.current = null;
                 setActiveToolCalls(new Map());
                 setProgressMessage("");
                 setIsStreaming(false);
-                // Update conversation title if server generated one
+                // The conversation after this turn: title, spend limit and where it is in its life
+                const budget = event.budget === undefined ? undefined : normalizeBudget(event.budget);
+                setConversation((prev) => {
+                  if (!prev) return prev;
+                  const nextBudget = budget === undefined ? prev.budget : budget;
+                  return {
+                    ...prev,
+                    ...(event.title ? { title: event.title } : {}),
+                    ...(nextBudget !== undefined ? { budget: nextBudget } : {}),
+                    ...(typeof event.spentUsd === "number" ? { spentUsd: event.spentUsd } : {}),
+                    runtime: runtimeAfterTurn(prev.runtime, {
+                      stopReason: paused ? "requires_action" : stopReason,
+                      pendingActionIds: paused ? Array.from(announced.keys()) : [],
+                      budget: nextBudget,
+                      seq: event.seq,
+                    }),
+                  };
+                });
                 if (event.title) {
-                  setConversation((prev) => prev ? { ...prev, title: event.title } : prev);
                   onConversationTitleGenerated?.(event.conversationId, event.title);
+                }
+                if (stopReason === "budget_reached") {
+                  onBudgetReached?.({
+                    conversationId: event.conversationId,
+                    budget: budget ?? undefined,
+                    spentUsd: event.spentUsd,
+                  });
                 }
                 // Nothing new to show: the answer only left other actions waiting
                 if (paused && freshActions.length === 0 && !hasBody) return;
@@ -568,11 +833,372 @@ export function useChat(options: UseChatOptions): UseChatReturn {
           }
   );
 
+  /** Shows the reply of a non-streaming answer / continuation (a new message, or more cards on the paused one). */
+  const showReply = useCallback((response: SendMessageResponse | undefined) => {
+    if (!response?.response) return;
+    const reply = withActions(response.response, response);
+    const shown = new Set(collectPendingActions(messagesRef.current).map((e) => e.action.id));
+    const fresh = (reply.pendingActions ?? []).filter((a) => !shown.has(a.id));
+    const onScreen = messagesRef.current.some((m) => m.id === reply.id);
+    if (onScreen) {
+      if (fresh.length > 0) {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === reply.id
+              ? { ...m, pendingActions: [...(m.pendingActions ?? []), ...fresh], status: "requires_action" as const }
+              : m
+          )
+        );
+      }
+    } else if (fresh.length > 0 || reply.content) {
+      const stopReason = normalizeStopReason(response.stopReason ?? reply.stopReason);
+      const message: Message = {
+        ...reply,
+        pendingActions: fresh.length > 0 ? fresh : undefined,
+        ...(stopReason && stopReason !== "end_turn" && stopReason !== "requires_action" ? { stopReason } : {}),
+      };
+      setMessages((prev) => [...prev, message]);
+      onMessageReceived?.(message);
+    }
+  }, [onMessageReceived]);
+
+  // ---------------------------------------------------------------------------
+  // Following a turn that runs elsewhere
+  // ---------------------------------------------------------------------------
+
+  followRunRef.current = async (conversationId: string, after: number, session: number) => {
+    const client = clientRef.current;
+    if (!client?.followEvents || followRef.current || sessionRef.current !== session) return;
+    const controller = new AbortController();
+    followRef.current = { controller };
+    const stale = () => sessionRef.current !== session;
+
+    let state: FollowState = newFollowState();
+    streamActionsRef.current = [];
+    streamingTextRef.current = "";
+    setStreamingText("");
+    activeToolCallsRef.current = new Map();
+    setActiveToolCalls(new Map());
+    setProgressMessage("");
+    setIsStreaming(true);
+    setIsFollowing(true);
+
+    const onEvent = (event: Parameters<typeof applyFollowEvent>[1]) => {
+      if (stale()) {
+        controller.abort();
+        return;
+      }
+      state = applyFollowEvent(state, event);
+      switch (event.type) {
+        case "user.message": {
+          const user = state.userMessage;
+          if (user && !messagesRef.current.some((m) => m.id === user.id)) {
+            const at = new Date();
+            setMessages((prev) => [
+              ...prev,
+              { id: user.id, conversationId, role: "user", content: user.content, files: user.files, createdAt: at, updatedAt: at },
+            ]);
+          }
+          break;
+        }
+        case "session.status_running":
+          streamingTextRef.current = "";
+          setStreamingText("");
+          activeToolCallsRef.current = new Map();
+          setActiveToolCalls(new Map());
+          break;
+        case "agent.message.delta":
+        case "agent.message":
+          setProgressMessage("");
+          streamingTextRef.current = state.text;
+          setStreamingText(state.text);
+          break;
+        case "agent.tool_use":
+        case "agent.tool_result":
+          activeToolCallsRef.current = new Map(state.tools);
+          setActiveToolCalls(new Map(state.tools));
+          break;
+        case "session.status_idle":
+          // The turn is over; the rest is loaded below
+          controller.abort();
+          break;
+        default:
+          break;
+      }
+    };
+
+    let failed = false;
+    try {
+      await client.followEvents(conversationId, { after, signal: controller.signal, onEvent });
+    } catch (err) {
+      if (!stale() && !isAbort(err)) {
+        failed = true;
+        // A refusal with a code (404, 403, ...) says why; a connection that kept dropping does not
+        const coded = Boolean((err as { code?: string } | null)?.code);
+        const shown = friendly(err instanceof Error && coded ? err : new Error(t("chat.error.followFailed")));
+        setError(shown);
+        onError?.(shown);
+      }
+    }
+    if (followRef.current?.controller === controller) followRef.current = null;
+    if (stale()) return;
+
+    if (state.error) {
+      // the run failed: say so, the stored state follows below
+      const shown = friendly(Object.assign(new Error(state.error.message), state.error.code ? { code: state.error.code } : {}));
+      setError(shown);
+      onError?.(shown);
+    }
+
+    // The turn ended (or the connection is gone): what the server stored is the truth now. A follower
+    // that was stopped on purpose has nothing to settle; looking again would only attach to the same run.
+    if (state.idle || failed) {
+      const loaded = await refreshConversation(conversationId, session, { follow: Boolean(state.idle) });
+      if (stale()) return;
+      if (loaded && state.messageId && !loaded.some((m) => m.id === state.messageId)) {
+        // the answer was not stored yet when we looked
+        await sleep(followSettleRetryMs);
+        if (stale()) return;
+        await refreshConversation(conversationId, session, { follow: true });
+        if (stale()) return;
+      }
+      if (state.idle?.stopReason === "budget_reached") {
+        const c = conversationRef.current;
+        onBudgetReached?.({ conversationId, budget: c?.budget ?? undefined, spentUsd: c?.spentUsd });
+      }
+    }
+    streamingTextRef.current = "";
+    setStreamingText("");
+    activeToolCallsRef.current = new Map();
+    setActiveToolCalls(new Map());
+    setProgressMessage("");
+    // A new turn may have started right after this one: refreshConversation picked it up
+    if (!followRef.current) {
+      setIsStreaming(false);
+      setIsFollowing(false);
+    }
+  };
+
+  // ---------------------------------------------------------------------------
+  // Files
+  // ---------------------------------------------------------------------------
+
+  const patchPendingFile = useCallback((fileId: string, patch: Partial<FileAttachment>) => {
+    setPendingFiles((prev) => prev.map((f) => (f.id === fileId ? { ...f, ...patch } : f)));
+  }, []);
+
+  /** Store one file on the server: its bytes as the body where the transport takes them, else base64. */
+  const uploadOne = useCallback(
+    async (
+      rawFile: File,
+      name: string,
+      conversationId: string,
+      onProgress: (fraction: number) => void,
+      signal: AbortSignal
+    ): Promise<FileAttachment> => {
+      const uploader = clientRef.current;
+      if (!uploader?.uploadFile) throw new Error(t("chat.error.sendFailed"));
+      const mimeType = uploadMimeType(rawFile);
+      if (uploader.supportsRawUpload) {
+        return uploader.uploadFile({
+          file: { name, mimeType, blob: rawFile },
+          conversationId,
+          signal,
+          onProgress: ({ loaded, total }) => onProgress(total > 0 ? Math.min(1, loaded / total) : 0),
+        });
+      }
+      const content = await readBase64(rawFile);
+      const stored = await uploader.uploadFile({ file: { name, mimeType, content }, conversationId, signal });
+      onProgress(1);
+      return stored;
+    },
+    [t]
+  );
+
+  /** The conversation the first picked file is stored in: created now when the chat has none. */
+  const ensureConversation = useCallback(async (): Promise<Conversation | null> => {
+    if (conversationRef.current) return conversationRef.current;
+    if (!creatingRef.current) {
+      creatingRef.current = createConversation().finally(() => {
+        creatingRef.current = null;
+      });
+    }
+    try {
+      return await creatingRef.current;
+    } catch (err) {
+      const shown = friendly(err instanceof Error ? err : new Error(t("chat.error.sendFailed")));
+      setError(shown);
+      onError?.(shown);
+      return null;
+    }
+  }, [createConversation, t, has, onError]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** Eager mode: store the given pending files, one after the other, each chip showing its progress. */
+  const uploadPending = useCallback(
+    async (fileIds: string[]) => {
+      const session = sessionRef.current;
+      const conv = await ensureConversation();
+      if (!conv || sessionRef.current !== session) {
+        if (!conv) for (const id of fileIds) patchPendingFile(id, { status: "failed", uploadError: t("chat.file.uploadFailed") });
+        return;
+      }
+      for (const id of fileIds) {
+        if (sessionRef.current !== session) return;
+        const raw = rawFilesRef.current.get(id);
+        const chip = pendingFilesRef.current.find((f) => f.id === id);
+        if (!raw || !chip) continue;
+        const controller = new AbortController();
+        uploadsRef.current.set(id, controller);
+        patchPendingFile(id, { status: "uploading", progress: 0, uploadError: undefined });
+        try {
+          const stored = await uploadOne(raw, chip.name, conv.id, (fraction) => patchPendingFile(id, { progress: fraction }), controller.signal);
+          uploadsRef.current.delete(id);
+          if (!rawFilesRef.current.has(id)) {
+            // removed while it was going up
+            void clientRef.current?.deleteFile?.(stored.id).catch(() => undefined);
+            continue;
+          }
+          storedFilesRef.current.set(id, stored.id);
+          patchPendingFile(id, {
+            status: "ready",
+            progress: 1,
+            ...(stored.expiresAt ? { expiresAt: stored.expiresAt } : {}),
+            ...(stored.conversionStatus ? { conversionStatus: stored.conversionStatus } : {}),
+          });
+        } catch (err) {
+          uploadsRef.current.delete(id);
+          if (isAbort(err)) continue;
+          if (sessionRef.current !== session) return;
+          const shown = friendly(err instanceof Error ? err : new Error(t("chat.file.uploadFailed")));
+          patchPendingFile(id, { status: "failed", uploadError: shown.message });
+          setError(shown);
+          onError?.(shown);
+        }
+      }
+    },
+    [ensureConversation, uploadOne, patchPendingFile, t, has, onError] // eslint-disable-line react-hooks/exhaustive-deps
+  );
+
+  const eagerUploads = fileTransport === "upload-on-select";
+
+  // What the conversation holds: the server's count, or the files of the loaded messages (never fewer than those)
+  const heldFiles = useMemo(
+    () => Math.max(fileList?.total ?? 0, countMessageFiles(messages)),
+    [fileList, messages]
+  );
+
+  const addFiles = useCallback(async (files: File[]) => {
+    if (!enableFileUpload) return;
+
+    const validFiles: FileAttachment[] = [];
+    // Every refusal goes to `onError`; together they are also shown through `error`
+    const refusals: Error[] = [];
+    const refuse = (message: string) => {
+      const error = new Error(message);
+      refusals.push(error);
+      onError?.(error);
+    };
+
+    // What the conversation already holds counts when the limit is per conversation
+    const held = maxFilesScope === "conversation" ? heldFiles : 0;
+
+    for (const file of files) {
+      // Check file count
+      if (held + pendingFiles.length + validFiles.length >= maxFiles) {
+        refuse(
+          maxFilesScope === "conversation"
+            ? t("chat.file.tooManyInChat", { maxFiles, held })
+            : t("chat.file.tooMany", { maxFiles })
+        );
+        break;
+      }
+
+      // The server would answer an empty file with a validation error
+      if (file.size === 0) {
+        refuse(t("chat.file.empty", { fileName: file.name }));
+        continue;
+      }
+
+      // Check file size
+      if (file.size > maxFileSize) {
+        refuse(t("chat.file.tooLarge", { fileName: file.name, maxSize: formatFileSize(maxFileSize) }));
+        continue;
+      }
+
+      // Check file type (a file the browser could not type is left to the server)
+      if (!isFileTypeAllowed(file, allowedFileTypes)) {
+        refuse(t("chat.file.invalidType", { fileType: file.type || file.name }));
+        continue;
+      }
+
+      const fileId = generateId();
+
+      // Store raw File object so sendMessage can read base64 later
+      rawFilesRef.current.set(fileId, file);
+
+      // An image shows as a thumbnail straight away, before anything is uploaded
+      const previewUrl = createPreviewUrl(file);
+      if (previewUrl) previewUrlsRef.current.add(previewUrl);
+
+      validFiles.push({
+        id: fileId,
+        name: file.name,
+        mimeType: uploadMimeType(file),
+        size: file.size,
+        ...(previewUrl ? { previewUrl } : {}),
+        ...(eagerUploads && clientRef.current?.uploadFile ? { status: "queued" as const, progress: 0 } : {}),
+      });
+    }
+
+    if (refusals.length > 0) {
+      setError(refusals.length === 1 ? refusals[0] : new Error(refusals.map((e) => e.message).join("; ")));
+    }
+    setPendingFiles((prev) => [...prev, ...validFiles]);
+
+    // Eager mode stores the files as soon as they are in
+    if (eagerUploads && clientRef.current?.uploadFile && validFiles.length > 0) {
+      pendingFilesRef.current = [...pendingFilesRef.current, ...validFiles];
+      await uploadPending(validFiles.map((f) => f.id));
+    }
+  }, [t, enableFileUpload, eagerUploads, pendingFiles, heldFiles, maxFiles, maxFilesScope, maxFileSize, allowedFileTypes, onError, uploadPending]);
+
+  const removeFile = useCallback((fileId: string) => {
+    rawFilesRef.current.delete(fileId);
+    uploadsRef.current.get(fileId)?.abort();
+    uploadsRef.current.delete(fileId);
+    const stored = storedFilesRef.current.get(fileId);
+    if (stored) {
+      storedFilesRef.current.delete(fileId);
+      void clientRef.current?.deleteFile?.(stored).catch(() => undefined);
+    }
+    const removed = pendingFilesRef.current.find((f) => f.id === fileId);
+    if (removed?.previewUrl) {
+      revokePreviewUrl(removed.previewUrl);
+      previewUrlsRef.current.delete(removed.previewUrl);
+    }
+    setPendingFiles((prev) => prev.filter((f) => f.id !== fileId));
+  }, []);
+
+  const retryFile = useCallback(async (fileId: string) => {
+    if (!rawFilesRef.current.has(fileId)) return;
+    setError(null);
+    patchPendingFile(fileId, { status: "queued", progress: 0, uploadError: undefined });
+    await uploadPending([fileId]);
+  }, [patchPendingFile, uploadPending]);
+
+  // ---------------------------------------------------------------------------
+  // Sending
+  // ---------------------------------------------------------------------------
+
   const sendMessage = useCallback(async (typed: string): Promise<boolean> => {
     // Files alone are a message: they go with the configured text (a server rejects an empty one)
     const attachmentsOnly = !typed.trim() && pendingFiles.length > 0;
     if (!clientRef.current || (!typed.trim() && !attachmentsOnly)) return false;
     const content = attachmentsOnly ? (attachmentsOnlyMessage ?? t("chat.input.attachmentsOnlyMessage")) : typed;
+
+    // Files stored as soon as they were picked: all must be in before the message can name them
+    const eager = eagerUploads && Boolean(clientRef.current.uploadFile);
+    if (eager && pendingFiles.some((f) => f.status !== "ready")) return false;
 
     // Capture the current session so async callbacks can detect staleness
     const capturedSession = sessionRef.current;
@@ -580,6 +1206,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
 
     setError(null);
     setIsStreaming(true);
+    turnSessionRef.current = capturedSession;
     lastUserMessageRef.current = content;
     streamActionsRef.current = [];
 
@@ -602,6 +1229,8 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     // Files stored ahead of the message (`fileTransport: "upload"`); dropped again if the server never took the message
     const uploadedIds: string[] = [];
     let messageAccepted = false;
+    // The files are in: from here a stopped turn is the server's to wind down
+    let uploadsDone = false;
     // A refused send takes its bubble back and returns the files to the composer
     const attached = pendingFiles;
     const attachedRaw = attached.map((f) => [f.id, rawFilesRef.current.get(f.id)] as const);
@@ -610,7 +1239,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
 
     try {
       // Create conversation if needed
-      let currentConversation = conversation;
+      let currentConversation = conversation ?? conversationRef.current;
       if (!currentConversation) {
         currentConversation = await createConversation();
         activeConversationId = currentConversation.id;
@@ -621,43 +1250,73 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         }
       }
 
-      // Read base64 content from raw File objects for each pending file
-      const readBase64 = (rawFile: File) =>
-        new Promise<string>((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => {
-            // result is "data:<mime>;base64,<data>" — extract just the base64 part
-            const result = reader.result as string;
-            const commaIdx = result.indexOf(",");
-            resolve(commaIdx >= 0 ? result.slice(commaIdx + 1) : result);
-          };
-          reader.onerror = () => reject(reader.error);
-          reader.readAsDataURL(rawFile);
-        });
+      // Files that travel with the message: stored first (their bytes as the body), or inline as base64
+      const uploader = !eager && fileTransport === "upload" ? clientRef.current : null;
+      const storeFirst = Boolean(uploader?.uploadFile) && attached.length > 0;
+
+      // The bubble is on screen at once; for files going up its chips show how far each one is
+      const userMessage: Message = {
+        id: generateId(),
+        conversationId: currentConversation.id,
+        role: "user",
+        content,
+        files: attached.length > 0
+          ? attached.map((f) => (storeFirst ? { ...f, status: "uploading" as const, progress: 0 } : f))
+          : undefined,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      optimisticId = userMessage.id;
+      setMessages((prev) => [...prev, userMessage]);
+      setPendingFiles([]);
+
+      const patchBubbleFile = (fileId: string, patch: Partial<FileAttachment>) =>
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === userMessage.id
+              ? { ...m, files: m.files?.map((f) => (f.id === fileId ? { ...f, ...patch } : f)) }
+              : m
+          )
+        );
 
       const filesToSend: Array<{ name: string; content: string; mimeType: string }> = [];
-      // Upload mode: the files are stored first and the message carries their ids
-      const uploader = fileTransport === "upload" ? clientRef.current : null;
-      if (pendingFiles.length > 0) setIsUploading(true);
+      const storedIdOf = new Map<string, string>();
+      const uploadController = new AbortController();
+      sendUploadRef.current = uploadController;
+      if (attached.length > 0) setIsUploadingMessage(true);
       try {
-        if (uploader?.uploadFile) {
+        if (eager) {
+          // Already stored; the message only names them
+          for (const f of attached) {
+            const stored = storedFilesRef.current.get(f.id);
+            if (stored) {
+              uploadedIds.push(stored);
+              storedIdOf.set(f.id, stored);
+            }
+          }
+        } else if (storeFirst) {
           try {
-            for (const f of pendingFiles) {
+            for (const f of attached) {
               const rawFile = rawFilesRef.current.get(f.id);
               if (!rawFile) continue;
-              const stored = await uploader.uploadFile({
-                file: { name: f.name, content: await readBase64(rawFile), mimeType: f.mimeType },
-                conversationId: currentConversation.id,
-              });
+              const stored = await uploadOne(
+                rawFile,
+                f.name,
+                currentConversation.id,
+                (fraction) => patchBubbleFile(f.id, { progress: fraction }),
+                uploadController.signal
+              );
               uploadedIds.push(stored.id);
+              storedIdOf.set(f.id, stored.id);
+              patchBubbleFile(f.id, { status: "ready", progress: 1 });
             }
           } catch (uploadError) {
             // Nothing was sent: drop what already reached the server and keep the files for another try
-            await Promise.all(uploadedIds.map((id) => uploader.deleteFile?.(id).catch(() => undefined)));
+            await Promise.all(uploadedIds.map((id) => uploader?.deleteFile?.(id).catch(() => undefined)));
             throw uploadError;
           }
         } else {
-          for (const f of pendingFiles) {
+          for (const f of attached) {
             const rawFile = rawFilesRef.current.get(f.id);
             if (rawFile) {
               filesToSend.push({
@@ -669,36 +1328,34 @@ export function useChat(options: UseChatOptions): UseChatReturn {
           }
         }
       } finally {
-        setIsUploading(false);
+        setIsUploadingMessage(false);
+        if (sendUploadRef.current === uploadController) sendUploadRef.current = null;
       }
+      uploadsDone = true;
 
       // Clean up raw file references
-      for (const f of pendingFiles) {
+      for (const f of attached) {
         rawFilesRef.current.delete(f.id);
       }
 
       // If user navigated away while we were reading files, bail out
       if (isStale()) return true;
 
-      // Create optimistic user message
-      const userMessage: Message = {
-        id: generateId(),
-        conversationId: currentConversation.id,
-        role: "user",
-        content,
-        files: pendingFiles.length > 0 ? pendingFiles : undefined,
-        createdAt: new Date(),
-        updatedAt: new Date(),
+      // The bubble's chips are plain once the files are in (and carry the stored ids, which the server's history uses)
+      const sentMessage: Message = {
+        ...userMessage,
+        files: userMessage.files?.map((f) => {
+          const { status: _status, progress: _progress, uploadError: _uploadError, ...rest } = f;
+          return { ...rest, id: storedIdOf.get(f.id) ?? f.id };
+        }),
       };
-
-      optimisticId = userMessage.id;
-      setMessages((prev) => [...prev, userMessage]);
-      setPendingFiles([]);
-      onMessageSent?.(userMessage);
+      setMessages((prev) => prev.map((m) => (m.id === userMessage.id ? sentMessage : m)));
+      onMessageSent?.(sentMessage);
 
       if (streaming) {
         // Streaming mode
         setStreamingText("");
+        streamingTextRef.current = "";
         setActiveToolCalls(new Map());
         setProgressMessage("");
         toolCallStartTimeRef.current = null;
@@ -756,15 +1413,31 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         }
         onMessageReceived?.(withActions(response.response, response));
       }
+      // The message took its files: they are no longer "for the next message"
+      if (messageAccepted) {
+        for (const f of attached) storedFilesRef.current.delete(f.id);
+        if (attached.length > 0 && !isStale()) void refreshFileList(currentConversation.id, capturedSession);
+      }
       return true;
     } catch (err) {
-      if (!messageAccepted && uploadedIds.length > 0) {
+      // Files stored for this send only are dropped; eagerly stored ones stay for another try
+      if (!messageAccepted && uploadedIds.length > 0 && !eager) {
         const client = clientRef.current;
         await Promise.all(uploadedIds.map((id) => client?.deleteFile?.(id).catch(() => undefined)));
       }
       // Ignore stale sessions (user navigated away) and abort errors (user stopped)
       if (isStale()) return true;
-      if (err instanceof DOMException && err.name === 'AbortError') return true;
+      if (isAbort(err)) {
+        // Stopped while the files were still going up: nothing was sent, the composer gets its files (and text) back
+        if (!uploadsDone && optimisticId) {
+          const sentId = optimisticId;
+          setMessages((prev) => prev.filter((m) => m.id !== sentId));
+          for (const [id, raw] of attachedRaw) if (raw) rawFilesRef.current.set(id, raw);
+          setPendingFiles((prev) => [...attached, ...prev.filter((f) => !attached.some((a) => a.id === f.id))]);
+          return false;
+        }
+        return true;
+      }
       const error = friendly(err instanceof Error ? err : new Error(t("chat.error.sendFailed")));
       if (!messageAccepted && optimisticId) {
         const sentId = optimisticId;
@@ -772,15 +1445,23 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         for (const [id, raw] of attachedRaw) if (raw) rawFilesRef.current.set(id, raw);
         setPendingFiles((prev) => [...attached, ...prev.filter((f) => !attached.some((a) => a.id === f.id))]);
       }
+      // The server was answering and the connection broke: it goes on without us - pick it up again
+      if (messageAccepted && dropped(err) && activeConversationId) {
+        recoverDroppedTurn(activeConversationId, capturedSession, error);
+        return true;
+      }
       setError(error);
       onError?.(error);
-      // A card is waiting or a turn is running that this page did not know about: show it
+      // A card is waiting, a turn is running or the budget is used up, and this page did not know: show it
       if (!messageAccepted && isConflictCode((err as { code?: string } | null)?.code) && activeConversationId) {
+        // the turn is over for us before the conversation is fetched, so a running one can be followed
+        turnSessionRef.current = null;
         void refreshConversation(activeConversationId, capturedSession);
       }
       // Once the server started answering, the message is spent even if the stream broke later
       return messageAccepted;
     } finally {
+      if (turnSessionRef.current === capturedSession) turnSessionRef.current = null;
       if (!isStale()) {
         setIsStreaming(false);
         abortControllerRef.current = null;
@@ -792,8 +1473,13 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     conversation,
     createConversation,
     refreshConversation,
+    refreshFileList,
+    dropped,
+    recoverDroppedTurn,
+    uploadOne,
     pendingFiles,
     fileTransport,
+    eagerUploads,
     attachmentsOnlyMessage,
     streaming,
     pendingActionComposerMode,
@@ -821,9 +1507,11 @@ export function useChat(options: UseChatOptions): UseChatReturn {
 
     setError(null);
     streamActionsRef.current = [];
+    turnSessionRef.current = capturedSession;
     patch({ status: "resolving", resolution });
     setIsResolvingAction(true);
     setIsStreaming(true);
+    streamingTextRef.current = "";
     setStreamingText("");
     setActiveToolCalls(new Map());
     activeToolCallsRef.current = new Map();
@@ -851,27 +1539,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       } else {
         const response = await client.resolveAction(conversationId, actionId, resolution, { stream: false });
         accepted = true;
-        if (!isStale() && response?.response) {
-          const reply = withActions(response.response, response);
-          const shown = new Set(collectPendingActions(messagesRef.current).map((e) => e.action.id));
-          const fresh = (reply.pendingActions ?? []).filter((a) => !shown.has(a.id));
-          const onScreen = messagesRef.current.some((m) => m.id === reply.id);
-          if (onScreen) {
-            if (fresh.length > 0) {
-              setMessages((prev) =>
-                prev.map((m) =>
-                  m.id === reply.id
-                    ? { ...m, pendingActions: [...(m.pendingActions ?? []), ...fresh], status: "requires_action" as const }
-                    : m
-                )
-              );
-            }
-          } else if (fresh.length > 0 || reply.content) {
-            const message = { ...reply, pendingActions: fresh.length > 0 ? fresh : undefined };
-            setMessages((prev) => [...prev, message]);
-            onMessageReceived?.(message);
-          }
-        }
+        if (!isStale()) showReply(response);
       }
       if (isStale()) return true;
       patch(stateForResolution(resolution));
@@ -879,7 +1547,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       return true;
     } catch (err) {
       if (isStale()) return true;
-      if (err instanceof DOMException && err.name === "AbortError") {
+      if (isAbort(err)) {
         patch(accepted ? stateForResolution(resolution) : { status: "pending" });
         return accepted;
       }
@@ -888,110 +1556,160 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       // Spent on the server's side (answered elsewhere, expired, cancelled): stop offering it,
       // which also frees the composer
       patch(stateForSpentAction(code) ?? (accepted ? stateForResolution(resolution) : { status: "pending" }));
+      // The connection broke after the server took the answer: the turn goes on without us
+      if (accepted && dropped(err)) {
+        recoverDroppedTurn(conversationId, capturedSession, error);
+        return true;
+      }
       setError(error);
       onError?.(error);
       // The turn is busy elsewhere: show where it stands
-      if (!accepted && isConflictCode(code)) void refreshConversation(conversationId, capturedSession);
+      if (!accepted && isConflictCode(code)) {
+        turnSessionRef.current = null;
+        void refreshConversation(conversationId, capturedSession);
+      }
       return accepted;
     } finally {
+      if (turnSessionRef.current === capturedSession) turnSessionRef.current = null;
       if (!isStale()) {
         setIsStreaming(false);
         setIsResolvingAction(false);
         abortControllerRef.current = null;
       }
     }
-  }, [t, has, conversation, streaming, refreshConversation, onMessageReceived, onActionResolved, onError]);
+  }, [t, has, conversation, streaming, refreshConversation, dropped, recoverDroppedTurn, showReply, onActionResolved, onError]);
 
-  const addFiles = useCallback(async (files: File[]) => {
-    if (!enableFileUpload) return;
+  // ---------------------------------------------------------------------------
+  // Budget
+  // ---------------------------------------------------------------------------
 
-    const validFiles: FileAttachment[] = [];
-    // Every refusal goes to `onError`; together they are also shown through `error`
-    const refusals: Error[] = [];
-    const refuse = (message: string) => {
-      const error = new Error(message);
-      refusals.push(error);
-      onError?.(error);
-    };
+  const continueConversation = useCallback(async (): Promise<boolean> => {
+    const client = clientRef.current;
+    const conv = conversationRef.current;
+    if (!client?.continueConversation || !conv) return false;
+    if (turnSessionRef.current === sessionRef.current || followRef.current) return false;
 
-    for (const file of files) {
-      // Check file count
-      if (pendingFiles.length + validFiles.length >= maxFiles) {
-        refuse(t("chat.file.tooMany", { maxFiles }));
-        break;
+    const capturedSession = sessionRef.current;
+    const isStale = () => sessionRef.current !== capturedSession;
+    setError(null);
+    streamActionsRef.current = [];
+    turnSessionRef.current = capturedSession;
+    setIsStreaming(true);
+    streamingTextRef.current = "";
+    setStreamingText("");
+    setActiveToolCalls(new Map());
+    activeToolCallsRef.current = new Map();
+    toolCallStartTimeRef.current = null;
+    setProgressMessage("");
+
+    let accepted = false;
+    try {
+      if (streaming) {
+        const abortController = new AbortController();
+        abortControllerRef.current = abortController;
+        const base = createStreamCallbacksRef.current(isStale);
+        await client.continueConversation(conv.id, {
+          stream: true,
+          signal: abortController.signal,
+          callbacks: {
+            ...base,
+            onStart: (e) => { accepted = true; base.onStart?.(e); },
+            onText: (text, full) => { accepted = true; base.onText?.(text, full); },
+            onDone: (e) => { accepted = true; base.onDone?.(e); },
+          },
+        });
+      } else {
+        const response = await client.continueConversation(conv.id, { stream: false });
+        accepted = true;
+        if (!isStale()) showReply(response);
       }
-
-      // The server would answer an empty file with a validation error
-      if (file.size === 0) {
-        refuse(t("chat.file.empty", { fileName: file.name }));
-        continue;
+      return true;
+    } catch (err) {
+      if (isStale()) return true;
+      if (isAbort(err)) return accepted;
+      const code = (err as { code?: string } | null)?.code?.toLowerCase();
+      turnSessionRef.current = null;
+      if (code === "nothing_to_continue") {
+        // Someone carried it on already, or there is nothing stopped to carry on: just show where it stands
+        void refreshConversation(conv.id, capturedSession);
+        return false;
       }
-
-      // Check file size
-      if (file.size > maxFileSize) {
-        refuse(t("chat.file.tooLarge", { fileName: file.name, maxSize: formatFileSize(maxFileSize) }));
-        continue;
+      const shown = friendly(err instanceof Error ? err : new Error(t("chat.error.sendFailed")));
+      if (accepted && dropped(err)) {
+        recoverDroppedTurn(conv.id, capturedSession, shown);
+        return true;
       }
-
-      // Check file type
-      if (allowedFileTypes && allowedFileTypes.length > 0) {
-        const isAllowed = allowedFileTypes.some((type) =>
-          // `image/*` matches by media-type prefix; `.pdf` / `application/pdf` as before
-          type.endsWith("/*")
-            ? file.type.startsWith(type.slice(0, -1))
-            : file.type === type || file.name.endsWith(type.replace("*", ""))
-        );
-        if (!isAllowed) {
-          refuse(t("chat.file.invalidType", { fileType: file.type || file.name }));
-          continue;
-        }
+      setError(shown);
+      onError?.(shown);
+      if (!accepted && isConflictCode(code)) void refreshConversation(conv.id, capturedSession);
+      return accepted;
+    } finally {
+      if (turnSessionRef.current === capturedSession) turnSessionRef.current = null;
+      if (!isStale()) {
+        setIsStreaming(false);
+        abortControllerRef.current = null;
       }
-
-      const fileId = generateId();
-
-      // Store raw File object so sendMessage can read base64 later
-      rawFilesRef.current.set(fileId, file);
-
-      // An image shows as a thumbnail straight away, before anything is uploaded
-      const previewUrl = createPreviewUrl(file);
-      if (previewUrl) previewUrlsRef.current.add(previewUrl);
-
-      validFiles.push({
-        id: fileId,
-        name: file.name,
-        mimeType: file.type,
-        size: file.size,
-        ...(previewUrl ? { previewUrl } : {}),
-      });
     }
+  }, [t, has, streaming, showReply, refreshConversation, dropped, recoverDroppedTurn, onError]);
 
-    if (refusals.length > 0) {
-      setError(refusals.length === 1 ? refusals[0] : new Error(refusals.map((e) => e.message).join("; ")));
-    }
-    setPendingFiles((prev) => [...prev, ...validFiles]);
-  }, [t, enableFileUpload, pendingFiles, maxFiles, maxFileSize, allowedFileTypes, onError]);
+  const updateBudget = useCallback(
+    async (next: ConversationBudget | null, opts: { continue?: boolean } = {}): Promise<boolean> => {
+      const client = clientRef.current;
+      const conv = conversationRef.current;
+      if (!client?.updateBudget || !conv) return false;
+      const capturedSession = sessionRef.current;
+      const wasPaused = conv.runtime?.status === "budget_paused";
+      setError(null);
+      try {
+        const updated = await client.updateBudget(conv.id, next);
+        if (sessionRef.current !== capturedSession) return true;
+        const budget = updated.budget === undefined ? next : normalizeBudget(updated.budget) ?? next;
+        setConversation((prev) => {
+          if (!prev) return prev;
+          const spentUsd = typeof updated.spentUsd === "number" ? updated.spentUsd : prev.spentUsd;
+          const stillUsedUp = Boolean(budget && typeof spentUsd === "number" && spentUsd >= budget.maxCostUsd);
+          return {
+            ...prev,
+            budget,
+            ...(spentUsd !== undefined ? { spentUsd } : {}),
+            // The server reports the runtime once the limit changed; without it a raised limit frees a paused chat
+            runtime:
+              updated.runtime ??
+              (prev.runtime?.status === "budget_paused" && !stillUsedUp ? { ...prev.runtime, status: "idle" } : prev.runtime),
+          };
+        });
+        // The limit is changed. Carrying on is a turn of its own: how it went is in `error` (and nothing
+        // to carry on, a handler agent that cannot be continued, is not worth one)
+        if (opts.continue && wasPaused) await continueConversation();
+        return true;
+      } catch (err) {
+        if (sessionRef.current !== capturedSession) return true;
+        const shown = friendly(err instanceof Error ? err : new Error(t("chat.error.sendFailed")));
+        setError(shown);
+        onError?.(shown);
+        return false;
+      }
+    },
+    [t, has, continueConversation, onError]
+  );
 
-  const removeFile = useCallback((fileId: string) => {
-    rawFilesRef.current.delete(fileId);
-    const removed = pendingFilesRef.current.find((f) => f.id === fileId);
-    if (removed?.previewUrl) {
-      revokePreviewUrl(removed.previewUrl);
-      previewUrlsRef.current.delete(removed.previewUrl);
-    }
-    setPendingFiles((prev) => prev.filter((f) => f.id !== fileId));
-  }, []);
+  // ---------------------------------------------------------------------------
+  // Stop, clear, retry
+  // ---------------------------------------------------------------------------
 
   const clearMessages = useCallback(() => {
     resetStreamingState();
     releasePreviews();
+    discardStoredFiles();
     sessionRef.current += 1;
     setMessages([]);
     setConversation(null);
+    setFileList(null);
     setError(null);
     setPendingFiles([]);
     rawFilesRef.current.clear();
     lastUserMessageRef.current = "";
-  }, [resetStreamingState, releasePreviews]);
+  }, [resetStreamingState, releasePreviews, discardStoredFiles]);
 
   const retry = useCallback(async () => {
     if (lastUserMessageRef.current) {
@@ -1006,39 +1724,91 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     }
   }, [sendMessage]);
 
+  /** Tell the server to stop the run. Quiet when the route is missing (an older server); anything else is shown. */
+  const cancelOnServer = useCallback(
+    async (conversationId: string, session: number, thenRefresh: boolean) => {
+      const client = clientRef.current;
+      if (!client?.cancel) return;
+      try {
+        const result = await client.cancel(conversationId);
+        if (sessionRef.current !== session) return;
+        if (result.runtime) {
+          setConversation((prev) => (prev && prev.id === conversationId ? { ...prev, runtime: result.runtime } : prev));
+        }
+      } catch (err) {
+        const status = (err as { status?: number } | null)?.status;
+        if (sessionRef.current === session && status !== 404 && status !== 405 && status !== 501) {
+          const shown = friendly(err instanceof Error ? err : new Error(t("chat.error.sendFailed")));
+          setError(shown);
+          onError?.(shown);
+        }
+      }
+      // What the server kept (the cancelled answer, with its stop reason) replaces the local partial
+      if (thenRefresh && sessionRef.current === session) await refreshConversation(conversationId, session);
+    },
+    [t, has, onError, refreshConversation] // eslint-disable-line react-hooks/exhaustive-deps
+  );
+
   const stop = useCallback(() => {
+    const conv = conversationRef.current;
+    const session = sessionRef.current;
+    const canCancel = Boolean(clientRef.current?.cancel && conv);
+
+    // Watching a turn that runs elsewhere: stopping it is the server's job; the follower then sees it end
+    if (followRef.current) {
+      if (canCancel && conv) void cancelOnServer(conv.id, session, false);
+      else stopFollowing();
+      if (!canCancel) {
+        setIsStreaming(false);
+        streamingTextRef.current = "";
+        setStreamingText("");
+        activeToolCallsRef.current = new Map();
+        setActiveToolCalls(new Map());
+      }
+      return;
+    }
+
+    // Files of the message being sent stop going up
+    sendUploadRef.current?.abort();
+    // The server stops the run (this page's connection is closed too, right below)
+    if (canCancel && conv) void cancelOnServer(conv.id, session, true);
+
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
     }
-    // Save any partial streaming text as a message
-    setStreamingText((currentText) => {
-      if (currentText) {
-        const partialMessage: Message = {
-          id: generateId(),
-          conversationId: conversation?.id || "",
-          role: "assistant",
-          content: currentText,
-          metadata: activeToolCallsRef.current.size > 0
-            ? {
-                toolCallDetails: Array.from(activeToolCallsRef.current.entries()).map(([id, call]) => ({
-                  id, name: call.name, args: call.args, result: call.result,
-                })),
-              }
-            : undefined,
-          createdAt: new Date(),
-          updatedAt: new Date(),
-        };
-        setMessages((prev) => [...prev, partialMessage]);
-      }
-      return "";
-    });
+    // Keep what was streamed so far as a message, marked as stopped
+    const partial = streamingTextRef.current;
+    if (partial) {
+      const at = new Date();
+      const toolCalls = activeToolCallsRef.current;
+      const partialMessage: Message = {
+        id: generateId(),
+        conversationId: conv?.id || "",
+        role: "assistant",
+        content: partial,
+        status: "cancelled",
+        stopReason: "cancelled",
+        metadata: toolCalls.size > 0
+          ? {
+              toolCallDetails: Array.from(toolCalls.entries()).map(([id, call]) => ({
+                id, name: call.name, args: call.args, result: call.result,
+              })),
+            }
+          : undefined,
+        createdAt: at,
+        updatedAt: at,
+      };
+      setMessages((prev) => [...prev, partialMessage]);
+    }
+    streamingTextRef.current = "";
+    setStreamingText("");
     activeToolCallsRef.current = new Map();
     toolCallStartTimeRef.current = null;
     setActiveToolCalls(new Map());
     setProgressMessage("");
     setIsStreaming(false);
-  }, [conversation]);
+  }, [cancelOnServer, stopFollowing]);
 
   const pendingActions = useMemo(() => collectPendingActions(messages), [messages]);
 
@@ -1087,6 +1857,39 @@ export function useChat(options: UseChatOptions): UseChatReturn {
 
   const answerable = useMemo(() => singleFreeTextQuestion(pendingActions), [pendingActions]);
   const canResolveActions = typeof clientRef.current?.resolveAction === "function";
+  const awaitingAction = pendingActions.length > 0 && !isLoadingConversation;
+
+  const budget = conversation?.budget ?? null;
+  const budgetExhausted = isBudgetExhausted(conversation);
+
+  const composerState: ComposerState = readOnly
+    ? "readonly"
+    : isFollowing
+      ? "following"
+      : awaitingAction
+        ? enableQuestions && canResolveActions && answerable !== null
+          ? "answer"
+          : pendingActionComposerMode === "cancel"
+            ? "cancel"
+            : "blocked"
+        : budgetExhausted
+          ? "budget_paused"
+          : "open";
+
+  const canGetFileUrl = typeof clientRef.current?.getFileUrl === "function";
+  const resolveFileUrl = useMemo(
+    () =>
+      canGetFileUrl
+        ? async (file: FileAttachment, opts?: { disposition?: "inline" | "attachment" }) => {
+            try {
+              return await clientRef.current?.getFileUrl?.(file, opts);
+            } catch {
+              return undefined;
+            }
+          }
+        : undefined,
+    [canGetFileUrl]
+  );
 
   return {
     messages,
@@ -1094,26 +1897,40 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     isLoading: isStreaming || isLoadingConversation,
     isStreaming,
     isLoadingConversation,
+    isFollowing,
     streamingText,
     progressMessage,
     error,
     pendingFiles,
-    isUploading,
+    isUploading:
+      isUploadingMessage || pendingFiles.some((f) => f.status === "uploading" || f.status === "queued"),
     activeToolCalls,
     sendMessage,
     addFiles,
     removeFile,
+    retryFile,
     clearMessages,
     loadConversation,
     createConversation,
     retry,
     stop,
     pendingActions,
-    awaitingAction: pendingActions.length > 0 && !isLoadingConversation,
+    awaitingAction,
     isResolvingAction,
     canResolveActions,
     answerableQuestion: answerable ? { actionId: answerable.action.id, question: answerable.question } : null,
     resolveAction,
+    composerState,
+    budget,
+    spentUsd: conversation?.spentUsd,
+    budgetExhausted,
+    canContinue: typeof clientRef.current?.continueConversation === "function",
+    canUpdateBudget: typeof clientRef.current?.updateBudget === "function",
+    continueConversation,
+    updateBudget,
+    heldFiles,
+    heldFilesMax: fileList?.max,
+    resolveFileUrl,
     setError,
     setMessages,
     setConversation,

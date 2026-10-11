@@ -1,16 +1,19 @@
 "use client";
 
 import React, { useState, useCallback, useEffect, useRef, useMemo } from "react";
-import { cn } from "../../utils";
+import { cn, resolveAgentSettings } from "../../utils";
 import type {
   Message,
   Conversation,
+  ConversationBudget,
   ConversationListItem,
   AgentInfo,
   ChatConfig,
   ChatCallbacks,
   ChatTheme,
   MessageActionProps,
+  RuntimeStatus,
+  StopNoticeRenderProps,
   ToolApprovalRenderProps,
   QuestionRenderProps,
 } from "../../types";
@@ -23,6 +26,7 @@ import type { ChatActionsConfig } from "./ActionCards";
 import { ChatInput } from "./ChatInput";
 import type { ChatInputHandle } from "./ChatInput";
 import { ChatHistory } from "./ChatHistory";
+import { BudgetBanner, type BudgetBannerProps } from "./BudgetBanner";
 import { MenuIcon, ChevronDownIcon } from "./Icons";
 
 export interface ChatProps extends ChatConfig, ChatCallbacks {
@@ -93,6 +97,30 @@ export interface ChatProps extends ChatConfig, ChatCallbacks {
   expiryWarningSeconds?: number;
   /** Replace how an image in a message is drawn, e.g. to fetch it with credentials */
   renderImage?: (props: ImageRenderProps) => React.ReactNode;
+  /** Replace the notice under an answer that stopped early (stopped, a limit, the usage limit, an error) */
+  renderStopNotice?: (props: StopNoticeRenderProps) => React.ReactNode;
+  /**
+   * Show the conversation's spent / limit bar when it has a spend limit (default true; the server only
+   * sends a limit for conversations that have one). Turn it off where people should not see amounts.
+   */
+  showBudgetMeter?: boolean;
+  /**
+   * Offer "Continue" once a paused conversation's limit has room again (default false). An agent's
+   * `capabilities.budget.allowContinue` overrides it.
+   */
+  allowBudgetContinue?: boolean;
+  /**
+   * Let the person raise or remove the conversation's usage limit from the banner, then carry on
+   * (default false; the server may still refuse with `budget_forbidden`). An agent's
+   * `capabilities.budget.allowEdit` overrides it.
+   */
+  allowBudgetEdit?: boolean;
+  /** Replace the usage-limit banner (the meter and the "limit reached" notice) */
+  renderBudgetBanner?: (props: BudgetBannerProps) => React.ReactNode;
+  /** Show a badge on history rows that are working, waiting for the person or stopped on their limit (default true) */
+  showStatus?: boolean;
+  /** The chat is a transcript: the composer is closed with a notice (default false) */
+  readOnly?: boolean;
   /**
    * What the composer does while an approval or question is waiting.
    * `block` (default) disables it until answered; `cancel` lets a new message
@@ -164,6 +192,7 @@ function ChatContent({
   allowedFileTypes,
   maxFileSize,
   maxFiles,
+  maxFilesScope,
   fileTransport,
   attachmentsOnlyMessage,
   // Callbacks
@@ -176,6 +205,7 @@ function ChatContent({
   onConversationCreated,
   onConversationSelected,
   onConversationTitleGenerated,
+  onBudgetReached,
   onAgentChange,
   // UI options
   className,
@@ -205,6 +235,13 @@ function ChatContent({
   allowArgumentEdit = false,
   expiryWarningSeconds,
   renderImage,
+  renderStopNotice,
+  showBudgetMeter = true,
+  allowBudgetContinue = false,
+  allowBudgetEdit = false,
+  renderBudgetBanner,
+  showStatus = true,
+  readOnly = false,
   pendingActionComposerMode = "block",
   onActionResolved,
   showAgentName,
@@ -278,27 +315,25 @@ function ChatContent({
     handleAgentChange(conversationAgentId);
   }, [effectiveAgentId, agents, handleAgentChange]);
 
-  // Compute effective file upload setting from agent metadata (peer-based toggle)
+  // How the composer, the cards and the budget banner adapt to this agent: what it says
+  // (`capabilities`, then its `metadata`) refines the props
   const selectedAgent = agents.find(a => a.id === effectiveAgentId);
-  const effectiveFileUpload = selectedAgent?.metadata?.enableFileUpload !== undefined
-    ? Boolean(selectedAgent.metadata.enableFileUpload)
-    : enableFileUpload;
-  // The agent can narrow what it takes (the host lists these in the agent's metadata)
-  const agentMeta = selectedAgent?.metadata;
-  const effectiveMaxFileSize = typeof agentMeta?.maxFileSize === "number" ? agentMeta.maxFileSize : maxFileSize;
-  const effectiveMaxFiles = typeof agentMeta?.maxFiles === "number" ? agentMeta.maxFiles : maxFiles;
-  const effectiveAllowedFileTypes = Array.isArray(agentMeta?.allowedFileTypes)
-    ? (agentMeta.allowedFileTypes as unknown[]).filter((type): type is string => typeof type === "string")
-    : allowedFileTypes;
-  // What a new message does while this agent waits on an approval follows the agent's own policy
-  const effectiveComposerMode =
-    agentMeta?.pendingActionComposerMode === "block" || agentMeta?.pendingActionComposerMode === "cancel"
-      ? agentMeta.pendingActionComposerMode
-      : pendingActionComposerMode;
-  // The agent says whether it takes edited arguments and whether it reads images
-  const effectiveArgEdit = selectedAgent?.capabilities?.approvalArgsEdit ?? allowArgumentEdit;
-  const imagesIgnored =
-    selectedAgent?.capabilities?.acceptsImages === false || agentMeta?.acceptsImages === false;
+  const settings = resolveAgentSettings(selectedAgent, {
+    enableFileUpload,
+    allowedFileTypes,
+    maxFileSize,
+    maxFiles,
+    maxFilesScope,
+    pendingActionComposerMode,
+    allowArgumentEdit,
+    allowBudgetContinue,
+    allowBudgetEdit,
+  });
+  const effectiveFileUpload = settings.fileUpload;
+  const effectiveComposerMode = settings.composerMode;
+  const effectiveArgEdit = settings.argumentEdit;
+  // `acceptsImages: false` warns on an attached picture
+  const imagesIgnored = settings.acceptsImages === false;
 
   // Use refs for callbacks that will depend on history (defined later)
   const onMessageReceivedRef = useRef(onMessageReceived);
@@ -349,9 +384,10 @@ function ChatContent({
     fetch: customFetch,
     streaming,
     enableFileUpload: effectiveFileUpload,
-    allowedFileTypes: effectiveAllowedFileTypes,
-    maxFileSize: effectiveMaxFileSize,
-    maxFiles: effectiveMaxFiles,
+    allowedFileTypes: settings.allowedFileTypes,
+    maxFileSize: settings.maxFileSize,
+    maxFiles: settings.maxFiles,
+    maxFilesScope: settings.maxFilesScope,
     fileTransport,
     attachmentsOnlyMessage,
     conversationId,
@@ -365,8 +401,11 @@ function ChatContent({
     onConversationCreated: wrappedOnConversationCreated,
     onConversationTitleGenerated: wrappedOnConversationTitleGenerated,
     onBackgroundStreamCompleted: wrappedOnBackgroundStreamCompleted,
+    onBudgetReached,
     onActionResolved,
     pendingActionComposerMode: effectiveComposerMode,
+    enableQuestions,
+    readOnly,
   });
 
   // Approval / question cards
@@ -393,20 +432,8 @@ function ChatContent({
     ]
   );
 
-  // A lone free-text question is answered from the composer
-  const composerAnswers =
-    chat.awaitingAction &&
-    enableQuestions &&
-    chat.canResolveActions &&
-    chat.answerableQuestion !== null;
-  const pendingMode = !chat.awaitingAction
-    ? undefined
-    : composerAnswers
-      ? ("answer" as const)
-      : effectiveComposerMode === "cancel"
-        ? ("cancel" as const)
-        : ("blocked" as const);
-
+  // What the composer is doing ("answer" when a lone free-text question is answered from it)
+  const composerState = chat.composerState;
   // Once the last card is answered (or lapses) the keyboard goes back to the composer
   const wasAwaiting = useRef(false);
   useEffect(() => {
@@ -423,7 +450,7 @@ function ChatContent({
     (text: string) => {
       const q = chat.answerableQuestion;
       // The composer keeps the text when the answer / message is refused
-      if (pendingMode === "answer" && q) {
+      if (composerState === "answer" && q) {
         return chat.resolveAction(q.actionId, {
           type: "user_question",
           answers: { [q.question.question]: text },
@@ -431,7 +458,7 @@ function ChatContent({
       }
       return chat.sendMessage(text);
     },
-    [chat.answerableQuestion, chat.resolveAction, chat.sendMessage, pendingMode]
+    [chat.answerableQuestion, chat.resolveAction, chat.sendMessage, composerState]
   );
 
   // History state — when there are multiple agents, don't filter by agentId
@@ -491,6 +518,41 @@ function ChatContent({
 
   const showAgentSelector = !chat.isLoadingConversation && chat.messages.length === 0;
 
+  // The usage-limit banner. What a person may do about a used-up limit is the host's call (props, or the agent's capabilities)
+  const budgetBannerProps: BudgetBannerProps = {
+    budget: chat.budget,
+    spentUsd: chat.spentUsd,
+    exhausted: chat.budgetExhausted,
+    showMeter: showBudgetMeter,
+    canContinue: settings.budgetContinue && chat.canContinue,
+    canEdit: settings.budgetEdit && chat.canUpdateBudget,
+    busy: chat.isStreaming,
+    onContinue: () => {
+      void chat.continueConversation();
+    },
+    onUpdate: (budget: ConversationBudget | null, options) => {
+      void chat.updateBudget(budget, options);
+    },
+  };
+
+  // What the selected conversation is doing, as this page knows it (the list from the server may be older)
+  const selectedStatus: RuntimeStatus | undefined = !chat.conversation
+    ? undefined
+    : chat.isStreaming || chat.isFollowing
+      ? "running"
+      : chat.awaitingAction
+        ? "requires_action"
+        : chat.budgetExhausted
+          ? "budget_paused"
+          : "idle";
+
+  // A turn ended (finished, stopped, paused): the history rows' badges are looked up again
+  const wasBusy = useRef(false);
+  useEffect(() => {
+    if (wasBusy.current && !chat.isStreaming && showHistory) historyRef.current?.refresh();
+    wasBusy.current = chat.isStreaming;
+  }, [chat.isStreaming, showHistory]);
+
   return (
     <ChatThemeProvider
       defaultMode={theme}
@@ -522,6 +584,8 @@ function ChatContent({
             footer={renderHistoryFooter?.()}
             enableSearch={enableMessageSearch}
             showAgentName={showAgentName ?? false}
+            showStatus={showStatus}
+            selectedStatus={selectedStatus}
           />
         )}
 
@@ -574,6 +638,8 @@ function ChatContent({
               enableCitations={enableCitations}
               actions={actionsConfig}
               renderImage={renderImage}
+              renderStopNotice={renderStopNotice}
+              resolveFileUrl={chat.resolveFileUrl}
               emptyState={renderEmptyState?.()}
             />
           )}
@@ -599,6 +665,15 @@ function ChatContent({
             </div>
           )}
 
+          {/* Where the conversation stands against its usage limit */}
+          {(chat.budget || chat.budgetExhausted) && (
+            <div className="px-4 pt-2">
+              <div className="max-w-3xl mx-auto">
+                {renderBudgetBanner ? renderBudgetBanner(budgetBannerProps) : <BudgetBanner {...budgetBannerProps} />}
+              </div>
+            </div>
+          )}
+
           {/* Input */}
           <ChatInput
             ref={inputRef}
@@ -606,16 +681,20 @@ function ChatContent({
             onStop={chat.stop}
             onFilesAdd={effectiveFileUpload ? chat.addFiles : undefined}
             onFileRemove={chat.removeFile}
+            onFileRetry={chat.retryFile}
             isLoading={chat.isStreaming}
             isUploading={chat.isUploading}
             pendingFiles={chat.pendingFiles}
             placeholder={inputPlaceholder}
             enableFileUpload={effectiveFileUpload}
-            allowedFileTypes={effectiveAllowedFileTypes}
-            maxFiles={effectiveMaxFiles}
+            allowedFileTypes={settings.allowedFileTypes}
+            maxFiles={settings.maxFiles}
+            filesHeld={settings.maxFilesScope === "conversation" ? chat.heldFiles : 0}
+            fileCounter={settings.maxFilesScope === "conversation" && settings.maxFiles !== undefined}
+            retentionDays={settings.retentionDays}
             imagesIgnored={imagesIgnored}
             autoFocus={autoFocusInput}
-            pendingMode={pendingMode}
+            state={composerState}
           />
         </div>
       </div>

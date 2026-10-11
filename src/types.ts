@@ -43,6 +43,13 @@ export interface Message {
   /** How the turn ended. Absent means a normal, completed answer. */
   status?: MessageStatus;
   /**
+   * Why the turn that wrote this message stopped (`cancelled`, `limit`, `budget_reached`, ...). Read
+   * from `metadata.stopReason` when the server only sends it there. Absent for a plain answer.
+   */
+  stopReason?: StopReason;
+  /** The runtime's own wording for the stop, when it gives one (shown only through `renderStopNotice`) */
+  stopDetail?: string;
+  /**
    * How each action in `pendingActions` ended or stands, keyed by action id. Kept by this
    * app as cards settle; a server may also send it (or settled entries in
    * `metadata.pendingActions`, each with a `status` and `resolution`) so a reloaded history
@@ -71,7 +78,28 @@ export interface FileAttachment {
    * without) a server URL. Revoked when the conversation is left; never sent to the server.
    */
   previewUrl?: string;
+  /**
+   * Where a file attached in the composer is: waiting for its turn, going up, stored and
+   * ready for the message, or refused by the server. Absent for files that are simply there.
+   */
+  status?: FileStatus;
+  /** Upload progress, 0 to 1, while `status` is `uploading` */
+  progress?: number;
+  /** Why an upload failed (localized), while `status` is `failed` */
+  uploadError?: string;
+  /** When the server deletes the file (ISO 8601); a chip turns "expired" once it has passed */
+  expiresAt?: string;
+  /** The file is gone from the server (expired, deleted); set when a conversation is loaded */
+  expired?: boolean;
+  /**
+   * Whether the text of the file could be read for the agent. `failed` / `skipped` tint the chip
+   * with "no readable text". Set by servers and hosts that convert files.
+   */
+  conversionStatus?: FileConversionStatus;
 }
+
+export type FileStatus = "queued" | "uploading" | "ready" | "failed";
+export type FileConversionStatus = "pending" | "succeeded" | "failed" | "skipped";
 
 export interface Citation {
   id?: string;
@@ -99,6 +127,8 @@ export interface UserQuestionOption {
   label: string;
   value?: string;
   description?: string;
+  /** A code or text preview of what the option leads to, shown in a collapsed panel */
+  preview?: string;
 }
 
 export interface UserQuestion {
@@ -152,6 +182,71 @@ export type ActionResolution =
 
 export type MessageStatus = "completed" | "requires_action" | "incomplete" | "cancelled";
 
+/** Why a turn stopped (agent-server >= 0.3.0 `stopReason`). */
+export type StopReason =
+  | "end_turn"
+  | "requires_action"
+  | "cancelled"
+  | "max_turns"
+  | "limit"
+  | "budget_reached"
+  | "error";
+
+/** Where a conversation is in its run lifecycle. */
+export type RuntimeStatus = "idle" | "running" | "requires_action" | "budget_paused";
+
+/** `conversation.runtime` as agent-server reports it. */
+export interface ConversationRuntime {
+  status: RuntimeStatus;
+  /** Why the last turn stopped; absent while a turn is running */
+  stopReason?: StopReason;
+  /** `seq` of the newest event in the conversation's log: follow from here */
+  lastEventSeq?: number;
+  /** The actions the conversation waits on */
+  pendingActionIds?: string[];
+  /** The run executing now (on this or another node) */
+  activeRunId?: string;
+}
+
+/** A spend limit on a conversation. */
+export interface ConversationBudget {
+  maxCostUsd: number;
+  /** `pause`: wait for a higher limit, then carry on. `stop`: end the conversation until it is raised. */
+  onReach: "pause" | "stop";
+}
+
+/** Something worth knowing about a turn that still completed (`file_truncated`, `images_not_supported`, ...). */
+export interface TurnWarning {
+  code: string;
+  message?: string;
+  [key: string]: unknown;
+}
+
+/** One entry of a conversation's event log, as `GET /conversations/:id/events` returns it. */
+export interface ConversationEvent {
+  /** Absent for live-only frames such as `agent.message.delta` */
+  seq?: number;
+  type: string;
+  data: Record<string, unknown>;
+  runId?: string;
+  createdAt?: string;
+}
+
+/**
+ * What the composer is doing. `open` takes a message; every other state says why not (or what
+ * a message would do): `blocked` / `cancel` / `answer` while a card waits, `following` while a
+ * turn runs somewhere else, `budget_paused` once the spend limit is used up, `readonly` when
+ * the host turned the chat into a transcript.
+ */
+export type ComposerState =
+  | "open"
+  | "blocked"
+  | "cancel"
+  | "answer"
+  | "following"
+  | "budget_paused"
+  | "readonly";
+
 /** Where an action card is in its life, as tracked by the UI. */
 export type ActionStatus = "pending" | "resolving" | "resolved" | "cancelled" | "expired";
 
@@ -177,6 +272,12 @@ export interface Conversation {
   state?: Record<string, unknown>;
   /** Actions still waiting for an answer (set by agent-server >= 0.3.0) */
   pendingActions?: PendingAction[];
+  /** Whether a turn is running, waiting for a person, or idle (agent-server >= 0.3.0) */
+  runtime?: ConversationRuntime;
+  /** The spend limit of the conversation, when it has one; `null`: removed on purpose */
+  budget?: ConversationBudget | null;
+  /** What the conversation's turns have cost so far, in USD */
+  spentUsd?: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -187,6 +288,10 @@ export interface ConversationListItem {
   /** Agent display name, populated by the server */
   agentName?: string;
   agentId: string;
+  /** Shown as a status badge in the history (running / waiting for you / budget reached) */
+  runtime?: ConversationRuntime;
+  budget?: ConversationBudget | null;
+  spentUsd?: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -203,18 +308,45 @@ export interface AgentInfo {
   /**
    * Free-form. `Chat` reads these keys to adapt itself to the agent (each overrides
    * the matching prop): `enableFileUpload`, `maxFileSize`, `maxFiles`,
-   * `allowedFileTypes`, `pendingActionComposerMode` (`"block"` | `"cancel"`) and
-   * `acceptsImages` (`false` warns on image attachments).
+   * `allowedFileTypes`, `pendingActionComposerMode` (`"block"` | `"cancel"`),
+   * `acceptsImages` (`false` warns on image attachments), `maxFilesScope` and
+   * `fileRetentionDays`. `capabilities.attachments` says the same in one place and wins.
    */
   metadata?: Record<string, unknown>;
   /** What the agent can pause for or take; absent when the server does not say */
-  capabilities?: {
-    toolApproval?: boolean;
-    askUser?: boolean;
-    /** The approval card may edit a call's arguments (overrides `allowArgumentEdit`) */
-    approvalArgsEdit?: boolean;
-    /** `false`: the agent does not read images; an attached image gets a warning */
-    acceptsImages?: boolean;
+  capabilities?: AgentCapabilities;
+}
+
+/** What an agent takes as attachments (`AgentInfo.capabilities.attachments`, filled by agent-server). */
+export interface AgentAttachmentsCapability {
+  /** `false` hides the paperclip */
+  enabled?: boolean;
+  /** Files one conversation may hold (see `maxFilesScope`) */
+  maxFiles?: number;
+  /** Largest file, in bytes */
+  maxFileSize?: number;
+  /** Accepted MIME types, `image/*` style wildcards allowed; empty or absent means any */
+  allowedMimeTypes?: string[];
+  /** `false`: the agent's model does not look at images; an attached image gets a warning */
+  acceptsImages?: boolean;
+  /** Days an uploaded file is kept; shown as a hint under the composer */
+  retentionDays?: number;
+  /** What `maxFiles` counts: files per `conversation` (agent-server) or per `message`. Default `conversation`. */
+  maxFilesScope?: "conversation" | "message";
+}
+
+export interface AgentCapabilities {
+  toolApproval?: boolean;
+  askUser?: boolean;
+  /** The approval card may edit a call's arguments (overrides `allowArgumentEdit`) */
+  approvalArgsEdit?: boolean;
+  /** `false`: the agent does not read images (the older place for `attachments.acceptsImages`) */
+  acceptsImages?: boolean;
+  attachments?: AgentAttachmentsCapability;
+  /** What a person may do once the spend limit is reached (override `allowBudgetContinue` / `allowBudgetEdit`) */
+  budget?: {
+    allowContinue?: boolean;
+    allowEdit?: boolean;
   };
 }
 
@@ -225,6 +357,11 @@ export interface AgentInfo {
 export interface StreamEventBase {
   type: string;
   timestamp: number;
+  /**
+   * Position in the conversation's event log at this frame (agent-server >= 0.3.0). A client
+   * that loses the connection follows on from the last one it saw.
+   */
+  seq?: number;
 }
 
 export interface StreamStartEvent extends StreamEventBase {
@@ -304,10 +441,21 @@ export interface StreamDoneEvent extends StreamEventBase {
     inputTokens?: number;
     outputTokens?: number;
     totalTokens?: number;
+    cachedInputTokens?: number;
+    costUsd?: number;
   };
   /** `requires_action` when the turn paused for an approval or an answer */
   status?: MessageStatus;
   pendingActions?: PendingAction[];
+  /** Why the turn stopped (`cancelled`, `limit`, `budget_reached`, ...) */
+  stopReason?: StopReason;
+  /** The run that executed the turn */
+  runId?: string;
+  /** The conversation's spend limit and what it has cost, this turn included */
+  budget?: ConversationBudget;
+  spentUsd?: number;
+  /** Things worth knowing about a turn that still completed */
+  warnings?: TurnWarning[];
 }
 
 export type StreamEvent =
@@ -459,8 +607,19 @@ export interface ChatConfig {
    * (`conversationId` set) and sends only their ids with the message
    * (`fileIds`), so the message route needs no large body limit. Needs a
    * transport with `uploadFile` (`AgentServerClient` has it); otherwise inline.
+   * `upload-on-select` stores each file as soon as it is picked, dropped or pasted, with a
+   * progress bar on its chip, and the message carries only the ids; the conversation is
+   * created at the first file. Where the transport takes the file as itself (agent-server
+   * does), the bytes go up as the request body instead of base64.
    */
-  fileTransport?: "inline" | "upload";
+  fileTransport?: "inline" | "upload" | "upload-on-select";
+  /**
+   * What `maxFiles` counts. `message` (default for the prop): files one message may carry.
+   * `conversation`: files the whole chat may hold, counted from the server's file list (or the
+   * loaded history). An agent's own `maxFiles` is per conversation unless its metadata says
+   * `maxFilesScope: "message"`.
+   */
+  maxFilesScope?: "conversation" | "message";
   /**
    * The text sent when a message carries files and nothing else. Default: a short,
    * localized "please review the attached files" (servers reject an empty message).
@@ -491,6 +650,12 @@ export interface ChatCallbacks {
   /** Called when a background stream completes after the user navigated away.
    *  Receives the conversationId so the host can refresh sidebar / state. */
   onBackgroundStreamCompleted?: (conversationId: string) => void;
+  /** Called when a turn ends because the conversation's spend limit is used up */
+  onBudgetReached?: (info: {
+    conversationId: string;
+    budget?: ConversationBudget;
+    spentUsd?: number;
+  }) => void;
   /** Called after the user's answer to an approval or question was accepted */
   onActionResolved?: (info: {
     conversationId: string;
@@ -520,6 +685,16 @@ export interface QuestionRenderProps {
   state?: ActionState;
   readOnly: boolean;
   resolve: (resolution: Extract<ActionResolution, { type: "user_question" }>) => void;
+}
+
+/** Props handed to `renderStopNotice` */
+export interface StopNoticeRenderProps {
+  message: Message;
+  stopReason: StopReason | "incomplete";
+  /** The runtime's own wording, for operators; end users get the localized notice */
+  detail?: string;
+  /** The message has text (a partial answer) */
+  hasText: boolean;
 }
 
 export interface ToolCallDisplayProps {

@@ -43,6 +43,18 @@ const {
   removeFile,
   clearMessages,
 
+  // What the composer is doing: "open" | "blocked" | "cancel" | "answer" | "following" | "budget_paused" | "readonly"
+  composerState: ComposerState;
+
+  // Usage limit
+  budget: ConversationBudget | null;
+  spentUsd: number | undefined;
+  budgetExhausted: boolean;
+  canContinue: boolean;               // the transport can carry on a turn the limit stopped
+  canUpdateBudget: boolean;
+  continueConversation: () => Promise<boolean>;
+  updateBudget: (budget: ConversationBudget | null, options?: { continue?: boolean }) => Promise<boolean>;
+
   // Direct state control
   setMessages,
   setConversation,
@@ -73,7 +85,9 @@ interface UseChatOptions extends ChatConfig, ChatCallbacks {
   allowedFileTypes?: string[];
   maxFileSize?: number;                // bytes, default 10 MB
   maxFiles?: number;                   // default 10
-  fileTransport?: "inline" | "upload"; // default "inline"
+  /** What maxFiles counts: files per message (default) or per conversation */
+  maxFilesScope?: "message" | "conversation";
+  fileTransport?: "inline" | "upload" | "upload-on-select"; // default "inline"
   /** Text sent when a message carries files and no typed text; "" sends none */
   attachmentsOnlyMessage?: string;     // default: localized "review the attached files"
 
@@ -81,6 +95,12 @@ interface UseChatOptions extends ChatConfig, ChatCallbacks {
   pendingActionComposerMode?: "block" | "cancel"; // default "block"
   /** How long after a card's deadline the conversation is fetched again (ms) */
   actionExpiryRefreshMs?: number;      // default 1500
+  /** How long to wait before looking once more for the answer of a followed turn (ms) */
+  followSettleRetryMs?: number;        // default 1500
+  /** A lone free-text question is answered from the composer */
+  enableQuestions?: boolean;           // default true
+  /** The chat is a transcript: composerState is "readonly" */
+  readOnly?: boolean;                  // default false
 }
 ```
 
@@ -93,7 +113,8 @@ interface UseChatReturn {
   
   // Loading state
   isLoading: boolean;                 // isStreaming || isLoadingConversation
-  isStreaming: boolean;
+  isStreaming: boolean;               // also true while following a turn that runs elsewhere
+  isFollowing: boolean;               // only watching a turn another window started (or this page before a reload)
   isLoadingConversation: boolean;
   streamingText: string;
   progressMessage: string;
@@ -106,8 +127,12 @@ interface UseChatReturn {
   conversation: Conversation | null;
   
   // Files
-  pendingFiles: FileAttachment[];     // images carry a local `previewUrl`
-  isUploading: boolean;               // files are being read or uploaded for a message being sent
+  pendingFiles: FileAttachment[];     // images carry a local `previewUrl`; files stored on their own carry status / progress
+  isUploading: boolean;               // files are going up (for the message being sent, or stored as they were picked)
+  heldFiles: number;                  // files the conversation holds: the server's count, else those of the loaded messages
+  heldFilesMax: number | undefined;   // the server's limit, when it says
+  retryFile: (fileId: string) => Promise<void>;   // upload a file again after it failed
+  resolveFileUrl?: (file: FileAttachment, options?: { disposition?: "inline" | "attachment" }) => Promise<string | undefined>;
 
   // Approvals and questions
   pendingActions: PendingActionEntry[]; // waiting for an answer, oldest first
@@ -124,7 +149,8 @@ interface UseChatReturn {
   // transcript is unchanged, the files are still in pendingFiles, `error` says why.
   // Empty text is fine while files are attached.
   sendMessage: (content: string) => Promise<boolean>;
-  // Detaches from the stream; the run keeps going on the server
+  // Stops the run on the server (transport.cancel) and closes the stream; the partial answer stays, marked stopped.
+  // Without cancel it only closes the connection.
   stop: () => void;
   retry: () => Promise<void>;
   createConversation: (title?: string) => Promise<Conversation>;
@@ -132,6 +158,18 @@ interface UseChatReturn {
   addFiles: (files: File[]) => Promise<void>;
   removeFile: (fileId: string) => void;
   clearMessages: () => void;
+
+  // What the composer is doing: "open" | "blocked" | "cancel" | "answer" | "following" | "budget_paused" | "readonly"
+  composerState: ComposerState;
+
+  // Usage limit
+  budget: ConversationBudget | null;
+  spentUsd: number | undefined;
+  budgetExhausted: boolean;
+  canContinue: boolean;               // the transport can carry on a turn the limit stopped
+  canUpdateBudget: boolean;
+  continueConversation: () => Promise<boolean>;
+  updateBudget: (budget: ConversationBudget | null, options?: { continue?: boolean }) => Promise<boolean>;
 
   // Direct state control
   setMessages: React.Dispatch<React.SetStateAction<Message[]>>;
@@ -335,7 +373,7 @@ function ChatWithErrors() {
 
 ### Stop Generation
 
-`stop()` aborts the browser's stream and keeps the text received so far. It does not cancel the run on the server.
+`stop()` stops the run: with a transport that has `cancel` (agent-server 0.3.0+) it calls `POST /conversations/:id/cancel`, closes the stream, keeps the text received so far as a message marked stopped and then shows what the server kept. Without `cancel` it only closes the connection. While the hook is following a turn that runs elsewhere, `stop()` asks the server to cancel it. See [Running turns](/guide/runs).
 
 ```tsx
 function ChatWithStop() {
@@ -388,8 +426,10 @@ The hook manages:
 2. **Streaming** - Incremental text and tool calls
 3. **Files** - Pending file attachments, with image previews
 4. **Approvals and questions** - Cards waiting for an answer, their deadlines and how they ended
-5. **Error** - Last error state, localized
-6. **Loading** - Request in progress
+5. **Runs** - A turn still running when a conversation opens is followed from the event log; a dropped connection is picked up again; `stop()` cancels on the server
+6. **Usage limit** - `budget`, `spentUsd`, `continueConversation`, `updateBudget`
+7. **Error** - Last error state, localized
+8. **Loading** - Request in progress
 
 ## React-controlled mode
 

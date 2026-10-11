@@ -39,6 +39,8 @@ const chat = useChat({ baseUrl: "/api/agents", agentId: "assistant" });
 | `renderActions` | `(props: MessageActionProps) => ReactNode` | - | Custom action buttons |
 | `renderAvatar` | `(role) => ReactNode` | - | Custom avatar |
 | `renderImage` | `(props: ImageRenderProps) => ReactNode` | - | Draw images yourself |
+| `renderStopNotice` | `(props: StopNoticeRenderProps) => ReactNode` | - | Replace the notice under an answer that stopped early |
+| `resolveFileUrl` | `(file, { disposition? }) => Promise<string \| undefined>` | - | How stored files without a URL are shown and downloaded; pass `chat.resolveFileUrl` |
 | `emptyState` | `ReactNode` | built-in | Shown when there are no messages |
 | `className` | `string` | - | Container class name |
 

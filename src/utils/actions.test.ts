@@ -7,6 +7,7 @@ import {
   keepSettledDetail,
   normalizeActions,
   restorePendingActions,
+  settledStateOf,
   singleFreeTextQuestion,
   splitRemaining,
   stateForSpentAction,
@@ -238,5 +239,24 @@ describe("deadlines", () => {
     expect(splitRemaining(9 * 60_000)).toEqual({ value: 9, unit: "minute" });
     expect(splitRemaining(42_000)).toEqual({ value: 42, unit: "second" });
     expect(splitRemaining(300)).toEqual({ value: 1, unit: "second" });
+  });
+});
+
+
+describe("a request that lapsed and was refused by the server on its own", () => {
+  it("reads as expired, not as a denial the person made", () => {
+    expect(
+      settledStateOf({ id: "a1", type: "tool_approval", status: "resolved", resolution: { decision: "deny", comment: "timed out" }, resolvedBy: "system:timeout", resolvedAt: "2026-10-11T10:00:00Z" })
+    ).toEqual({
+      status: "expired",
+      resolution: { type: "tool_approval", decision: "deny", comment: "timed out" },
+      resolvedBy: "system:timeout",
+      resolvedAt: "2026-10-11T10:00:00Z",
+    });
+  });
+
+  it("leaves a denial by a person, or by another system actor, as it is", () => {
+    expect(settledStateOf({ id: "a1", type: "tool_approval", status: "resolved", resolution: { decision: "deny" }, resolvedBy: "user_1" })?.status).toBe("resolved");
+    expect(settledStateOf({ id: "a1", type: "tool_approval", status: "cancelled", resolvedBy: "system" })?.status).toBe("cancelled");
   });
 });

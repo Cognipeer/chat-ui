@@ -37,6 +37,8 @@ import { ChatMessage } from "@cognipeer/chat-ui";
 | `renderActions` | `(props: MessageActionProps) => ReactNode` | - | Custom action buttons (shown on hover) |
 | `renderAvatar` | `(role) => ReactNode` | - | Custom avatar |
 | `renderImage` | `(props: ImageRenderProps) => ReactNode` | - | Draw an image yourself, e.g. fetch it with credentials and show a blob URL |
+| `renderStopNotice` | `(props: StopNoticeRenderProps) => ReactNode` | - | Replace the notice under an answer that stopped early |
+| `resolveFileUrl` | `(file, { disposition? }) => Promise<string \| undefined>` | - | How to get a URL for a stored file that has none of its own (`useChat` returns one, `ChatTransport.getFileUrl`) |
 | `className` | `string` | - | Additional class names |
 
 ## Message content
@@ -59,7 +61,13 @@ content: [
 `message.files` shows under the text:
 
 - an **image** with a usable `url` (or a local `previewUrl`, for a file just sent from this page) as a thumbnail with its name and size; it opens full size in a new tab;
-- any other file, or an image without a usable URL, as a chip with its name, extension and size, and a **Download** link when `url` is a safe link (http(s), `blob:` or relative).
+- an image **without** a URL of its own (a conversation loaded from the server) is fetched through `resolveFileUrl` and then shown as a thumbnail;
+- any other file, or an image without a usable URL, as a chip with its name, extension and size, and a **Download** link when `url` is a safe link (http(s), `blob:` or relative) or, with `resolveFileUrl`, a **Download** button that fetches it;
+- a file whose `expiresAt` has passed, or that is marked `expired`, is a muted, struck-through chip marked **Expired**, without a download; a file whose `conversionStatus` is `failed` / `skipped` is tinted "No readable text"; a file with a deadline in the future says "Kept until ..." on hover.
+
+## Why an answer ended
+
+An assistant message that was stopped (`stopReason` `cancelled`, `limit`, `max_turns`, `budget_reached` or `error`, or `status` `cancelled` / `incomplete`) shows a notice under its text (`MessageStopNotice`, a `role="status"` block) saying so, and whether the text above is a partial answer. A plain answer, and a pause, show none. `metadata.warnings` are listed under the answer (`MessageWarnings`). See [Running turns, Stop and reattach](/guide/runs#why-an-answer-ended).
 
 ## Status and actions
 

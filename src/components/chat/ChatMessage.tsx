@@ -3,17 +3,18 @@
 import React from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { cn, formatFileSize, imagePartSource, isImageType, safeFileHref, safeImageSrc } from "../../utils";
+import { cn, formatFileSize, imagePartSource, isFileExpired, isImageType, safeFileHref, safeImageSrc } from "../../utils";
 import {
   insertCitationMarkers,
   parseCitationHref,
   safeExternalHref,
   citationUrlTransform,
 } from "../../utils/citations";
-import type { Message, MessageActionProps, FileAttachment, Citation } from "../../types";
+import type { Message, MessageActionProps, FileAttachment, Citation, StopNoticeRenderProps } from "../../types";
 import { FileIcon, ImageIcon } from "./Icons";
 import { ToolCalls } from "./ToolCall";
 import { MessageActionCards, type ChatActionsConfig } from "./ActionCards";
+import { MessageStopNotice, MessageWarnings } from "./StopNotice";
 import { useI18n } from "../../hooks";
 
 /** What `renderImage` receives for an image in a message. */
@@ -24,6 +25,12 @@ export interface ImageRenderProps {
   /** The attachment it belongs to; absent for an image that is part of the message content */
   file?: FileAttachment;
 }
+
+/** Turns a stored file into a URL the browser can use (see `ChatTransport.getFileUrl`). */
+export type ResolveFileUrl = (
+  file: FileAttachment,
+  options?: { disposition?: "inline" | "attachment" }
+) => Promise<string | undefined>;
 
 export interface ChatMessageProps {
   /** The message to display */
@@ -48,6 +55,13 @@ export interface ChatMessageProps {
   actions?: ChatActionsConfig;
   /** Replace how an image is drawn, e.g. to fetch it with credentials */
   renderImage?: (props: ImageRenderProps) => React.ReactNode;
+  /** Replace the notice under an answer that stopped early (stopped, limit, usage limit, error) */
+  renderStopNotice?: (props: StopNoticeRenderProps) => React.ReactNode;
+  /**
+   * How to get a URL for a stored file that has none of its own (the messages of a loaded
+   * conversation): images are fetched this way to be shown, other files when "Download" is pressed.
+   */
+  resolveFileUrl?: ResolveFileUrl;
 }
 
 /**
@@ -65,6 +79,8 @@ export function ChatMessage({
   enableCitations = true,
   actions,
   renderImage,
+  renderStopNotice,
+  resolveFileUrl,
 }: ChatMessageProps) {
   const isUser = message.role === "user";
   const isAssistant = message.role === "assistant";
@@ -131,13 +147,21 @@ export function ChatMessage({
         {/* Images that are part of the content */}
         {images.length > 0 && <MessageImages images={images} renderImage={renderImage} />}
 
+        {/* Why the answer ends where it does, when it was not simply finished */}
+        {isAssistant && !isStreaming && (
+          <MessageStopNotice message={message} hasText={content.trim().length > 0} render={renderStopNotice} />
+        )}
+
         {/* Approvals and questions the assistant is waiting on */}
         {isAssistant && !isStreaming && <MessageActionCards message={message} config={actions} />}
 
         {/* File attachments */}
         {message.files && message.files.length > 0 && (
-          <FileAttachments files={message.files} renderImage={renderImage} />
+          <FileAttachments files={message.files} renderImage={renderImage} resolveFileUrl={resolveFileUrl} />
         )}
+
+        {/* Things worth knowing about the turn (files cut short, images not seen) */}
+        {isAssistant && !isStreaming && <MessageWarnings message={message} />}
 
         {/* Sources */}
         {enableCitations && isAssistant && !isStreaming && message.citations && message.citations.length > 0 && (
@@ -260,74 +284,179 @@ function MessageImages({
   );
 }
 
+/** The URL of a stored file that has none of its own, asked of the transport when `enabled`. */
+function useStoredFileUrl(
+  file: FileAttachment,
+  resolve: ResolveFileUrl | undefined,
+  enabled: boolean
+): { src?: string; failed: boolean } {
+  const [state, setState] = React.useState<{ src?: string; failed: boolean }>({ failed: false });
+  React.useEffect(() => {
+    if (!enabled || !resolve) return;
+    let cancelled = false;
+    resolve(file, { disposition: "inline" }).then(
+      (url) => {
+        if (!cancelled) setState({ src: safeImageSrc(url), failed: !safeImageSrc(url) });
+      },
+      () => {
+        if (!cancelled) setState({ failed: true });
+      }
+    );
+    return () => {
+      cancelled = true;
+    };
+    // the file's identity is what decides, not the object
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [file.id, enabled, resolve]);
+  return state;
+}
+
+/** One attached file: a thumbnail for a picture, otherwise a chip with its name, size and state. */
+function FileAttachmentItem({
+  file,
+  renderImage,
+  resolveFileUrl,
+}: {
+  file: FileAttachment;
+  renderImage?: (props: ImageRenderProps) => React.ReactNode;
+  resolveFileUrl?: ResolveFileUrl;
+}) {
+  const { t, formatDate } = useI18n();
+  const [downloadFailed, setDownloadFailed] = React.useState(false);
+  const expired = isFileExpired(file);
+  const image = isImageType(file.mimeType);
+  const local = safeImageSrc(file.previewUrl);
+  const ownUrl = safeImageSrc(file.url);
+  // A picture that is still on this device shows even if its server copy is gone
+  const stored = useStoredFileUrl(file, resolveFileUrl, image && !local && !ownUrl && !expired);
+  const thumb = image ? local ?? (expired ? undefined : ownUrl ?? stored.src) : undefined;
+
+  if (thumb) {
+    return (
+      <figure className="m-0 max-w-full">
+        <ImageThumb src={thumb} alt={file.name} className="max-h-48 max-w-full" renderImage={renderImage} file={file} />
+        <figcaption className="mt-1 text-xs text-chat-text-secondary truncate max-w-[16rem]" title={file.name}>
+          {file.name} · {formatFileSize(file.size)}
+        </figcaption>
+      </figure>
+    );
+  }
+
+  const { base, ext } = splitFileName(file.name);
+  const href = expired ? undefined : safeFileHref(file.url);
+  const noText = file.conversionStatus === "failed" || file.conversionStatus === "skipped";
+  const keptUntil = !expired && file.expiresAt ? formatDate(new Date(file.expiresAt), { dateStyle: "medium" }) : undefined;
+  const canDownload = !expired && !href && Boolean(resolveFileUrl);
+
+  const download = async () => {
+    setDownloadFailed(false);
+    try {
+      const url = await resolveFileUrl?.(file, { disposition: "attachment" });
+      if (!url) throw new Error("no url");
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = file.name;
+      link.rel = "noopener";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    } catch {
+      setDownloadFailed(true);
+    }
+  };
+
+  return (
+    <div
+      data-chat-file={expired ? "expired" : noText ? "no-text" : undefined}
+      title={
+        expired
+          ? t("chat.file.expiredTitle", { fileName: file.name })
+          : noText
+            ? t("chat.file.noTextTitle", { fileName: file.name })
+            : keptUntil
+              ? t("chat.file.keptUntil", { date: keptUntil })
+              : undefined
+      }
+      className={cn(
+        "flex items-center gap-2 px-3 py-2 bg-chat-bg-tertiary rounded-lg text-sm border",
+        expired ? "border-transparent opacity-60" : noText ? "border-chat-warning" : "border-transparent"
+      )}
+    >
+      {image ? (
+        <ImageIcon className="w-4 h-4 text-chat-text-secondary flex-shrink-0" />
+      ) : (
+        <FileIcon className="w-4 h-4 text-chat-text-secondary flex-shrink-0" />
+      )}
+      <span className={cn("text-chat-text-primary truncate max-w-[160px]", expired && "line-through")} title={file.name}>
+        {base}
+      </span>
+      {ext && (
+        <span className="text-chat-text-secondary flex-shrink-0">
+          {ext}
+        </span>
+      )}
+      {file.size > 0 && (
+        <span className="text-chat-text-tertiary text-xs flex-shrink-0">
+          {formatFileSize(file.size)}
+        </span>
+      )}
+      {expired && (
+        <span className="rounded-full bg-chat-bg-hover px-1.5 py-0.5 text-[10px] font-medium text-chat-text-secondary flex-shrink-0">
+          {t("chat.file.expired")}
+        </span>
+      )}
+      {noText && !expired && (
+        <span className="rounded-full bg-chat-warning-bg px-1.5 py-0.5 text-[10px] font-medium text-chat-warning flex-shrink-0">
+          {t("chat.file.noText")}
+        </span>
+      )}
+      {href && (
+        <a
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-chat-accent-primary hover:underline flex-shrink-0"
+        >
+          {t("chat.file.download")}
+        </a>
+      )}
+      {canDownload && (
+        <button
+          type="button"
+          onClick={download}
+          className="text-chat-accent-primary hover:underline flex-shrink-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-chat-accent-primary rounded"
+        >
+          {t("chat.file.download")}
+        </button>
+      )}
+      {downloadFailed && (
+        <span role="alert" className="text-xs text-chat-danger flex-shrink-0">
+          {t("chat.file.downloadFailed")}
+        </span>
+      )}
+    </div>
+  );
+}
+
 /**
- * File attachments display: images as thumbnails (from the server's `url`, or the local
- * preview of a file just sent), other files as a chip with name and size.
+ * File attachments display: images as thumbnails (from the server's `url`, a stored copy fetched
+ * through `resolveFileUrl`, or the local preview of a file just sent), other files as a chip with
+ * name and size - muted once they expired, tinted when their text could not be read.
  */
 function FileAttachments({
   files,
   renderImage,
+  resolveFileUrl,
 }: {
   files: FileAttachment[];
   renderImage?: (props: ImageRenderProps) => React.ReactNode;
+  resolveFileUrl?: ResolveFileUrl;
 }) {
-  const { t } = useI18n();
-
   return (
     <div className="flex flex-wrap gap-2 mt-2">
-      {files.map((file) => {
-        const thumb = isImageType(file.mimeType) ? safeImageSrc(file.previewUrl ?? file.url) : undefined;
-        if (thumb) {
-          return (
-            <figure key={file.id} className="m-0 max-w-full">
-              <ImageThumb src={thumb} alt={file.name} className="max-h-48 max-w-full" renderImage={renderImage} file={file} />
-              <figcaption className="mt-1 text-xs text-chat-text-secondary truncate max-w-[16rem]" title={file.name}>
-                {file.name} · {formatFileSize(file.size)}
-              </figcaption>
-            </figure>
-          );
-        }
-        const { base, ext } = splitFileName(file.name);
-        const href = safeFileHref(file.url);
-        return (
-          <div
-            key={file.id}
-            className="flex items-center gap-2 px-3 py-2 bg-chat-bg-tertiary rounded-lg text-sm"
-          >
-            {isImageType(file.mimeType) ? (
-              <ImageIcon className="w-4 h-4 text-chat-text-secondary flex-shrink-0" />
-            ) : (
-              <FileIcon className="w-4 h-4 text-chat-text-secondary flex-shrink-0" />
-            )}
-            <span
-              className="text-chat-text-primary truncate max-w-[160px]"
-              title={file.name}
-            >
-              {base}
-            </span>
-            {ext && (
-              <span className="text-chat-text-secondary flex-shrink-0">
-                {ext}
-              </span>
-            )}
-            {file.size > 0 && (
-              <span className="text-chat-text-tertiary text-xs flex-shrink-0">
-                {formatFileSize(file.size)}
-              </span>
-            )}
-            {href && (
-              <a
-                href={href}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-chat-accent-primary hover:underline flex-shrink-0"
-              >
-                {t("chat.file.download")}
-              </a>
-            )}
-          </div>
-        );
-      })}
+      {files.map((file) => (
+        <FileAttachmentItem key={file.id} file={file} renderImage={renderImage} resolveFileUrl={resolveFileUrl} />
+      ))}
     </div>
   );
 }

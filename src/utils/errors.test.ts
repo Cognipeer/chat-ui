@@ -66,6 +66,9 @@ describe("the strings behind the codes", () => {
     "unsupported_file_type", "files_not_supported", "attachments_disabled", "attachment_not_found",
     "upload_failed", "storage_unavailable", "storage_not_configured", "licence_required",
     "portal_not_found", "portal_disabled", "portal_access_denied",
+    "nothing_to_continue", "budget_forbidden", "invalid_budget", "budget_unavailable", "budget_misconfigured",
+    "run_interrupted", "identity_required", "payload_too_large", "authorization_error", "conversation_conflict",
+    "lease_lost", "storage_limit_exceeded",
   ];
 
   it.each(Object.entries({ en, tr }))("%s has a message for every code", (_locale, messages) => {

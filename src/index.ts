@@ -1,9 +1,11 @@
 // Main exports
 export { Chat, ChatMinimal, type ChatProps, type ChatMinimalProps } from "./components/chat";
-export { ChatMessage, type ChatMessageProps, type ImageRenderProps } from "./components/chat";
+export { ChatMessage, type ChatMessageProps, type ImageRenderProps, type ResolveFileUrl } from "./components/chat";
 export { ChatMessageList, type ChatMessageListProps } from "./components/chat";
 export { ChatInput, type ChatInputProps, type ChatInputHandle } from "./components/chat";
 export { ChatHistory, type ChatHistoryProps } from "./components/chat";
+export { BudgetBanner, type BudgetBannerProps } from "./components/chat";
+export { MessageStopNotice, MessageWarnings, type MessageStopNoticeProps } from "./components/chat";
 export { ToolCall, ToolCalls, type ToolCallProps, type ToolCallsProps } from "./components/chat";
 export { MessageActions, type MessageActionsProps } from "./components/chat";
 export {
@@ -36,6 +38,8 @@ export {
 // API Client
 export {
   AgentServerClient,
+  type AgentServerClientOptions,
+  type FollowReconnectOptions,
   ChatCompletionsTransport,
   ResponsesTransport,
   A2ATransport,
@@ -50,6 +54,12 @@ export type {
   SendMessageResponse,
   StreamCallbacks,
   ResolveActionOptions,
+  ContinueOptions,
+  FollowEventsOptions,
+  CancelResult,
+  ListFilesResult,
+  UploadFileParams,
+  ResolveInput,
   HttpOptions,
   ThreadStore,
   StoredThread,
@@ -91,6 +101,18 @@ export type {
   ActionState,
   ActionStatus,
   MessageStatus,
+  StopReason,
+  RuntimeStatus,
+  ConversationRuntime,
+  ConversationBudget,
+  ConversationEvent,
+  TurnWarning,
+  ComposerState,
+  StopNoticeRenderProps,
+  AgentCapabilities,
+  AgentAttachmentsCapability,
+  FileStatus,
+  FileConversionStatus,
   ToolApprovalRenderProps,
   QuestionRenderProps,
   ChatTheme,
@@ -123,6 +145,7 @@ export {
   CopyIcon,
   ThumbsUpIcon,
   ThumbsDownIcon,
+  AlertIcon,
 } from "./components/chat/Icons";
 
 // Utils
@@ -134,6 +157,18 @@ export {
   isQuestionRequired,
   type PendingActionEntry,
 } from "./utils/actions";
+export {
+  normalizeStopReason,
+  messageStopReason,
+  stopNoticeKind,
+  isBudgetExhausted,
+  formatUsd,
+  type StopNoticeKind,
+} from "./utils/runtime";
+export { resolveAgentSettings, type AgentSettings, type AgentSettingsDefaults } from "./utils/agent";
+export { fileFromRecord, applyFileList, isFileExpired, isFileTypeAllowed } from "./utils/files";
+export { applyFollowEvent, newFollowState, type FollowState, type FollowedTool } from "./utils/follow";
+export { pendingActionFromWire, pendingActionsFromWire, resolutionToWire } from "./utils/wire";
 export { validateAgainstSchema, type SchemaIssue } from "./utils/jsonSchema";
 export { localizeError, normalizeErrorCode, type CodedError } from "./utils/errors";
 export { safeImageSrc, safeFileHref } from "./utils/images";

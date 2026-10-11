@@ -11,7 +11,9 @@ Documentation: <https://docs.cognipeer.com/chat-ui/guide/getting-started>
 - 📁 **File Uploads** - Pick, drag and drop or paste files; image thumbnails; send files without text
 - 🔧 **Tool Call UI** - Expandable tool call visualization
 - ✅ **Approvals and Questions** - Approve tool calls and answer agent questions inline (agent-server 0.3.0+, see `docs/guide/approvals.md`)
-- 💬 **Chat History** - Sidebar with conversation history
+- 🔁 **Runs that outlive the page** - Reload in the middle of a turn and it is picked up again, a dropped connection is not an error, and Stop really stops the run on the server (see `docs/guide/runs.md`)
+- 💸 **Usage limits** - A meter, a "limit reached" notice and, where the host allows, raise-and-continue (see `docs/guide/budgets.md`)
+- 💬 **Chat History** - Sidebar with conversation history, status badges (working, waiting for you, limit reached) and keyboard-operable rows
 - 🎯 **Customizable Actions** - Add feedback buttons or custom actions to messages
 - 🌍 **Internationalization** - English and Turkish built in, your own strings and locales on top; friendly messages for server error codes
 - ♿ **Accessible** - Labelled controls, a live message log, focus moved to approval and question cards
@@ -287,7 +289,7 @@ function MessageActions({ message, isStreaming }) {
 
 ## Using Hooks Directly
 
-For more control, use the hooks directly. A custom layout shows approval and question cards through `actions`, and the composer follows `pendingMode`:
+For more control, use the hooks directly. A custom layout shows approval and question cards through `actions`, and the composer follows `composerState` (one value for a waiting card, a turn running elsewhere, a used-up usage limit, a read-only chat):
 
 ```tsx
 import { useChat, ChatMessageList, ChatInput } from "@cognipeer/chat-ui";
@@ -302,13 +304,6 @@ function CustomChat() {
     },
   });
 
-  // What the composer does while an approval or question is waiting
-  const pendingMode = !chat.awaitingAction
-    ? undefined
-    : chat.answerableQuestion
-      ? "answer"
-      : "blocked"; // or "cancel", if the server's pendingActionPolicy is "cancel"
-
   return (
     <div className="flex flex-col h-full">
       <ChatMessageList
@@ -317,10 +312,12 @@ function CustomChat() {
         streamingText={chat.streamingText}
         // Without `actions`, approvals and questions show as read-only
         actions={{ onResolve: chat.resolveAction, canResolve: chat.canResolveActions }}
+        // Pictures and downloads of a loaded conversation
+        resolveFileUrl={chat.resolveFileUrl}
       />
       <ChatInput
         onSend={(text) =>
-          chat.answerableQuestion && pendingMode === "answer"
+          chat.answerableQuestion && chat.composerState === "answer"
             ? chat.resolveAction(chat.answerableQuestion.actionId, {
                 type: "user_question",
                 answers: { [chat.answerableQuestion.question.question]: text },
@@ -330,10 +327,11 @@ function CustomChat() {
         onStop={chat.stop}
         isLoading={chat.isStreaming}
         isUploading={chat.isUploading}
-        pendingMode={pendingMode}
+        state={chat.composerState}
         pendingFiles={chat.pendingFiles}
         onFilesAdd={chat.addFiles}
         onFileRemove={chat.removeFile}
+        onFileRetry={chat.retryFile}
       />
     </div>
   );
@@ -353,7 +351,9 @@ function CustomChat() {
 />
 ```
 
-Files are attached with the paperclip, by dropping them on the composer, or by pasting (a screenshot or a copied file). Images show as thumbnails in the composer and in the conversation. A message can carry files and no text (`attachmentsOnlyMessage` sets the text that goes with it). An agent that says `metadata.acceptsImages: false` gets a warning when an image is attached. See `docs/guide/file-uploads.md`.
+Files are attached with the paperclip, by dropping them on the composer, or by pasting (a screenshot or a copied file). Images show as thumbnails in the composer and in the conversation. A message can carry files and no text (`attachmentsOnlyMessage` sets the text that goes with it).
+
+With `fileTransport="upload-on-select"` each file is stored the moment it is picked, as itself (raw body, no base64) with a progress bar on its chip; `"upload"` stores them when the message is sent. The agent says what it takes (`capabilities.attachments`: limits per conversation, accepted types, whether it reads images, how long files are kept), the chat counts what the conversation holds ("3 of 10 files in this chat") and marks expired files and files whose text could not be read. An agent that does not read images gets a warning when an image is attached. See `docs/guide/file-uploads.md`.
 
 ## Custom Callbacks
 
@@ -430,13 +430,19 @@ Main chat component with all features.
 | `onLocaleChange` | `function` | - | Callback when locale changes |
 | `customMessages` | `Record<locale, Record<key, string>>` | - | Replace or add UI strings |
 | `enableFileUpload` | `boolean` | `true` | Enable file uploads |
-| `allowedFileTypes`, `maxFileSize`, `maxFiles` | | any, 10 MB, 10 | Upload limits (an agent's `metadata` can narrow them) |
-| `fileTransport` | `"inline" \| "upload"` | `"inline"` | Files in the message body, or uploaded first |
+| `allowedFileTypes`, `maxFileSize`, `maxFiles` | | any, 10 MB, 10 | Upload limits (an agent's `capabilities.attachments` or `metadata` can narrow them) |
+| `maxFilesScope` | `"message" \| "conversation"` | `"message"` | What `maxFiles` counts (an agent's own `maxFiles` counts per conversation) |
+| `fileTransport` | `"inline" \| "upload" \| "upload-on-select"` | `"inline"` | Files in the message body, uploaded when sending, or uploaded as they are picked |
 | `attachmentsOnlyMessage` | `string` | localized "review the attached files" | Text sent with files and no typed text (`""` sends none) |
 | `enableToolApprovals`, `enableQuestions` | `boolean` | `true` | Answer approvals / questions in this app |
 | `allowArgumentEdit` | `boolean` | `false` | Edit a tool call's arguments in the approval card |
 | `expiryWarningSeconds` | `number` | `600` | Cards turn amber with this much time left |
 | `pendingActionComposerMode` | `"block" \| "cancel"` | `"block"` | Composer while a card waits |
+| `readOnly` | `boolean` | `false` | A transcript: the composer is closed |
+| `showStatus` | `boolean` | `true` | Status badges in the history |
+| `showBudgetMeter` | `boolean` | `true` | The spent / limit bar of a conversation with a usage limit |
+| `allowBudgetContinue`, `allowBudgetEdit` | `boolean` | `false` | Let a person continue / raise a used-up limit (an agent's `capabilities.budget` overrides them) |
+| `renderStopNotice`, `renderBudgetBanner` | `function` | - | Replace the notice under a stopped answer / the usage-limit banner |
 | `renderToolApproval`, `renderQuestion` | `function` | - | Replace a card |
 | `renderImage` | `function` | - | Draw images yourself (e.g. fetch with credentials) |
 | `renderMessageActions` | `function` | - | Custom message actions |
@@ -478,10 +484,14 @@ Returns:
 - `messages` - Current messages
 - `conversation` - Current conversation
 - `isLoading` - Loading state
+- `isFollowing` - Only watching a turn that runs elsewhere (another window, or this page before a reload)
 - `streamingText` - Current streaming text
 - `error` - Current error
-- `pendingFiles` - Files pending upload (images carry a local `previewUrl`)
-- `isUploading` - Files are being read or uploaded for a message being sent
+- `pendingFiles` - Files pending upload (images carry a local `previewUrl`; files stored on their own carry `status` and `progress`)
+- `isUploading` - Files are going up (for the message being sent, or stored as they were picked)
+- `heldFiles`, `retryFile(id)`, `resolveFileUrl` - Files the conversation holds, retry a failed upload, a URL for a stored file
+- `composerState` - `"open" | "blocked" | "cancel" | "answer" | "following" | "budget_paused" | "readonly"`
+- `budget`, `spentUsd`, `budgetExhausted`, `canContinue`, `canUpdateBudget`, `continueConversation()`, `updateBudget(budget, { continue })` - Usage limit (see `docs/guide/budgets.md`)
 - `activeToolCalls` - Active tool calls
 - `pendingActions`, `awaitingAction`, `isResolvingAction`, `canResolveActions`, `answerableQuestion`, `resolveAction(actionId, resolution)` - Approvals and questions (see `docs/guide/approvals.md`)
 - `sendMessage(content)` - Send a message
@@ -491,7 +501,7 @@ Returns:
 - `loadConversation(id)` - Load a conversation
 - `createConversation(title?)` - Create new conversation
 - `retry()` - Retry last message
-- `stop()` - Stop generation (detaches from the stream; it does not cancel the run on the server)
+- `stop()` - Stop generation: cancels the run on the server where the transport can (agent-server), keeps the partial answer as stopped; otherwise it only closes the connection
 
 ### `useChatHistory(options)`
 

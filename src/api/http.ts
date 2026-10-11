@@ -46,35 +46,51 @@ export async function errorFromResponse(response: Response): Promise<Error> {
     (typeof body?.error === "string" ? body.error : undefined) ||
     body?.message ||
     `Request failed (${response.status})`;
-  const error = new Error(message) as Error & { status?: number; code?: string };
+  const error = new Error(message) as Error & { status?: number; code?: string; details?: Record<string, unknown> };
   error.status = response.status;
   if (typeof body?.error?.code === "string") error.code = body.error.code;
   else if (typeof body?.error?.type === "string") error.code = body.error.type;
   else if (typeof body?.code === "string") error.code = body.code;
+  // What the caller can act on (`activeRunId`, `spentUsd` / `maxCostUsd`, `pendingActionIds`, ...)
+  const details = body?.error?.details;
+  if (details && typeof details === "object" && !Array.isArray(details)) error.details = details;
   return error;
 }
 
 export interface SSEMessage {
   event?: string;
+  /** The `id:` line of the frame, when it had one (agent-server numbers the stored events) */
+  id?: string;
   data: string;
 }
 
-/** Read a text/event-stream body, calling `onMessage` for each event. */
+/**
+ * Read a text/event-stream body, calling `onMessage` for each event. When `signal` aborts the
+ * reading ends (a `fetch` that ignores its signal for the body is not left waiting for the next chunk).
+ */
 export async function readSSE(
   response: Response,
-  onMessage: (msg: SSEMessage) => void
+  onMessage: (msg: SSEMessage) => void,
+  signal?: AbortSignal
 ): Promise<void> {
   if (!response.body) throw new Error("No response body");
 
   const reader = response.body.getReader();
+  const stop = () => {
+    reader.cancel().catch(() => undefined);
+  };
+  if (signal?.aborted) stop();
+  else signal?.addEventListener("abort", stop, { once: true });
   const decoder = new TextDecoder();
   let buffer = "";
   let event: string | undefined;
+  let id: string | undefined;
   let data: string[] = [];
 
   const flush = () => {
-    if (data.length > 0) onMessage({ event, data: data.join("\n") });
+    if (data.length > 0) onMessage({ event, ...(id !== undefined ? { id } : {}), data: data.join("\n") });
     event = undefined;
+    id = undefined;
     data = [];
   };
 
@@ -87,6 +103,7 @@ export async function readSSE(
     let value = idx === -1 ? "" : line.slice(idx + 1);
     if (value.startsWith(" ")) value = value.slice(1);
     if (field === "event") event = value;
+    else if (field === "id") id = value;
     else if (field === "data") data.push(value);
   };
 
@@ -102,6 +119,7 @@ export async function readSSE(
     if (buffer) handleLine(buffer);
     flush();
   } finally {
+    signal?.removeEventListener("abort", stop);
     reader.releaseLock();
   }
 }

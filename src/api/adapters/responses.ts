@@ -1,7 +1,8 @@
 import type { Citation, CitationMark } from "../../types";
 import { buildHeaders, errorFromResponse, httpFetch, readSSE, type HttpOptions } from "../http";
-import { StatelessTransport, type RunInput, type RunResult, type StatelessTransportOptions } from "./base";
+import { StatelessTransport, type ResolveInput, type RunInput, type RunResult, type StatelessTransportOptions } from "./base";
 import { textOf, userContentWithFiles } from "./files";
+import { pendingActionsFromWire, resolutionToWire, stopFromResponse } from "../../utils/wire";
 
 export interface ResponsesTransportOptions extends StatelessTransportOptions, HttpOptions {
   /** API root, e.g. `https://api.openai.com/v1` */
@@ -20,6 +21,15 @@ export interface ResponsesTransportOptions extends StatelessTransportOptions, Ht
   serverState?: boolean;
   /** Extra fields merged into the request body (tools, reasoning, ...) */
   body?: Record<string, unknown>;
+  /**
+   * Where answers to an approval or a question go, for a Console client API endpoint that stops
+   * a response with `status: "requires_action"`. Default:
+   * `<baseUrl>/agents/sessions/<session id>/actions/<action id>` (the session id is the response
+   * id without its `resp_` prefix).
+   */
+  actionUrl?: (target: { sessionId: string; actionId: string; baseUrl: string }) => string;
+  /** Let the chat answer a paused response's approvals and questions (default true). `false`: the cards are read-only. */
+  resolveActions?: boolean;
 }
 
 const TOOL_ITEMS = new Set([
@@ -73,6 +83,47 @@ function readResponse(response: any) {
     }
   }
   return { text, citations, marks, tools };
+}
+
+/**
+ * A finished `response` object as the chat's `RunResult`: text, citations and usage, plus - for a
+ * Console client API response that waits on a person (`status: "requires_action"`) - its open
+ * approvals / questions, and why a stopped response stopped.
+ */
+export function resultFromResponse(completed: any, streamed = "", options: { serverState?: boolean } = {}): RunResult {
+  const parsed = readResponse(completed);
+  const usage = completed?.usage
+    ? {
+        inputTokens: completed.usage.input_tokens,
+        outputTokens: completed.usage.output_tokens,
+        totalTokens: completed.usage.total_tokens,
+      }
+    : undefined;
+
+  // A Console response that waits on a person: its open approvals / questions
+  const paused = completed?.status === "requires_action" && completed?.required_action?.type === "agent_actions";
+  const pendingActions = paused ? pendingActionsFromWire(completed.required_action.actions) : [];
+  const stop = stopFromResponse(completed);
+  const incomplete = completed?.status === "incomplete";
+  const sessionId = paused && typeof completed?.id === "string" ? completed.id.replace(/^resp_/, "") : undefined;
+
+  // Citation offsets point into the final text, so prefer it over the
+  // streamed deltas when the response object is available.
+  const content = completed ? parsed.text : streamed;
+  return {
+    content,
+    citations: parsed.citations.length ? parsed.citations : undefined,
+    citationMarks: parsed.marks.length ? parsed.marks : undefined,
+    usage,
+    ...(pendingActions.length > 0 ? { pendingActions } : {}),
+    ...(incomplete ? { status: "incomplete" as const } : {}),
+    ...(stop.stopReason ? { stopReason: stop.stopReason } : incomplete ? { stopReason: "limit" as const } : {}),
+    ...(stop.stopDetail ? { stopDetail: stop.stopDetail } : {}),
+    state: {
+      ...(completed?.id && options.serverState !== false ? { previousResponseId: completed.id } : {}),
+      ...(sessionId ? { sessionId } : {}),
+    },
+  };
 }
 
 /** `POST /responses` — the OpenAI Responses API. */
@@ -169,32 +220,45 @@ export class ResponsesTransport extends StatelessTransport {
       if (completed.error) throw new Error(completed.error.message ?? "Response failed");
     }
 
-    const parsed = readResponse(completed);
     if (!input.stream) {
-      parsed.tools.forEach((item) => {
+      readResponse(completed).tools.forEach((item) => {
         if (!seenTools.has(item.call_id ?? item.id)) emitTool(item);
       });
     }
 
-    const usage = completed?.usage
-      ? {
-          inputTokens: completed.usage.input_tokens,
-          outputTokens: completed.usage.output_tokens,
-          totalTokens: completed.usage.total_tokens,
-        }
-      : undefined;
+    return resultFromResponse(completed, streamed, options);
+  }
 
-    // Citation offsets point into the final text, so prefer it over the
-    // streamed deltas when the response object is available.
-    const content = completed ? parsed.text : streamed;
-    return {
-      content,
-      citations: parsed.citations.length ? parsed.citations : undefined,
-      citationMarks: parsed.marks.length ? parsed.marks : undefined,
-      usage,
-      state: completed?.id && options.serverState !== false
-        ? { previousResponseId: completed.id }
-        : undefined,
-    };
+  private actionTarget(sessionId: string | undefined, actionId: string): string | undefined {
+    if (!sessionId) return undefined;
+    const baseUrl = this.options.baseUrl.replace(/\/$/, "");
+    if (this.options.actionUrl) return this.options.actionUrl({ sessionId, actionId, baseUrl });
+    return `${baseUrl}/agents/sessions/${encodeURIComponent(sessionId)}/actions/${encodeURIComponent(actionId)}`;
+  }
+
+  protected canResolve(): boolean {
+    return this.options.resolveActions !== false;
+  }
+
+  /** Answers an approval / question through the Console client API (`POST .../actions/:actionId`). */
+  protected async resolve(input: ResolveInput): Promise<RunResult> {
+    const { options } = this;
+    const sessionId = input.conversation.state?.sessionId as string | undefined;
+    const url = this.actionTarget(sessionId, input.action.id);
+    if (!url) throw Object.assign(new Error("This conversation cannot take answers here."), { code: "not_supported", status: 404 });
+
+    const response = await httpFetch(options, url, {
+      method: "POST",
+      headers: await buildHeaders(options),
+      body: JSON.stringify(resolutionToWire(input.resolution)),
+      signal: input.signal,
+    });
+    if (!response.ok) throw await errorFromResponse(response);
+    const completed = await response.json();
+
+    const result = resultFromResponse(completed, "", options);
+    // The endpoint answers in one piece; show it as the streamed answer
+    if (input.stream && result.content) input.emit.setText(result.content);
+    return result;
   }
 }

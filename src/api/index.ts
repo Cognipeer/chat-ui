@@ -1,10 +1,15 @@
-export { AgentServerClient } from "./client";
+export { AgentServerClient, type AgentServerClientOptions, type FollowReconnectOptions } from "./client";
 export type {
   ChatTransport,
   SendMessageOptions,
   SendMessageResponse,
   StreamCallbacks,
   ResolveActionOptions,
+  ContinueOptions,
+  FollowEventsOptions,
+  CancelResult,
+  ListFilesResult,
+  UploadFileParams,
   PaginatedResponse,
 } from "./transport";
 export type { HttpOptions } from "./http";

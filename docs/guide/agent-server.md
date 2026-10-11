@@ -266,6 +266,22 @@ function AgentSelector() {
 
 With `@cognipeer/agent-server` 0.3.0 or later, an agent can pause for an approval or a question. `Chat` shows the card and sends the answer to `POST /conversations/:conversationId/actions/:actionId` (body `{ resolution, stream? }`); `GET /conversations/:id` lists the actions still waiting. See [Approvals and Questions](/guide/approvals).
 
+## Runs, Stop and reattach
+
+With agent-server 0.3.0 or later a turn runs independently of the request that started it. `Chat` uses that:
+
+- A page that reloads, or opens a conversation, while a turn is still running **follows** it (`GET /conversations/:id/events/stream?after=<runtime.lastEventSeq>`) and shows the text and tool calls as they happen, then the stored answer.
+- **Stop** calls `POST /conversations/:id/cancel`, so the run really stops, and keeps what was written as an answer marked "Stopped".
+- A dropped connection is not an error: the page looks at the conversation again and follows or shows what finished.
+- `runtime` on `GET /conversations` and `GET /conversations/:id` drives the status badges in the history, and `stopReason` on the messages the notice under an answer.
+- A conversation with a [usage limit](/guide/budgets) shows a meter, and `PATCH /conversations/:id { budget }` and `POST /conversations/:id/continue` raise it and carry on, where the host allows.
+
+See [Running turns, Stop and reattach](/guide/runs). A server older than 0.3.0 has none of these routes and everything stays as it was.
+
+## Files
+
+`GET /agents` tells the chat what each agent takes (`capabilities.attachments`), `POST /files` takes the file as itself (raw body with progress), and `GET /conversations/:id/files` is the count the chat shows. See [File uploads](/guide/file-uploads).
+
 ## Error codes
 
 Failed requests carry the server's `code`, and `Chat` shows a localized message for the well-known ones (`conversation_busy`, `action_pending`, `action_expired`, `rate_limited`, `message_too_long`, `file_too_large`, ...). A send refused because a card is waiting or a turn is running makes the page fetch the conversation again, so the card or the latest answer shows. See [Approvals and Questions](/guide/approvals#errors).
@@ -297,6 +313,17 @@ await client.sendMessageStream(
   { message: "Hello!" },
   { onText: (chunk, fullText) => console.log(fullText) }
 );
+
+// Follow a conversation's event log (replay, then live) until aborted
+const controller = new AbortController();
+await client.followEvents(conversation.id, {
+  after: 0,
+  signal: controller.signal,
+  onEvent: (event) => console.log(event.seq, event.type, event.data),
+});
+
+// Stop the run on the server
+await client.cancel(conversation.id);
 ```
 
 ## Next Steps

@@ -7,9 +7,9 @@ Nothing changes for servers that never pause: no card appears and no new request
 ## What the user sees
 
 - **Tool approval**: the tool name (or the server's `title` / `summary`), a collapsible "Details" section with the arguments, and Approve / Deny. Deny can carry a reason, and Approve can be remembered for the rest of the chat. With [argument editing](#editing-the-arguments) on, "Details" becomes a JSON editor.
-- **Question**: one block per question. A single single-choice question submits as soon as an option is picked. Multi-select questions use checkboxes and a Send button. Free text is offered when the question has no options or the server allows it. A question is **required** unless the server says `required: false` (marked with an asterisk); Skip is offered only when no question of the card is required.
+- **Question**: one block per question. A single single-choice question submits as soon as an option is picked. Multi-select questions use checkboxes and a Send button. An option that comes with a `preview` (code or text showing what it leads to) is a row of the list with a collapsed "Preview" under it, and a single-choice question with previews then needs Send. Free text is offered when the question has no options or the server allows it. A question is **required** unless the server says `required: false` (marked with an asterisk); Skip is offered only when no question of the card is required.
 - **Deadline**: when the server gives an `expiresAt`, the card says when the request expires ("Expires in 23 hours"), turns amber when little time is left, and turns **Expired** at the deadline: its buttons go away and the composer is free again.
-- After an answer the card shows how it ended (Approved, Approved with edited arguments, Denied, Answered, Skipped, Expired, Cancelled...) and the assistant's continuation appears as a new message.
+- After an answer the card shows how it ended (Approved, Approved with edited arguments, Denied, Answered, Skipped, Expired, Cancelled...) and the assistant's continuation appears as a new message. A request nobody answered in time that the server refused on its own behalf (`resolvedBy: "system:timeout"`) reads **Expired**, not Denied.
 - Reloading the conversation brings back anything still waiting, and shows how the rest ended when the server says (see [History](#history)).
 
 ## Props
@@ -111,7 +111,9 @@ When a conversation is loaded, the server's list of open requests (`pendingActio
 
 If an answer is refused because the request expired (`action_expired`), was cancelled (`action_cancelled`) or was already answered elsewhere (`action_not_pending`), the card switches to Expired, Cancelled or Answered, the composer is released, and the error is shown. Any other error puts the card back to waiting.
 
-Transports other than `AgentServerClient` do not implement `resolveAction`; cards are read-only for them.
+Cards can be answered through `AgentServerClient`, and through the transports whose backend takes answers: the Responses transport (a Console client API response that stops with `status: "requires_action"`), the A2A transport when it is given an `actionUrl`, and the in-process agent-sdk transport for an agent that can pause. For any other transport, and for A2A without `actionUrl`, the cards are shown but read-only; see [Transports](/guide/transports#approvals-and-questions).
+
+If the connection breaks after the server took an answer, the turn goes on without the page and the page looks at the conversation again instead of reporting a failure ([Running turns](/guide/runs)).
 
 ## Errors
 
@@ -126,10 +128,6 @@ After a send is refused with `action_pending`, `pending_action` or `conversation
 ```tsx
 const chat = useChat({ baseUrl: "https://agents.example.com", agentId: "support" });
 
-const pendingMode = !chat.awaitingAction
-  ? undefined
-  : chat.answerableQuestion ? "answer" : "blocked"; // or "cancel"
-
 <ChatMessageList
   messages={chat.messages}
   isStreaming={chat.isStreaming}
@@ -143,14 +141,14 @@ const pendingMode = !chat.awaitingAction
 />
 <ChatInput
   onSend={(text) =>
-    pendingMode === "answer" && chat.answerableQuestion
+    chat.composerState === "answer" && chat.answerableQuestion
       ? chat.resolveAction(chat.answerableQuestion.actionId, {
           type: "user_question",
           answers: { [chat.answerableQuestion.question.question]: text },
         })
       : chat.sendMessage(text)
   }
-  pendingMode={pendingMode}
+  state={chat.composerState}   // "blocked" | "cancel" | "answer" while a card waits (the agent's composer mode, or the pendingActionComposerMode option)
   isLoading={chat.isStreaming}
   /* ... */
 />

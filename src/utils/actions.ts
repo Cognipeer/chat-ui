@@ -92,8 +92,11 @@ export function settledStateOf(entry: unknown, kind?: "tool_approval" | "user_qu
   if (typeof status !== "string" || !SETTLED.has(status)) return undefined;
   const resolved = kind ?? kindOf(entry);
   const resolution = resolved ? resolutionOf(resolved, entry.resolution) : undefined;
+  // A request nobody answered in time is refused by the server on its own behalf (`system:timeout`):
+  // to the person it is a lapsed request, not a denial they made
+  const lapsed = status === "resolved" && typeof entry.resolvedBy === "string" && entry.resolvedBy.startsWith("system:timeout");
   return {
-    status: status as ActionStatus,
+    status: lapsed ? "expired" : (status as ActionStatus),
     ...(resolution ? { resolution } : {}),
     ...(typeof entry.resolvedBy === "string" ? { resolvedBy: entry.resolvedBy } : {}),
     ...(typeof entry.resolvedAt === "string" ? { resolvedAt: entry.resolvedAt } : {}),

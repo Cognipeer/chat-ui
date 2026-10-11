@@ -40,6 +40,8 @@ export default defineConfig({
             { text: 'File Uploads', link: '/guide/file-uploads' },
             { text: 'Tool Calls', link: '/guide/tool-calls' },
             { text: 'Approvals and Questions', link: '/guide/approvals' },
+            { text: 'Running Turns and Stop', link: '/guide/runs' },
+            { text: 'Usage Limits', link: '/guide/budgets' },
             { text: 'History Sidebar', link: '/guide/history' },
             { text: 'Custom Actions', link: '/guide/custom-actions' },
           ],

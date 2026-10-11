@@ -14,6 +14,20 @@
 | OpenAI Responses API | `ResponsesTransport` | `ThreadStore` (plus `previous_response_id` on the server) |
 | A2A (Agent2Agent, JSON-RPC) | `A2ATransport` | `ThreadStore` (plus `contextId`) |
 
+## What each backend supports
+
+`ChatTransport` has one required core (conversations, `sendMessage`, `sendMessageStream`) and optional methods. The UI offers a feature only where the transport has the method:
+
+| | agent-server | agent-sdk | Chat Completions | Responses | A2A |
+| --- | :-: | :-: | :-: | :-: | :-: |
+| Approvals and questions (`resolveAction`) | yes | agents that pause | no | Console client API | with `actionUrl` |
+| Reattach to a running turn (`followEvents`) | yes | | | | |
+| Stop on the server (`cancel`) | yes | | | | |
+| Usage limit (`updateBudget`, `continueConversation`) | yes | | | | |
+| Stop reason on an answer | yes | cancelled | | limit, cancelled | limit |
+| Files stored ahead (`uploadFile`, raw body, progress) | yes | | | | |
+| Count of files in a conversation (`listFiles`), signed file URLs (`getFileUrl`) | yes | | | | |
+
 ## Auth
 
 All HTTP transports, and `AgentServerClient`, accept the same options:
@@ -58,6 +72,22 @@ const transport = new ResponsesTransport({
 
 Turns are chained with `previous_response_id`; set `serverState: false` to resend the history instead. `url_citation` and `file_citation` annotations become citations and inline markers. Built-in tool items (web search, MCP, function calls) show as tool calls.
 
+A response with `status: "incomplete"` or a `stop_reason` of `limit` / `cancelled` / `budget_reached` is stored with its stop reason, so a notice shows under the answer.
+
+### Approvals and questions
+
+An endpoint that speaks the Console client API can stop a response for a person: `status: "requires_action"`, `stop_reason: "requires_action"` and `required_action: { type: "agent_actions", actions: [...] }` (snake_case: `kind`, `tool_name`, `allow_free_text`, `expires_at`; questions with `multi_select`). The transport turns the actions into cards and answers them with `POST <baseUrl>/agents/sessions/<session id>/actions/<action id>` (`{ decision, comment, approved_args, remember_for_session }` or `{ answers, cancelled }`), where the session id is the response id without its `resp_` prefix. The reply has the same shape, so it can stop again.
+
+```ts
+new ResponsesTransport({
+  baseUrl: "https://console.example.com/api/client/v1",
+  actionUrl: ({ sessionId, actionId, baseUrl }) => `${baseUrl}/agents/sessions/${sessionId}/actions/${actionId}`, // the default
+  resolveActions: false,   // leave the cards read-only
+});
+```
+
+Other Responses endpoints (OpenAI's own) never send `required_action` of this kind and are not affected.
+
 ## A2A
 
 ```ts
@@ -70,6 +100,22 @@ const transport = new A2ATransport({
 ```
 
 Uses `message/stream` (SSE) and `message/send`. `contextId` is kept per conversation, and a task left in `input-required` / `auth-required` is continued by the next message. Override `methods` for servers that use other method names.
+
+`metadata.stopReason` / `stopDetail` of a task become the stop reason of the answer.
+
+### Approvals and questions
+
+A server that stops a task with `input-required` can list what it waits on in `metadata.pendingActions` (the Console client API does, in its snake_case form); they show as cards. A2A itself has no way to answer them, so the answer goes to a REST route you name:
+
+```ts
+new A2ATransport({
+  baseUrl: "https://console.example.com/api/client/v1/a2a/my-agent",
+  actionUrl: ({ contextId, actionId }) =>
+    `https://console.example.com/api/client/v1/agents/sessions/${contextId}/actions/${actionId}`,
+});
+```
+
+Without `actionUrl` the cards are read-only ("Waiting for approval in another app"). After an answer the open task is considered over: the next message starts a new one in the same context.
 
 ## agent-sdk
 
@@ -84,6 +130,8 @@ const transport = new AgentSdkTransport({
 
 The agent runs in the same process as the UI. Tool calls, progress and streamed text are forwarded.
 
+An agent that can pause for a person (`createSmartAgent` has `resolveToolApproval` and `resolveUserQuestion`) shows its approvals and questions as cards. The paused state is kept with the thread (without the live runtime, as JSON, so a `LocalStorageThreadStore` keeps it), an answer is applied to it and, once every action of the pause is answered, the agent runs on. A turn cut off with Stop is stored as cancelled.
+
 ## Keeping threads
 
 Chat Completions, Responses, A2A and agent-sdk have no conversation API, so the transport keeps threads in a `ThreadStore`:
@@ -95,3 +143,7 @@ Chat Completions, Responses, A2A and agent-sdk have no conversation API, so the 
 ## Writing your own
 
 Implement `ChatTransport`, or extend `StatelessTransport` and implement `run()`: call your backend and report text, tool calls and progress through `input.emit`.
+
+`run()` may return `pendingActions` (the turn stopped for a person), `stopReason` / `stopDetail` and `status`. To take answers, also implement `resolve(input)` (and `canResolve()` when that depends on your options): it is handed the action, the others of the same pause that still wait and the person's resolution, and returns what the agent did next. The base class keeps the paused message, records how each card ended and adds the continuation as a new message; `resolveAction` exists on the transport only when `canResolve()` is true, so the chat shows read-only cards otherwise.
+
+A transport of your own can add the run methods too: `followEvents`, `cancel`, `continueConversation`, `updateBudget`, `listFiles`, `getFileUrl`, and `uploadFile` with `supportsRawUpload`. They are all optional.

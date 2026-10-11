@@ -22,30 +22,12 @@ import type {
 } from "../../types";
 import { CheckIcon, ChevronDownIcon, ChevronRightIcon, LoadingIcon, ToolIcon, XIcon } from "./Icons";
 import { useI18n } from "../../hooks";
+import { FOCUS_RING, PRIMARY_BUTTON, SECONDARY_BUTTON } from "./styles";
 
 type ToolApprovalAction = Extract<PendingAction, { type: "tool_approval" }>;
 type QuestionAction = Extract<PendingAction, { type: "user_question" }>;
 type ToolApprovalResolution = Extract<ActionResolution, { type: "tool_approval" }>;
 type QuestionResolution = Extract<ActionResolution, { type: "user_question" }>;
-
-const FOCUS_RING =
-  "focus:outline-none focus-visible:ring-2 focus-visible:ring-chat-accent-primary focus-visible:ring-offset-1 focus-visible:ring-offset-chat-bg-secondary";
-
-const BUTTON_BASE = cn(
-  "inline-flex items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors",
-  "disabled:opacity-50 disabled:cursor-not-allowed",
-  FOCUS_RING
-);
-
-const PRIMARY_BUTTON = cn(
-  BUTTON_BASE,
-  "bg-chat-accent-primary text-chat-text-inverse hover:bg-chat-accent-secondary"
-);
-
-const SECONDARY_BUTTON = cn(
-  BUTTON_BASE,
-  "border border-chat-border-primary bg-chat-bg-primary text-chat-text-primary hover:bg-chat-bg-hover"
-);
 
 const CARD = "rounded-xl border border-chat-border-primary bg-chat-bg-primary p-4 text-sm text-chat-text-primary";
 
@@ -517,8 +499,10 @@ export function QuestionCard({
   useFocusOnAppear(rootRef, autoFocus && waiting && !readOnly, true);
 
   const questions = action.questions;
+  // An option with a preview needs room for it, so it is a row of the list rather than a chip that answers at once
+  const hasPreviews = questions.some((q) => q.options?.some((o) => Boolean(o.preview)));
   const instant =
-    questions.length === 1 && !questions[0].multiSelect && (questions[0].options?.length ?? 0) > 0;
+    questions.length === 1 && !questions[0].multiSelect && (questions[0].options?.length ?? 0) > 0 && !hasPreviews;
   const allowSkip = questions.every((q) => !isQuestionRequired(q));
 
   const update = (key: string, patch: Partial<Draft>) =>
@@ -651,6 +635,16 @@ export function QuestionCard({
                               <span className="block">{o.label}</span>
                               {o.description && (
                                 <span className="block text-xs text-chat-text-secondary">{o.description}</span>
+                              )}
+                              {o.preview && (
+                                <details className="mt-1.5 text-xs" data-chat-preview>
+                                  <summary className={cn("cursor-pointer text-chat-text-secondary", FOCUS_RING)}>
+                                    {t("chat.question.preview")}
+                                  </summary>
+                                  <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded bg-chat-bg-secondary p-2 font-mono text-[0.6875rem] text-chat-text-primary">
+                                    {o.preview}
+                                  </pre>
+                                </details>
                               )}
                             </span>
                           </label>

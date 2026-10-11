@@ -43,12 +43,18 @@ interface Message {
   pendingActions?: PendingAction[];
   /** How the turn ended. Absent means a normal, completed answer. */
   status?: "completed" | "requires_action" | "incomplete" | "cancelled";
+  /** Why the turn stopped (also read from `metadata.stopReason`); a notice shows for all but end_turn / requires_action */
+  stopReason?: StopReason;
+  /** The runtime's own wording for the stop; only `renderStopNotice` gets it */
+  stopDetail?: string;
   /** How each action in `pendingActions` ended or stands, by action id */
   actionStates?: Record<string, ActionState>;
   createdAt: Date;
   updatedAt: Date;
 }
 ```
+
+`metadata.warnings` (`{ code, message? }[]`: `file_truncated`, `file_unreadable`, `images_not_supported`, `pause_state_too_large`) are listed under the answer.
 
 `actionStates` is kept by the app as cards settle. A server may also send it, or settled entries in `metadata.pendingActions` (each with a `status` and a `resolution`), so that a reloaded conversation shows what was decided. See [Approvals and Questions](/guide/approvals#history).
 
@@ -78,6 +84,16 @@ interface FileAttachment {
   storageKey?: string;
   /** Object URL of a file still on this device (image preview); revoked when the conversation is left */
   previewUrl?: string;
+  /** A file being stored on its own: queued, uploading, ready for the message, or failed */
+  status?: "queued" | "uploading" | "ready" | "failed";
+  progress?: number;       // 0 to 1 while uploading
+  uploadError?: string;    // localized, while failed
+  /** When the server deletes the file (ISO); a chip turns "Expired" once it has passed */
+  expiresAt?: string;
+  /** The file is gone from the server (set when a conversation is loaded) */
+  expired?: boolean;
+  /** `failed` / `skipped`: the text of the file could not be read ("No readable text") */
+  conversionStatus?: "pending" | "succeeded" | "failed" | "skipped";
 }
 ```
 
@@ -101,7 +117,7 @@ interface UserQuestion {
   placeholder?: string;
   /** Default true: a question must be answered unless the server says `required: false` */
   required?: boolean;
-  options?: { label: string; value?: string; description?: string }[];
+  options?: { label: string; value?: string; description?: string; preview?: string }[];
 }
 
 type PendingAction =
@@ -151,6 +167,11 @@ interface Conversation {
   metadata?: Record<string, unknown>;
   state?: Record<string, unknown>;
   pendingActions?: PendingAction[];
+  /** Whether a turn is running, waiting for a person, or idle (agent-server 0.3.0+) */
+  runtime?: ConversationRuntime;
+  /** The spend limit; `null` when it was removed */
+  budget?: ConversationBudget | null;
+  spentUsd?: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -160,23 +181,64 @@ interface ConversationListItem {
   title?: string;
   agentName?: string;
   agentId: string;
+  runtime?: ConversationRuntime;   // the status badge
+  budget?: ConversationBudget | null;
+  spentUsd?: number;
   createdAt: Date;
   updatedAt: Date;
 }
+
+type RuntimeStatus = "idle" | "running" | "requires_action" | "budget_paused";
+
+interface ConversationRuntime {
+  status: RuntimeStatus;
+  stopReason?: StopReason;          // why the last turn stopped; absent while one runs
+  lastEventSeq?: number;            // where to follow the event log from
+  pendingActionIds?: string[];
+  activeRunId?: string;
+}
+
+type StopReason = "end_turn" | "requires_action" | "cancelled" | "max_turns" | "limit" | "budget_reached" | "error";
+
+interface ConversationBudget {
+  maxCostUsd: number;
+  onReach: "pause" | "stop";   // wait for a higher limit and carry on, or end
+}
+
+/** An entry of the event log, as followEvents delivers it */
+interface ConversationEvent {
+  seq?: number;                 // absent for live-only frames (agent.message.delta)
+  type: string;                 // session.status_running, agent.tool_use, agent.message, session.status_idle, ...
+  data: Record<string, unknown>;  // snake_case, as the Console writes it
+  runId?: string;
+  createdAt?: string;
+}
+
+type ComposerState = "open" | "blocked" | "cancel" | "answer" | "following" | "budget_paused" | "readonly";
 
 interface AgentInfo {
   id: string;
   name: string;
   description?: string;
   version?: string;
-  /** Read by Chat: enableFileUpload, maxFileSize, maxFiles, allowedFileTypes,
+  /** Read by Chat: enableFileUpload, maxFileSize, maxFiles, allowedFileTypes, maxFilesScope, fileRetentionDays,
    *  pendingActionComposerMode ("block" | "cancel"), acceptsImages (false warns on images) */
   metadata?: Record<string, unknown>;
   capabilities?: {
     toolApproval?: boolean;
     askUser?: boolean;
     approvalArgsEdit?: boolean; // the approval card may edit arguments
-    acceptsImages?: boolean;    // false: an attached image gets a warning
+    acceptsImages?: boolean;    // the older place for attachments.acceptsImages
+    attachments?: {             // what agent-server reports; wins over `metadata`
+      enabled?: boolean;        // false hides the paperclip
+      maxFiles?: number;        // per conversation unless maxFilesScope says "message"
+      maxFileSize?: number;     // bytes
+      allowedMimeTypes?: string[];
+      acceptsImages?: boolean;  // false: an attached image gets a warning
+      retentionDays?: number;   // "Files are kept for 30 days"
+      maxFilesScope?: "conversation" | "message";
+    };
+    budget?: { allowContinue?: boolean; allowEdit?: boolean };  // override allowBudgetContinue / allowBudgetEdit
   };
 }
 ```
@@ -235,7 +297,8 @@ interface ChatConfig {
   allowedFileTypes?: string[];
   maxFileSize?: number;            // bytes
   maxFiles?: number;
-  fileTransport?: "inline" | "upload";
+  maxFilesScope?: "message" | "conversation";   // what maxFiles counts
+  fileTransport?: "inline" | "upload" | "upload-on-select";
   /** Text sent with files and no typed text; "" sends none */
   attachmentsOnlyMessage?: string;
 }
@@ -255,6 +318,8 @@ interface ChatCallbacks {
   onConversationSelected?: (conversation: ConversationListItem) => void;
   onConversationTitleGenerated?: (conversationId: string, title: string) => void;
   onBackgroundStreamCompleted?: (conversationId: string) => void;
+  /** A turn ended on the conversation's usage limit */
+  onBudgetReached?: (info: { conversationId: string; budget?: ConversationBudget; spentUsd?: number }) => void;
   onActionResolved?: (info: {
     conversationId: string;
     actionId: string;
@@ -286,11 +351,18 @@ type StreamEvent =
       resolution: { type: "tool_approval" | "user_question"; decision?: "allow" | "deny"; cancelled?: boolean } }
   | { type: "stream.done"; conversationId: string; messageId: string; content: string;
       citations?: Citation[]; citationMarks?: CitationMark[]; files?: FileAttachment[]; title?: string;
-      usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number };
-      status?: MessageStatus; pendingActions?: PendingAction[] };
+      usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number; cachedInputTokens?: number; costUsd?: number };
+      status?: MessageStatus; pendingActions?: PendingAction[];
+      stopReason?: StopReason; runId?: string;
+      budget?: ConversationBudget; spentUsd?: number;     // the conversation's limit and cost, this turn included
+      warnings?: TurnWarning[] };
 ```
 
-Every event also has a `timestamp`.
+Every event also has a `timestamp`, and may have `seq`: its position in the conversation's event log (agent-server 0.3.0+).
+
+```typescript
+interface TurnWarning { code: string; message?: string; [key: string]: unknown }
+```
 
 ## Component props
 
@@ -309,6 +381,14 @@ interface QuestionRenderProps {
   state?: ActionState;
   readOnly: boolean;
   resolve: (resolution: Extract<ActionResolution, { type: "user_question" }>) => void;
+}
+
+// Handed to renderStopNotice
+interface StopNoticeRenderProps {
+  message: Message;
+  stopReason: StopReason | "incomplete";
+  detail?: string;     // the runtime's own wording; end users get the localized notice
+  hasText: boolean;    // the message has text (a partial answer)
 }
 
 // Handed to renderImage

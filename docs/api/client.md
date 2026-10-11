@@ -17,6 +17,8 @@ const client = new AgentServerClient({
   headers: { "X-Custom": "value" },
   getHeaders: async () => ({ Authorization: `Bearer ${await freshToken()}` }), // before every request
   fetch: (url, init) => fetch(url, { ...init, credentials: "include" }),       // proxies, cookies, tests
+  rawUpload: true,                 // send files as themselves (default), false: base64 JSON
+  reconnect: { retries: 6, delayMs: 500, maxDelayMs: 8000 },                    // followEvents
 });
 ```
 
@@ -40,11 +42,11 @@ const { conversations, total, limit, offset, hasMore } =
 const conversation = await client.createConversation({ agentId: "support", title?, userId?, metadata? });
 
 const { conversation, messages, pendingActions } = await client.getConversation(conversationId);
-await client.updateConversation(conversationId, { title?, metadata? });
+await client.updateConversation(conversationId, { title?, metadata?, budget? });
 await client.deleteConversation(conversationId);
 ```
 
-`pendingActions` lists the approvals and questions still waiting for an answer (agent-server 0.3.0+).
+`pendingActions` lists the approvals and questions still waiting for an answer (agent-server 0.3.0+). `conversation.runtime` (`{ status, stopReason?, lastEventSeq, pendingActionIds, activeRunId? }`), `conversation.budget` and `conversation.spentUsd` come with the conversation and with each item of the list; a `runtime` or `budget` that is not well-formed is dropped.
 
 ### Messages
 
@@ -97,18 +99,60 @@ const { response } = await client.resolveAction(conversationId, actionId, {
 
 `POST /conversations/:conversationId/actions/:actionId` with `{ resolution, stream? }`. See [Approvals and Questions](/guide/approvals).
 
+### Runs: cancel, follow, continue
+
+```tsx
+// Stop the run on the server (POST /conversations/:id/cancel); the open approvals of a paused conversation are cancelled too
+const { cancelled, runId, settled, cancelledActionIds, stopReason, runtime } = await client.cancel(conversationId);
+
+// Replay the event log after `after`, then follow it live until aborted (GET /conversations/:id/events/stream)
+const controller = new AbortController();
+await client.followEvents(conversationId, {
+  after: conversation.runtime?.lastEventSeq,
+  signal: controller.signal,
+  types: ["agent.message", "session.status_idle"],   // optional filter
+  onEvent: ({ seq, type, data, runId, createdAt }) => {},
+  onReconnect: (attempt) => {},
+});
+
+// Carry on a turn the usage limit stopped (POST /conversations/:id/continue)
+await client.continueConversation(conversationId, { stream: true, callbacks: { onText, onDone } });
+const reply = await client.continueConversation(conversationId);            // JSON
+
+// Raise or remove the limit (PATCH /conversations/:id { budget })
+const updated = await client.updateBudget(conversationId, { maxCostUsd: 20, onReach: "pause" });
+await client.updateBudget(conversationId, null);
+```
+
+`followEvents` resolves when aborted. It opens the stream again from the last `seq` when the server closes it or the network drops (with backoff, up to `reconnect.retries` failed attempts in a row), and rejects with a refusal that retrying cannot fix (404, 403, ...). Events are `{ seq?, type, data, runId?, createdAt? }` with the Console's snake_case `data` (`tool_call_id`, `stop_reason`, ...); `agent.message.delta` frames (live text) have no `seq`. Unknown types arrive too: ignore them. See the [event types](/guide/runs).
+
+`cancel` answers `200`, or `202` (`settled: false`) while the run is still winding down or runs on another node; nothing to cancel is `cancelled: false`, not an error. Errors carry `code` and `details` (`budget_forbidden`, `invalid_budget`, `budget_reached` with `details.spentUsd` / `maxCostUsd`, `nothing_to_continue`).
+
 ### Files
 
 ```tsx
+// The file as itself: its bytes are the body, its own Content-Type (POST /files?name=&conversationId=)
 const file = await client.uploadFile({
-  file: { name: "a.txt", content: "<base64>", mimeType: "text/plain" },
-  conversationId,   // optional
-  metadata,         // optional
+  file: { name: "a.pdf", mimeType: "application/pdf", blob: fileOrBlob },
+  conversationId,                              // without it the file cannot be attached to a message
+  onProgress: ({ loaded, total }) => {},       // XMLHttpRequest, unless you gave your own `fetch`
+  signal: abortSignal,
 });
+
+// The JSON form
+await client.uploadFile({ file: { name: "a.txt", content: "<base64>", mimeType: "text/plain" }, conversationId });
+
+const { files, total, maxFiles } = await client.listFiles(conversationId);   // GET /conversations/:id/files
 const info = await client.getFile(fileId);
 await client.deleteFile(fileId);
-const url = client.getFileContentUrl(fileId); // GET /files/:id/content
+const url = client.getFileContentUrl(fileId);        // GET /files/:id/content (needs the same credentials)
+const shown = await client.getFileUrl({ id: fileId }, { disposition: "inline" });   // a URL an <img> can use
+client.dispose();                                    // release the blob URLs getFileUrl made
 ```
+
+`uploadFile` resolves to a `FileAttachment` (`id`, `name`, `mimeType`, `size`, `expiresAt?`, `conversionStatus?`). `supportsRawUpload` is `true` unless `rawUpload: false`; a `blob` given to a client that does not send raw bodies is read as base64.
+
+`getFileUrl` is the file route itself when no credentials are configured. With `authorization`, `headers`, `getHeaders` or a custom `fetch`, the bytes are fetched with them and handed back as a blob URL, cached per file. Only raster pictures keep their own type; any other blob is typed `application/octet-stream`, so a stored HTML or SVG file can not run on your page.
 
 ## Errors
 
@@ -127,11 +171,11 @@ try {
 
 ## Stream events
 
-The streaming methods read Server-Sent Events whose `data` is a JSON `StreamEvent` (see [Types](/api/types#stream-events)): `stream.start`, `stream.text`, `stream.thinking`, `stream.tool_call`, `stream.tool_result`, `stream.progress`, `stream.action_required`, `stream.action_resolved`, `stream.error` and `stream.done`.
+The streaming methods read Server-Sent Events whose `data` is a JSON `StreamEvent` (see [Types](/api/types#stream-events)): `stream.start`, `stream.text`, `stream.thinking`, `stream.tool_call`, `stream.tool_result`, `stream.progress`, `stream.action_required`, `stream.action_resolved`, `stream.error` and `stream.done`. Every frame may carry `seq`, its position in the conversation's event log, and `stream.done` may carry `stopReason`, `runId`, `budget`, `spentUsd` and `warnings`.
 
 ## Cancelling
 
-Pass an `AbortSignal` to stop reading a stream. This detaches the browser; it does not cancel the run on the server.
+Pass an `AbortSignal` to stop reading a stream. This detaches the browser; a turn on agent-server 0.3.0+ goes on without it. To stop the run itself, call `client.cancel(conversationId)`.
 
 ```tsx
 const controller = new AbortController();

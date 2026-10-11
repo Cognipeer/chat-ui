@@ -52,7 +52,9 @@ import { Chat } from "@cognipeer/chat-ui";
 | `autoScroll` | `boolean` | `true` | Scroll to new messages |
 | `autoFocusInput` | `boolean` | `false` | Focus the composer on mount and after new chat / selection |
 | `enableMessageSearch` | `boolean` | `false` | Search box in the history |
+| `showStatus` | `boolean` | `true` | A badge on history rows that are working, waiting for you or stopped on their usage limit |
 | `enableCitations` | `boolean` | `true` | Sources under answers |
+| `readOnly` | `boolean` | `false` | A transcript: the composer is closed with a notice |
 
 ### Language
 
@@ -67,11 +69,12 @@ import { Chat } from "@cognipeer/chat-ui";
 
 | Prop | Type | Default | Description |
 |------|------|---------|-------------|
-| `enableFileUpload` | `boolean` | `true` | Enable file uploads (an agent's `metadata.enableFileUpload` overrides it) |
-| `allowedFileTypes` | `string[]` | any | Allowed MIME types / extensions |
-| `maxFileSize` | `number` | `10MB` | Max file size in bytes |
-| `maxFiles` | `number` | `10` | Max files per message |
-| `fileTransport` | `"inline" \| "upload"` | `"inline"` | Files in the message body, or uploaded first |
+| `enableFileUpload` | `boolean` | `true` | Enable file uploads (an agent's `capabilities.attachments.enabled` or `metadata.enableFileUpload` overrides it) |
+| `allowedFileTypes` | `string[]` | any | Allowed MIME types / extensions (an agent's `allowedMimeTypes` overrides it) |
+| `maxFileSize` | `number` | `10MB` | Max file size in bytes (an agent's `maxFileSize` overrides it) |
+| `maxFiles` | `number` | `10` | Max files per message, or per conversation (an agent's `maxFiles` counts per conversation) |
+| `maxFilesScope` | `"message" \| "conversation"` | `"message"` | What `maxFiles` counts |
+| `fileTransport` | `"inline" \| "upload" \| "upload-on-select"` | `"inline"` | Files in the message body, uploaded when the message is sent, or uploaded as soon as they are picked |
 | `attachmentsOnlyMessage` | `string` | localized | Text sent with files and no typed text (`""` sends none) |
 | `renderImage` | `(props: ImageRenderProps) => ReactNode` | - | Draw images yourself, e.g. fetch them with credentials |
 
@@ -86,6 +89,19 @@ import { Chat } from "@cognipeer/chat-ui";
 | `pendingActionComposerMode` | `"block" \| "cancel"` | `"block"` | What the composer does while a card waits (an agent's `metadata.pendingActionComposerMode` overrides it) |
 | `renderToolApproval`, `renderQuestion` | `function` | built-in cards | Replace a card |
 | `onActionResolved` | `function` | - | Called after the server accepted an answer |
+
+### Usage limit and stopped answers
+
+| Prop | Type | Default | Description |
+|------|------|---------|-------------|
+| `showBudgetMeter` | `boolean` | `true` | The spent / limit bar of a conversation that has a limit |
+| `allowBudgetContinue` | `boolean` | `false` | "Continue" in the notice once a paused conversation's limit has room (an agent's `capabilities.budget.allowContinue` overrides it) |
+| `allowBudgetEdit` | `boolean` | `false` | Raise or remove the limit from the notice (an agent's `capabilities.budget.allowEdit` overrides it) |
+| `renderBudgetBanner` | `(props: BudgetBannerProps) => ReactNode` | `BudgetBanner` | Replace the meter and the notice |
+| `renderStopNotice` | `(props: StopNoticeRenderProps) => ReactNode` | built-in | Replace the notice under an answer that stopped early |
+| `onBudgetReached` | `(info) => void` | - | A turn ended on the conversation's usage limit |
+
+See [Usage limits](/guide/budgets) and [Running turns, Stop and reattach](/guide/runs).
 
 ### Callback Props
 
@@ -113,10 +129,11 @@ import { Chat } from "@cognipeer/chat-ui";
 | `renderHistoryHeader`, `renderHistoryFooter` | `() => ReactNode` | Custom sidebar header / footer |
 | `renderToolApproval`, `renderQuestion` | `function` | See above |
 | `renderImage` | `function` | See above |
+| `renderStopNotice`, `renderBudgetBanner` | `function` | See above |
 
 ## Accessibility
 
-The composer and its buttons are labelled; the message list is a live `log` (busy while a reply streams, so the finished answer is read once); an error is an `alert`. An approval or question that appears while the person is not typing takes keyboard focus and is announced, and focus returns to the composer once the last card is answered. Spinners and pulses stop under `prefers-reduced-motion`.
+The composer and its buttons are labelled; the message list is a live `log` (busy while a reply streams, so the finished answer is read once); an error is an `alert`. An approval or question that appears while the person is not typing takes keyboard focus and is announced, and focus returns to the composer once the last card is answered. Spinners and pulses stop under `prefers-reduced-motion`. A file going up has a progress bar with a value, the usage meter is a `progressbar`, a notice about a stopped answer is a `status`, and every row of the history is a button that the arrow keys, Home and End move between.
 
 ## Examples
 

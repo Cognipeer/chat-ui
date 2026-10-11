@@ -2,8 +2,8 @@
 
 import React, { useRef, useEffect, useMemo, useState } from "react";
 import { cn, collectPendingActions } from "../../utils";
-import type { Message, MessageActionProps } from "../../types";
-import { ChatMessage, type ImageRenderProps } from "./ChatMessage";
+import type { Message, MessageActionProps, StopNoticeRenderProps } from "../../types";
+import { ChatMessage, type ImageRenderProps, type ResolveFileUrl } from "./ChatMessage";
 import { ToolCalls } from "./ToolCall";
 import type { ChatActionsConfig } from "./ActionCards";
 import { useI18n } from "../../hooks/useI18n";
@@ -39,6 +39,10 @@ export interface ChatMessageListProps {
   actions?: ChatActionsConfig;
   /** Replace how an image in a message is drawn */
   renderImage?: (props: ImageRenderProps) => React.ReactNode;
+  /** Replace the notice under an answer that stopped early */
+  renderStopNotice?: (props: StopNoticeRenderProps) => React.ReactNode;
+  /** How to get a URL for a stored file that has none of its own (images are fetched this way to be shown) */
+  resolveFileUrl?: ResolveFileUrl;
 }
 
 const NO_IDS: ReadonlySet<string> = new Set();
@@ -113,6 +117,8 @@ export function ChatMessageList({
   enableCitations = true,
   actions,
   renderImage,
+  renderStopNotice,
+  resolveFileUrl,
 }: ChatMessageListProps) {
   const { t } = useI18n();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -179,6 +185,8 @@ export function ChatMessageList({
             enableCitations={enableCitations}
             actions={cardActions}
             renderImage={renderImage}
+            renderStopNotice={renderStopNotice}
+            resolveFileUrl={resolveFileUrl}
           />
         ))}
 

@@ -1,5 +1,5 @@
 export { Chat, ChatMinimal, type ChatProps, type ChatMinimalProps } from "./Chat";
-export { ChatMessage, type ChatMessageProps, type ImageRenderProps } from "./ChatMessage";
+export { ChatMessage, type ChatMessageProps, type ImageRenderProps, type ResolveFileUrl } from "./ChatMessage";
 export { ChatMessageList, type ChatMessageListProps } from "./ChatMessageList";
 export { ChatInput, type ChatInputProps, type ChatInputHandle } from "./ChatInput";
 export { ChatHistory, type ChatHistoryProps } from "./ChatHistory";
@@ -13,4 +13,6 @@ export {
   type QuestionCardProps,
   type ChatActionsConfig,
 } from "./ActionCards";
+export { BudgetBanner, type BudgetBannerProps } from "./BudgetBanner";
+export { MessageStopNotice, MessageWarnings, type MessageStopNoticeProps } from "./StopNotice";
 export * from "./Icons";

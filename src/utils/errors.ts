@@ -15,6 +15,8 @@ export interface CodedError extends Error {
   serverMessage?: string;
   /** The error as it arrived, when the shown one was replaced by a localized string */
   cause?: unknown;
+  /** What the server attached to the refusal (`activeRunId`, `spentUsd`, `maxCostUsd`, ...) */
+  details?: Record<string, unknown>;
 }
 
 /** `PENDING_ACTION` and `pending_action` are the same code. */
@@ -22,8 +24,14 @@ export function normalizeErrorCode(code: unknown): string | undefined {
   return typeof code === "string" && code.trim() ? code.trim().toLowerCase() : undefined;
 }
 
-/** The conversation cannot take a message because a card is waiting or a turn is running. */
-const CONFLICT_CODES: ReadonlySet<string> = new Set(["action_pending", "pending_action", "conversation_busy"]);
+/** The conversation cannot take a message because a card is waiting, a turn is running or its budget is used up. */
+const CONFLICT_CODES: ReadonlySet<string> = new Set([
+  "action_pending",
+  "pending_action",
+  "conversation_busy",
+  // the spend limit is used up: the conversation on screen does not know yet
+  "budget_reached",
+]);
 
 /** After these the conversation on screen is stale (a card or a running turn the page does not show). */
 export function isConflictCode(code: unknown): boolean {
@@ -52,6 +60,7 @@ export function localizeError(
   localized.cause = error;
   localized.code = coded.code;
   if (coded.status !== undefined) localized.status = coded.status;
+  if (coded.details !== undefined) localized.details = coded.details;
   localized.serverMessage = error.message;
   return localized;
 }
