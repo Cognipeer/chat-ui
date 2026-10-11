@@ -14,6 +14,9 @@ import type {
   MessageStatus,
   StopReason,
   TurnWarning,
+  FeedbackInput,
+  MessageFeedback,
+  ExportFormat,
 } from "../types";
 
 /** What `ChatTransport.getConversation` can be asked for besides the conversation. */
@@ -145,6 +148,37 @@ export interface UploadFileParams {
   signal?: AbortSignal;
 }
 
+/** What `ChatTransport.editMessage` sends in place of the message being edited. */
+export interface EditMessageInput {
+  /** The new text of the message */
+  content: string;
+  /** Files stored earlier that go with the edited message (the ones it already carried stay unless named here) */
+  fileIds?: string[];
+}
+
+/** The answer to deleting several conversations at once. */
+export interface BulkDeleteResult {
+  /** Ids that are gone */
+  deleted: string[];
+  /** Ids that were not deleted (not the person's, already gone, ...) with the server's reason code when it gives one */
+  failed: Array<{ id: string; code?: string }>;
+}
+
+/** What `ChatTransport.exportConversation` is asked for. */
+export interface ExportRequest {
+  format: ExportFormat;
+  /** Include tool calls and their results */
+  includeTools?: boolean;
+}
+
+/** A file the server produced for an export. */
+export interface ExportResult {
+  blob: Blob;
+  filename: string;
+  /** `text/html` for a print-friendly page the client prints itself (a server without a PDF renderer) */
+  contentType: string;
+}
+
 /**
  * Everything the chat UI needs from a backend. `AgentServerClient` implements
  * it for `@cognipeer/agent-server`; the adapters in `./adapters` implement it
@@ -260,4 +294,52 @@ export interface ChatTransport {
 
   /** Set (or with `null` remove) the conversation's spend limit. Resolves to the updated conversation. */
   updateBudget?(conversationId: string, budget: ConversationBudget | null): Promise<Conversation>;
+
+  /**
+   * Run the conversation's last answer again from the message that asked for it (`POST
+   * /conversations/:id/messages/:messageId/regenerate`). Streams or returns the new answer like
+   * `resolveAction`. Optional: without it the chat offers no "regenerate".
+   */
+  regenerateMessage?(
+    conversationId: string,
+    messageId: string,
+    options?: ResolveActionOptions
+  ): Promise<SendMessageResponse | undefined>;
+
+  /**
+   * Replace one of the person's messages and run the turn again from it (`POST
+   * /conversations/:id/messages/:messageId/edit`); everything after the message is dropped. Streams
+   * or returns the new answer like `resolveAction`. Optional: without it the chat offers no "edit".
+   */
+  editMessage?(
+    conversationId: string,
+    messageId: string,
+    input: EditMessageInput,
+    options?: ResolveActionOptions
+  ): Promise<SendMessageResponse | undefined>;
+
+  /**
+   * Rate an answer (`POST /conversations/:id/messages/:messageId/feedback`); `rating: null`
+   * withdraws the rating. One rating per person per message, replaced by the next one. Optional:
+   * without it the chat shows no thumbs.
+   */
+  sendFeedback?(conversationId: string, messageId: string, input: FeedbackInput): Promise<MessageFeedback | null | undefined>;
+
+  /** Change a conversation's title. Optional: without it the history offers no rename. */
+  renameConversation?(conversationId: string, title: string): Promise<void>;
+
+  /** Pin or unpin a conversation (`metadata.pinned`). Optional: without it the history offers no pin. */
+  pinConversation?(conversationId: string, pinned: boolean): Promise<void>;
+
+  /**
+   * Delete several conversations at once (`POST /conversations/bulk-delete`, at most 100 ids).
+   * Optional: without it the history deletes them one by one with `deleteConversation`.
+   */
+  deleteConversations?(ids: string[]): Promise<BulkDeleteResult>;
+
+  /**
+   * A conversation as a file (`GET /conversations/:id/export`). Optional: without it the chat
+   * builds Markdown and JSON from the messages it has loaded, and prints for a PDF.
+   */
+  exportConversation?(conversationId: string, request: ExportRequest): Promise<ExportResult>;
 }

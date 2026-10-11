@@ -12,6 +12,10 @@ export type {
   GetConversationOptions,
   UploadFileParams,
   PaginatedResponse,
+  EditMessageInput,
+  BulkDeleteResult,
+  ExportRequest,
+  ExportResult,
 } from "./transport";
 export type { HttpOptions } from "./http";
 export {

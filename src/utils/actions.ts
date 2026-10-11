@@ -26,17 +26,28 @@ function isAction(value: unknown): value is PendingAction {
   if (!value || typeof value !== "object") return false;
   const a = value as Record<string, unknown>;
   if (typeof a.id !== "string") return false;
-  if (a.type === "tool_approval") return typeof a.toolName === "string";
+  if (a.type === "tool_approval" || a.type === "client_tool") return typeof a.toolName === "string";
   if (a.type === "user_question") return Array.isArray(a.questions);
   return false;
 }
 
+type ActionKind = PendingAction["type"];
+
 /** The action kind a record names: `type`, or `kind` as the Console writes it on a message snapshot. */
-function kindOf(value: unknown): "tool_approval" | "user_question" | undefined {
+function kindOf(value: unknown): ActionKind | undefined {
   if (!value || typeof value !== "object") return undefined;
   const a = value as Record<string, unknown>;
   const kind = a.type ?? a.kind;
-  return kind === "tool_approval" || kind === "user_question" ? kind : undefined;
+  return kind === "tool_approval" || kind === "user_question" || kind === "client_tool" ? kind : undefined;
+}
+
+/**
+ * An action the host page answers (a tool of the page embedding the chat). It has no card and the
+ * person never sees it as something to do: the composer stays open for it and the history does not
+ * badge the conversation as waiting.
+ */
+export function isClientToolAction(action: Pick<PendingAction, "type">): boolean {
+  return action.type === "client_tool";
 }
 
 /** Keeps only well-formed actions; servers may send anything. */
@@ -64,8 +75,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /** A resolution as a server writes it (`{ decision, comment, answers, ... }`, with or without `type`), or undefined. */
-function resolutionOf(kind: "tool_approval" | "user_question", value: unknown): ActionResolution | undefined {
+function resolutionOf(kind: ActionKind, value: unknown): ActionResolution | undefined {
   if (!isRecord(value)) return undefined;
+  if (kind === "client_tool") {
+    return {
+      type: "client_tool",
+      ...(value.output !== undefined ? { output: value.output } : {}),
+      ...(typeof value.error === "string" && value.error ? { error: value.error } : {}),
+    };
+  }
   if (kind === "tool_approval") {
     if (value.decision !== "allow" && value.decision !== "deny") return undefined;
     return {
@@ -91,7 +109,7 @@ function resolutionOf(kind: "tool_approval" | "user_question", value: unknown): 
  * message's `actionStates`, or a settled entry of `metadata.pendingActions` (`status`,
  * `resolution`, `resolvedBy`, `resolvedAt`). Undefined for an open or unknown entry.
  */
-export function settledStateOf(entry: unknown, kind?: "tool_approval" | "user_question"): ActionState | undefined {
+export function settledStateOf(entry: unknown, kind?: ActionKind): ActionState | undefined {
   if (!isRecord(entry)) return undefined;
   const status = entry.status;
   if (typeof status !== "string" || !SETTLED.has(status)) return undefined;
@@ -151,11 +169,19 @@ export interface PendingActionEntry {
   state?: ActionState;
 }
 
-/** Every action that still needs an answer, oldest first. */
-export function collectPendingActions(messages: Message[]): PendingActionEntry[] {
+/**
+ * Every action that still needs an answer from the person, oldest first. The tools of the host
+ * page (`client_tool`) are answered by the page, not the person: they are listed only with
+ * `includeClientTools`.
+ */
+export function collectPendingActions(
+  messages: Message[],
+  options: { includeClientTools?: boolean } = {}
+): PendingActionEntry[] {
   const out: PendingActionEntry[] = [];
   for (const message of messages) {
     for (const action of message.pendingActions ?? []) {
+      if (action.type === "client_tool" && !options.includeClientTools) continue;
       if (isActionPending(message, action.id)) {
         out.push({ messageId: message.id, action, state: message.actionStates?.[action.id] });
       }
@@ -336,6 +362,8 @@ const isQuestionTool = (name: string) => /question|askuser/.test(name.toLowerCas
 /** The actions of a message that still wait for the person: not settled, and their deadline not passed. */
 function openActionsOf(message: Pick<Message, "pendingActions" | "actionStates">, now: number): PendingAction[] {
   return (message.pendingActions ?? []).filter((action) => {
+    // a tool of the host page is not waiting for the person
+    if (action.type === "client_tool") return false;
     const status = message.actionStates?.[action.id]?.status;
     if (status && status !== "pending" && status !== "resolving") return false;
     const at = actionDeadline(action);

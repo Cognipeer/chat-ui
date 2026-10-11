@@ -773,7 +773,7 @@ export function MessageActionCards({
   message: Message;
   config?: ChatActionsConfig;
 }) {
-  const actions = message.pendingActions;
+  const actions = message.pendingActions?.filter((a) => a.type !== "client_tool");
   if (!actions || actions.length === 0) return null;
 
   const canResolve = config?.canResolve !== false && Boolean(config?.onResolve);

@@ -1,14 +1,30 @@
 "use client";
 
 import React, { useRef, useEffect, useLayoutEffect, useMemo, useState } from "react";
-import { cn, collectPendingActions } from "../../utils";
-import type { Message, MessageActionProps, StopNoticeRenderProps } from "../../types";
+import { cn, collectPendingActions, messageText, readFeedback } from "../../utils";
+import type { FeedbackInput, Message, MessageActionProps, StopNoticeRenderProps } from "../../types";
 import { ChatMessage, type ImageRenderProps, type ResolveFileUrl } from "./ChatMessage";
 import { ToolCalls } from "./ToolCall";
 import { InterruptedNotice } from "./StopNotice";
 import type { ChatActionsConfig } from "./ActionCards";
 import { SECONDARY_BUTTON } from "./styles";
 import { useI18n } from "../../hooks/useI18n";
+
+/** What the list adds under its messages (see `ChatMessageListProps.toolbar`). */
+export interface ListToolbarConfig {
+  /** A copy button on every message with text */
+  copy: boolean;
+  /** Run the last answer again (offered under the newest answer only) */
+  regenerate?: () => void;
+  /** Edit one of the person's messages; resolves `false` when refused */
+  edit?: (messageId: string, content: string) => Promise<boolean> | boolean | void;
+  /** Thumbs up / down on answers */
+  feedback?: {
+    comments: boolean;
+    reasons: string[];
+    onSubmit: (messageId: string, input: FeedbackInput) => Promise<boolean> | boolean | void;
+  };
+}
 
 export interface ChatMessageListProps {
   /** Messages to display */
@@ -58,6 +74,12 @@ export interface ChatMessageListProps {
   interrupted?: boolean;
   /** Sends the interrupted message again; the notice offers a retry button only with it */
   onRetryInterrupted?: () => void;
+  /** The built-in buttons under the messages (copy, regenerate, edit, thumbs) */
+  toolbar?: ListToolbarConfig;
+  /** Regenerate and edit change the conversation: only while nothing runs and no card waits */
+  canAct?: boolean;
+  /** Label every answer as AI-generated with this text */
+  aiLabel?: string;
 }
 
 // A layout effect keeps the scroll position steady before the browser paints; on a server there is nothing to scroll
@@ -142,6 +164,9 @@ export function ChatMessageList({
   onLoadEarlier,
   interrupted = false,
   onRetryInterrupted,
+  toolbar,
+  canAct = false,
+  aiLabel,
 }: ChatMessageListProps) {
   const { t } = useI18n();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -175,6 +200,44 @@ export function ChatMessageList({
     }
   }, [messages, streamingText, activeToolCalls, autoScroll]);
 
+  /** The toolbar of one message: copy everywhere, the rest only where the action makes sense */
+  const toolbarFor = (message: Message, index: number) => {
+    if (!toolbar) return {};
+    const text = messageText(message.content).trim();
+    if (!text) return {};
+    // an answer this page wrote itself (a stopped turn the server has not stored yet) has no server id to act on
+    const local = message.metadata?.localOnly === true;
+    if (message.role === "assistant") {
+      if (message.status === "requires_action") return {};
+      const newest = index === messages.length - 1;
+      return {
+        toolbar: {
+          copy: toolbar.copy,
+          persistent: newest,
+          onRegenerate: newest && canAct && toolbar.regenerate && !local ? toolbar.regenerate : undefined,
+          feedback:
+            toolbar.feedback && !local
+              ? {
+                  comments: toolbar.feedback.comments,
+                  reasons: toolbar.feedback.reasons,
+                  current: readFeedback(message),
+                  onSubmit: (input: FeedbackInput) => toolbar.feedback!.onSubmit(message.id, input),
+                }
+              : undefined,
+        },
+      };
+    }
+    if (message.role === "user") {
+      const sending = Boolean(message.files?.some((f) => f.status));
+      const edit = canAct && toolbar.edit && !sending ? toolbar.edit : undefined;
+      return {
+        toolbar: { copy: toolbar.copy, onEdit: edit ? () => undefined : undefined },
+        onSaveEdit: edit ? (content: string) => edit(message.id, content) : undefined,
+      };
+    }
+    return {};
+  };
+
   const loadEarlier = () => {
     const container = containerRef.current;
     anchor.current = container ? { top: container.scrollTop, height: container.scrollHeight } : null;
@@ -183,8 +246,9 @@ export function ChatMessageList({
 
   if (messages.length === 0 && !isStreaming) {
     return (
-      <div className={cn("flex-1 flex items-center justify-center", className)}>
-        {emptyState || <DefaultEmptyState />}
+      // scrolls when a long welcome text does not fit; `min-h-full` keeps a short one centred
+      <div className={cn("flex-1 overflow-y-auto chat-scrollbar", className)}>
+        <div className="flex min-h-full items-center justify-center">{emptyState || <DefaultEmptyState />}</div>
       </div>
     );
   }
@@ -216,10 +280,12 @@ export function ChatMessageList({
           </div>
         )}
         {/* A stored message always shows what was stored; the turn being streamed is drawn below, never in one of them */}
-        {messages.map((message) => (
+        {messages.map((message, index) => (
           <ChatMessage
             key={message.id}
             message={message}
+            aiLabel={aiLabel}
+            {...toolbarFor(message, index)}
             renderActions={renderActions}
             renderAvatar={renderAvatar}
             showAvatar={showAvatars}
@@ -256,6 +322,7 @@ export function ChatMessageList({
             }}
             isStreaming={true}
             streamingText={streamingText}
+            aiLabel={aiLabel}
             renderAvatar={renderAvatar}
             showAvatar={showAvatars}
             enableCitations={enableCitations}
@@ -307,7 +374,7 @@ export function ChatMessageList({
 /**
  * Default empty state
  */
-function DefaultEmptyState() {
+export function DefaultEmptyState() {
   const { t } = useI18n();
   
   return (

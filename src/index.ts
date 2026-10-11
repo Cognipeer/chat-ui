@@ -5,6 +5,29 @@ export { ChatMessageList, type ChatMessageListProps } from "./components/chat";
 export { ChatInput, type ChatInputProps, type ChatInputHandle } from "./components/chat";
 export { ChatHistory, type ChatHistoryProps } from "./components/chat";
 export { BudgetBanner, type BudgetBannerProps } from "./components/chat";
+export {
+  AnnouncementBanner,
+  type AnnouncementBannerProps,
+  TermsGate,
+  type TermsGateProps,
+  LegalFooter,
+  type LegalFooterProps,
+  ChatEmptyState,
+  InfoMarkdown,
+  type ChatEmptyStateProps,
+  MessageToolbar,
+  type MessageToolbarProps,
+  type MessageToolbarConfig,
+  FeedbackSheet,
+  type FeedbackSheetProps,
+  MessageEditor,
+  type MessageEditorProps,
+  ExportMenu,
+  type ExportMenuProps,
+  NotificationsMenu,
+  type NotificationsMenuProps,
+  type ListToolbarConfig,
+} from "./components/chat";
 export { MessageStopNotice, MessageWarnings, InterruptedNotice, type MessageStopNoticeProps, type InterruptedNoticeProps } from "./components/chat";
 export { ToolCall, ToolCalls, type ToolCallProps, type ToolCallsProps } from "./components/chat";
 export { MessageActions, type MessageActionsProps } from "./components/chat";
@@ -21,6 +44,42 @@ export {
 export { useChat, type UseChatOptions, type UseChatReturn, type SendUserMessageOptions } from "./hooks";
 export { useChatHistory, type UseChatHistoryOptions, type UseChatHistoryReturn } from "./hooks";
 export { useI18n, type UseI18nReturn } from "./hooks";
+export {
+  useBackgroundAlerts,
+  formatBadgeTitle,
+  type BackgroundAlerts,
+  type BackgroundAlertsConfig,
+  type UseBackgroundAlertsOptions,
+} from "./hooks";
+
+// Embedding the chat in another page (iframe) with an identity token the host signs
+export {
+  EmbedChat,
+  EmbedBridge,
+  EMBED_PROTOCOL_VERSION,
+  EMBED_EVENTS,
+  MAX_TOKEN_CHARS,
+  MAX_CONTEXT_BYTES,
+  MAX_TOOL_OUTPUT_BYTES,
+  isAllowedOrigin,
+  normalizeOrigin,
+  parseHostMessage,
+  exchangeToken,
+  parseExchangeResponse,
+  renewalLeadMs,
+  type EmbedChatProps,
+  type EmbedClientToolDeclaration,
+  type EmbedSessionApi,
+  type EmbedBridgeOptions,
+  type BridgeRefusal,
+  type EmbedEventName,
+  type EmbedToHostMessage,
+  type HostToEmbedMessage,
+  type TokenRequestReason,
+  type EmbedSession,
+  type ExchangeError,
+  type ExchangeOptions,
+} from "./embed";
 
 // Providers
 export { ChatThemeProvider, useChatTheme, useChatThemeOptional } from "./providers";
@@ -58,6 +117,10 @@ export type {
   FollowEventsOptions,
   CancelResult,
   ListFilesResult,
+  EditMessageInput,
+  BulkDeleteResult,
+  ExportRequest,
+  ExportResult,
   UploadFileParams,
   ResolveInput,
   HttpOptions,
@@ -123,6 +186,24 @@ export type {
   ToolCallDisplayProps,
   Citation,
   CitationMark,
+  FeedbackRating,
+  FeedbackReasonId,
+  FeedbackInput,
+  MessageFeedback,
+  ConversationStarter,
+  Announcement,
+  AnnouncementSeverity,
+  LegalLinks,
+  DisclosureConfig,
+  MessageActionsConfig,
+  FeedbackConfig,
+  HistoryActionsConfig,
+  ExportFormat,
+  ExportConfig,
+  NotificationsConfig,
+  ClientToolCall,
+  ClientToolResult,
+  ChatController,
 } from "./types";
 
 // Icons
@@ -147,6 +228,12 @@ export {
   ThumbsUpIcon,
   ThumbsDownIcon,
   AlertIcon,
+  PencilIcon,
+  PinIcon,
+  DownloadIcon,
+  BellIcon,
+  InfoIcon,
+  ListCheckIcon,
 } from "./components/chat/Icons";
 
 // Utils
@@ -175,6 +262,25 @@ export { pendingActionFromWire, pendingActionsFromWire, resolutionToWire } from 
 export { validateAgainstSchema, type SchemaIssue } from "./utils/jsonSchema";
 export { localizeError, normalizeErrorCode, type CodedError } from "./utils/errors";
 export { safeImageSrc, safeFileHref } from "./utils/images";
+export {
+  normalizeStarters,
+  normalizeFeedback,
+  readFeedback,
+  activeAnnouncements,
+  safeLegalHref,
+  legalLinkEntries,
+  isPinned,
+  pinnedFirst,
+  resolveExperience,
+  DEFAULT_FEEDBACK_REASONS,
+  MAX_FEEDBACK_COMMENT,
+  MAX_STARTERS,
+  MAX_ANNOUNCEMENTS,
+  type Experience,
+  type ExperienceInput,
+} from "./utils/experience";
+export { conversationToMarkdown, conversationToJson, conversationToPrintHtml, exportFilename } from "./utils/export";
+export { copyText } from "./utils/clipboard";
 export {
   insertCitationMarkers,
   parseCitationHref,

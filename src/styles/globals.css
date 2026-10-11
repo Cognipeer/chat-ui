@@ -188,6 +188,33 @@
   @apply border-chat-border-primary my-4;
 }
 
+/*
+ * The row of buttons under a message (copy, edit, regenerate, thumbs): visible while the message is
+ * hovered or holds the keyboard focus, always on the newest message and on screens without hover.
+ */
+.chat-message-actions {
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.group:hover .chat-message-actions,
+.chat-message-actions:focus-within,
+.chat-message-actions[data-persist="true"] {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .chat-message-actions {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-message-actions {
+    transition: none;
+  }
+}
+
 /* Scrollbar styles */
 .chat-scrollbar::-webkit-scrollbar {
   @apply w-2;

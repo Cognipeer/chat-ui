@@ -103,6 +103,27 @@ import { Chat } from "@cognipeer/chat-ui";
 
 See [Usage limits](/guide/budgets) and [Running turns, Stop and reattach](/guide/runs).
 
+### Portal experience
+
+Every one of these is off until you switch it on. See [Portal Experience](/guide/portal-experience) for what each does and the requests behind it.
+
+| Prop | Type | Default | Description |
+| --- | --- | --- | --- |
+| `messageActions` | `{ copy?, regenerate?, edit? }` | off | Buttons under messages (regenerate and edit need a transport with `regenerateMessage` / `editMessage`) |
+| `feedback` | `boolean \| { enabled?, comments?, reasons? }` | off | Thumbs up / down with reasons and a comment (needs `sendFeedback`) |
+| `historyActions` | `{ rename?, pin?, bulkDelete? }` | off | Rename, pin and select-and-delete in the history |
+| `exportMenu` | `boolean \| { enabled?, formats?, includeTools? }` | off | Download the conversation as Markdown, JSON or PDF |
+| `notifications` | `{ tabBadge?, sound?, desktop? }` | off | Alerts while the tab is in the background |
+| `disclosure` | `{ aiLabel?, labelText?, links? }` | off | An AI label on answers and a row of legal links |
+| `footerText` | `string` | - | A short notice under the composer |
+| `announcements` | `Announcement[]` | - | Dismissible notices above the chat |
+| `onAnnouncementDismiss` | `(announcement) => void` | - | A person closed one |
+| `starters`, `welcome`, `welcomeImageHosts` | `ConversationStarter[]`, `string`, `string[]` | - | Suggested first messages and a Markdown welcome (an agent's `metadata.starters` / `metadata.welcome` win) |
+| `initialAgentId`, `initialInput`, `autoSend` | `string`, `string`, `boolean` | - | Deep links |
+| `controllerRef` | `Ref<ChatController>` | - | `prefill(text, { send })`, `newChat()`, `focus()` |
+| `onClientToolCall`, `getMessageMetadata` | `function` | - | Tools of an embedding page and extra message metadata, see [Embedding the Chat](/guide/embed) |
+| `onActionRequired`, `onFeedback` | `function` | - | An approval or question started waiting; a rating was taken |
+
 ### Callback Props
 
 | Prop | Type | Description |

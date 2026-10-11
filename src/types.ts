@@ -56,6 +56,11 @@ export interface Message {
    * shows what was decided. See `restorePendingActions`.
    */
   actionStates?: Record<string, ActionState>;
+  /**
+   * The signed-in person's rating of this answer (thumbs up / down with reasons). Read from
+   * `message.feedback` or `message.metadata.feedback`; kept by this app as the person rates.
+   */
+  feedback?: MessageFeedback;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -164,6 +169,20 @@ export type PendingAction =
       questions: UserQuestion[];
       allowFreeText?: boolean;
       expiresAt?: string;
+    }
+  | {
+      /**
+       * A tool the host page of an embedded chat runs (`embed.clientTools`). No card is drawn for it:
+       * `<EmbedChat>` hands the call to the host page and answers with its result.
+       */
+      id: string;
+      type: "client_tool";
+      toolName: string;
+      toolCallId?: string;
+      args?: Record<string, unknown>;
+      /** How long the host page has to answer, in seconds */
+      timeoutSeconds?: number;
+      expiresAt?: string;
     };
 
 export type ActionResolution =
@@ -178,6 +197,12 @@ export type ActionResolution =
       type: "user_question";
       answers: Record<string, string | string[]>;
       cancelled?: boolean;
+    }
+  | {
+      /** The host page's answer to a `client_tool` action: its JSON `output`, or an `error` text */
+      type: "client_tool";
+      output?: unknown;
+      error?: string;
     };
 
 export type MessageStatus = "completed" | "requires_action" | "incomplete" | "cancelled";
@@ -313,6 +338,9 @@ export interface ConversationListItem {
   runtime?: ConversationRuntime;
   budget?: ConversationBudget | null;
   spentUsd?: number;
+  /** Pinned conversations are listed first (`metadata.pinned` on the server) */
+  pinned?: boolean;
+  metadata?: Record<string, unknown>;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -332,6 +360,11 @@ export interface AgentInfo {
    * `allowedFileTypes`, `pendingActionComposerMode` (`"block"` | `"cancel"`),
    * `acceptsImages` (`false` warns on image attachments), `maxFilesScope` and
    * `fileRetentionDays`. `capabilities.attachments` says the same in one place and wins.
+   *
+   * The portal experience reads three more: `starters` (suggested first messages, see
+   * `ConversationStarter`), `welcome` (Markdown shown on the empty chat) and `experience` (an
+   * object whose `messageActions`, `feedback`, `history`, `export`, `notifications` and
+   * `disclosure` keys override the matching `<Chat>` props).
    */
   metadata?: Record<string, unknown>;
   /** What the agent can pause for or take; absent when the server does not say */
@@ -448,7 +481,7 @@ export interface StreamActionResolvedEvent extends StreamEventBase {
   conversationId: string;
   actionId: string;
   resolution: {
-    type: "tool_approval" | "user_question";
+    type: "tool_approval" | "user_question" | "client_tool";
     decision?: "allow" | "deny";
     cancelled?: boolean;
   };
@@ -497,6 +530,141 @@ export type StreamEvent =
   | StreamActionRequiredEvent
   | StreamActionResolvedEvent
   | StreamDoneEvent;
+
+// ============================================================================
+// Portal experience types
+// ============================================================================
+
+/** Thumbs up / down on an answer. */
+export type FeedbackRating = "up" | "down";
+
+/** The reasons offered with a thumbs-down (each has a `chat.feedback.reason.<id>` string). */
+export type FeedbackReasonId = "inaccurate" | "incomplete" | "off_topic" | "too_long" | "unsafe" | "other";
+
+/** A person's rating of one answer. */
+export interface MessageFeedback {
+  rating: FeedbackRating;
+  reasons?: string[];
+  comment?: string;
+}
+
+/** What `ChatTransport.sendFeedback` is given. `rating: null` withdraws the rating. */
+export interface FeedbackInput {
+  rating: FeedbackRating | null;
+  reasons?: string[];
+  comment?: string;
+}
+
+/** A suggested first message, shown as a chip on the empty chat. */
+export interface ConversationStarter {
+  /** The message the chip puts in the composer (or sends, with `autoSend`) */
+  text: string;
+  /** What the chip says, when shorter than `text` */
+  label?: string;
+  /** Send at once instead of only filling the composer (default false) */
+  autoSend?: boolean;
+}
+
+export type AnnouncementSeverity = "info" | "warning" | "critical";
+
+/** A dismissible notice above the chat (maintenance, a new agent, a policy change). */
+export interface Announcement {
+  id: string;
+  severity?: AnnouncementSeverity;
+  /** Short Markdown */
+  text: string;
+  /** ISO 8601; shown from this moment on */
+  startsAt?: string;
+  /** ISO 8601; hidden after this moment */
+  endsAt?: string;
+  /** Default true */
+  dismissible?: boolean;
+}
+
+/** Links of the legal footer. `mailto:` is allowed for `support`. */
+export interface LegalLinks {
+  privacy?: string;
+  terms?: string;
+  support?: string;
+  aboutAi?: string;
+}
+
+/** AI disclosure: a label on every answer and a row of legal links under the composer. */
+export interface DisclosureConfig {
+  /** Label answers as AI-generated (default false) */
+  aiLabel?: boolean;
+  /** Replaces the localized "AI-generated" text */
+  labelText?: string;
+  links?: LegalLinks;
+}
+
+/** Which actions the toolbar under a message offers. */
+export interface MessageActionsConfig {
+  /** Copy the text of a message */
+  copy?: boolean;
+  /** Run the last answer again (needs a transport with `regenerateMessage`) */
+  regenerate?: boolean;
+  /** Edit one of your messages and send it again (needs a transport with `editMessage`) */
+  edit?: boolean;
+}
+
+/** Thumbs up / down on answers. */
+export interface FeedbackConfig {
+  enabled?: boolean;
+  /** Offer the free-text comment with a thumbs-down (default true) */
+  comments?: boolean;
+  /** The reasons offered (default: all of `FeedbackReasonId`) */
+  reasons?: string[];
+}
+
+/** What the history sidebar lets the person do besides open and delete one conversation. */
+export interface HistoryActionsConfig {
+  rename?: boolean;
+  pin?: boolean;
+  bulkDelete?: boolean;
+}
+
+export type ExportFormat = "md" | "json" | "pdf";
+
+/** Download a conversation as a file. */
+export interface ExportConfig {
+  enabled?: boolean;
+  /** Default: all three */
+  formats?: ExportFormat[];
+  /** Include the tool calls and their results (default false) */
+  includeTools?: boolean;
+}
+
+/** Alerts while the tab is in the background and a turn finished or an approval waits. */
+export interface NotificationsConfig {
+  /** Put "(1)" in front of the tab title */
+  tabBadge?: boolean;
+  /** A short sound (the person can mute it in the bell menu) */
+  sound?: boolean;
+  /** `opt_in`: the bell menu offers desktop notifications; the permission is asked only when the person turns them on */
+  desktop?: "off" | "opt_in";
+}
+
+/** The host page's answer to a tool call (`<Chat onClientToolCall>`). */
+export type ClientToolResult = { ok: true; output?: unknown } | { ok: false; error: string };
+
+/** A call the agent made to a tool of the host page. */
+export interface ClientToolCall {
+  actionId: string;
+  toolCallId?: string;
+  name: string;
+  args: Record<string, unknown>;
+  timeoutSeconds?: number;
+}
+
+/** What a host can do to a running `<Chat>` (see its `controllerRef` prop). */
+export interface ChatController {
+  /** Put text in the composer; with `send` it is sent at once */
+  prefill: (text: string, options?: { send?: boolean }) => void;
+  /** Start a new, empty conversation */
+  newChat: () => void;
+  focus: () => void;
+}
 
 // ============================================================================
 // Theme Types
@@ -690,6 +858,14 @@ export interface ChatCallbacks {
     actionId: string;
     action?: PendingAction;
     resolution: ActionResolution;
+  }) => void;
+  /** Called when a turn pauses for an approval or a question (not for a host-page tool, which has no card) */
+  onActionRequired?: (info: { conversationId: string; action: PendingAction }) => void;
+  /** Called after the person rated an answer (and again when they change or withdraw the rating) */
+  onFeedback?: (info: {
+    conversationId: string;
+    messageId: string;
+    feedback: MessageFeedback | null;
   }) => void;
 }
 

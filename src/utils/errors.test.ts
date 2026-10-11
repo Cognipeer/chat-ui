@@ -69,6 +69,8 @@ describe("the strings behind the codes", () => {
     "nothing_to_continue", "budget_forbidden", "invalid_budget", "budget_unavailable", "budget_misconfigured",
     "run_interrupted", "identity_required", "payload_too_large", "authorization_error", "conversation_conflict",
     "lease_lost", "storage_limit_exceeded",
+    "not_latest_message", "message_not_found", "message_not_editable", "invalid_rating", "feedback_disabled",
+    "export_disabled", "too_many_ids",
   ];
 
   it.each(Object.entries({ en, tr }))("%s has a message for every code", (_locale, messages) => {

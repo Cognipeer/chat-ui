@@ -11,9 +11,11 @@ import {
   citationUrlTransform,
 } from "../../utils/citations";
 import type { Message, MessageActionProps, FileAttachment, Citation, StopNoticeRenderProps } from "../../types";
-import { FileIcon, ImageIcon, LoadingIcon } from "./Icons";
+import { FileIcon, ImageIcon, InfoIcon, LoadingIcon } from "./Icons";
 import { ToolCalls } from "./ToolCall";
 import { MessageActionCards, type ChatActionsConfig } from "./ActionCards";
+import { MessageToolbar, type MessageToolbarConfig } from "./MessageToolbar";
+import { MessageEditor } from "./MessageEditor";
 import { MessageStopNotice, MessageWarnings } from "./StopNotice";
 import { useI18n } from "../../hooks";
 
@@ -62,6 +64,15 @@ export interface ChatMessageProps {
    * conversation): images are fetched this way to be shown, other files when "Download" is pressed.
    */
   resolveFileUrl?: ResolveFileUrl;
+  /** The built-in row of buttons under the message (copy, regenerate, edit, thumbs) */
+  toolbar?: MessageToolbarConfig;
+  /**
+   * Edit-and-resend of one of the person's messages: `toolbar.onEdit` opens the editor, and this
+   * receives the new text. Resolves `false` when it was refused (the editor stays open).
+   */
+  onSaveEdit?: (content: string) => Promise<boolean> | boolean | void;
+  /** Label this message as AI-generated with this text (assistant messages only) */
+  aiLabel?: string;
 }
 
 /**
@@ -81,7 +92,11 @@ export function ChatMessage({
   renderImage,
   renderStopNotice,
   resolveFileUrl,
+  toolbar,
+  onSaveEdit,
+  aiLabel,
 }: ChatMessageProps) {
+  const [editing, setEditing] = React.useState(false);
   const isUser = message.role === "user";
   const isAssistant = message.role === "assistant";
   const content = isStreaming && streamingText ? streamingText : messageText(message.content);
@@ -103,6 +118,9 @@ export function ChatMessage({
     }),
     [message.citations]
   );
+
+  // A turn that only paused for a tool of the host page has nothing to show: the page answers it unseen
+  if (isAssistant && !isStreaming && isHostToolPauseOnly(message, content, images.length)) return null;
 
   return (
     <div
@@ -130,8 +148,21 @@ export function ChatMessage({
           <MessageToolCalls message={message} />
         )}
 
+        {/* Editing one of the person's messages */}
+        {isUser && editing && onSaveEdit && (
+          <MessageEditor
+            initial={content}
+            onCancel={() => setEditing(false)}
+            onSave={async (next) => {
+              const ok = await onSaveEdit(next);
+              if (ok !== false) setEditing(false);
+              return ok !== false;
+            }}
+          />
+        )}
+
         {/* Message content (a turn that only paused for an answer has none) */}
-        {(renderedContent || isStreaming || !isAssistant || !message.pendingActions?.length) && (
+        {!(isUser && editing) && (renderedContent || isStreaming || !isAssistant || !message.pendingActions?.length) && (
           <div className="chat-markdown">
             <ReactMarkdown
               remarkPlugins={[remarkGfm]}
@@ -175,6 +206,24 @@ export function ChatMessage({
           </div>
         )}
 
+        {/* Labelled as machine-written, where the host asked for it */}
+        {isAssistant && aiLabel && (
+          <div data-chat-ai-label className="mt-1 inline-flex items-center gap-1 text-[11px] text-chat-text-tertiary">
+            <InfoIcon className="h-3 w-3" />
+            <span>{aiLabel}</span>
+          </div>
+        )}
+
+        {/* Built-in actions: copy, edit, regenerate, thumbs */}
+        {!isStreaming && toolbar && !(isUser && editing) && (
+          <MessageToolbar
+            {...toolbar}
+            onEdit={toolbar.onEdit ? () => setEditing(true) : undefined}
+            text={content}
+            className="mt-1"
+          />
+        )}
+
         {/* Custom actions slot */}
         {isAssistant && !isStreaming && renderActions && (
           <div className="mt-2 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -184,6 +233,13 @@ export function ChatMessage({
       </div>
     </div>
   );
+}
+
+/** An answer that is only the pause for the host page's tools: no words, no files, no calls, no cards of its own. */
+function isHostToolPauseOnly(message: Message, text: string, imageCount: number): boolean {
+  const actions = message.pendingActions;
+  if (!actions || actions.length === 0 || !actions.every((a) => a.type === "client_tool")) return false;
+  return text.trim() === "" && imageCount === 0 && !(message.files && message.files.length > 0) && !hasToolCalls(message) && !message.stopReason;
 }
 
 /**

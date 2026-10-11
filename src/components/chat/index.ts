@@ -16,3 +16,13 @@ export {
 export { BudgetBanner, type BudgetBannerProps } from "./BudgetBanner";
 export { MessageStopNotice, MessageWarnings, InterruptedNotice, type MessageStopNoticeProps, type InterruptedNoticeProps } from "./StopNotice";
 export * from "./Icons";
+export { AnnouncementBanner, type AnnouncementBannerProps } from "./AnnouncementBanner";
+export { TermsGate, type TermsGateProps } from "./TermsGate";
+export { LegalFooter, type LegalFooterProps } from "./LegalFooter";
+export { ChatEmptyState, InfoMarkdown, type ChatEmptyStateProps } from "./ChatEmptyState";
+export { MessageToolbar, type MessageToolbarProps, type MessageToolbarConfig } from "./MessageToolbar";
+export { FeedbackSheet, type FeedbackSheetProps } from "./FeedbackSheet";
+export { MessageEditor, type MessageEditorProps } from "./MessageEditor";
+export { ExportMenu, type ExportMenuProps } from "./ExportMenu";
+export { NotificationsMenu, type NotificationsMenuProps } from "./NotificationsMenu";
+export type { ListToolbarConfig } from "./ChatMessageList";

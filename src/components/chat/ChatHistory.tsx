@@ -1,10 +1,11 @@
 "use client";
 
-import React, { useMemo, useRef, useState } from "react";
-import { cn, formatRelativeTime, isBudgetExhausted } from "../../utils";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { cn, formatRelativeTime, isBudgetExhausted, isPinned, pinnedFirst } from "../../utils";
 import type { ConversationListItem, RuntimeStatus } from "../../types";
-import { ChatIcon, TrashIcon, PlusIcon, SearchIcon, XIcon } from "./Icons";
+import { ChatIcon, TrashIcon, PlusIcon, SearchIcon, XIcon, PencilIcon, PinIcon, ListCheckIcon } from "./Icons";
 import { useI18n } from "../../hooks";
+import { FOCUS_RING, PRIMARY_BUTTON, SECONDARY_BUTTON } from "./styles";
 
 export interface ChatHistoryProps {
   /** Conversations list */
@@ -19,6 +20,21 @@ export interface ChatHistoryProps {
   onSelect: (conversation: ConversationListItem) => void;
   /** Callback when deleting a conversation */
   onDelete?: (conversationId: string) => void;
+  /**
+   * Rename a conversation in place (a pencil button, F2, or a double click on the title). Resolves
+   * `false` when the new title was refused. Without it the title cannot be edited.
+   */
+  onRename?: (conversationId: string, title: string) => Promise<boolean | void> | boolean | void;
+  /** Pin or unpin a conversation; pinned ones are listed first. Without it there is no pin button. */
+  onPin?: (conversationId: string, pinned: boolean) => Promise<boolean | void> | boolean | void;
+  /**
+   * Select several conversations and delete them together (after a confirmation). Resolves with the
+   * ids that could not be deleted. Without it there is no select mode.
+   */
+  onBulkDelete?: (ids: string[]) => Promise<{ deleted: string[]; failed: string[] } | void> | { deleted: string[]; failed: string[] } | void;
+  /** What went wrong with a rename, a pin or a bulk delete (shown under the list) */
+  error?: string;
+  onDismissError?: () => void;
   /** Callback when creating a new conversation */
   onNewChat?: () => void;
   /** Callback when loading more */
@@ -95,10 +111,61 @@ export function ChatHistory({
   showAgentName = false,
   showStatus = true,
   selectedStatus,
+  onRename,
+  onPin,
+  onBulkDelete,
+  error,
+  onDismissError,
 }: ChatHistoryProps) {
   const { t } = useI18n();
   const [searchQuery, setSearchQuery] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
+  // Select mode (bulk delete)
+  const [selecting, setSelecting] = useState(false);
+  const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
+  const [confirming, setConfirming] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+
+  // A conversation that is gone from the list cannot stay selected
+  useEffect(() => {
+    setSelected((current) => {
+      const ids = new Set(conversations.map((c) => c.id));
+      const kept = Array.from(current).filter((id) => ids.has(id));
+      return kept.length === current.size ? current : new Set(kept);
+    });
+  }, [conversations]);
+
+  const leaveSelecting = () => {
+    setSelecting(false);
+    setConfirming(false);
+    setSelected(new Set());
+  };
+
+  const toggleSelected = (id: string) => {
+    setConfirming(false);
+    setSelected((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const runBulkDelete = async () => {
+    if (!onBulkDelete || selected.size === 0) return;
+    setDeleting(true);
+    try {
+      const outcome = await onBulkDelete(Array.from(selected));
+      const failed = outcome && typeof outcome === "object" ? outcome.failed : [];
+      // what could not be deleted stays selected, so the person can try again
+      setConfirming(false);
+      if (failed.length > 0) setSelected(new Set(failed));
+      else leaveSelecting();
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   // Arrow keys move between the rows (each row is a real button, so Tab, Enter and Space work as well)
   const handleListKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
@@ -118,15 +185,15 @@ export function ChatHistory({
 
   const normalizedQuery = searchQuery.trim().toLowerCase();
   const filteredConversations = useMemo(() => {
-    if (!normalizedQuery) {
-      return conversations;
-    }
-
-    return conversations.filter((conversation) => {
-      const title = (conversation.title || t("chat.history.newChat")).toLowerCase();
-      return title.includes(normalizedQuery);
-    });
-  }, [conversations, normalizedQuery]);
+    const matching = !normalizedQuery
+      ? conversations
+      : conversations.filter((conversation) => {
+          const title = (conversation.title || t("chat.history.newChat")).toLowerCase();
+          return title.includes(normalizedQuery);
+        });
+    // pinned conversations are listed first (the order inside each group is the server's)
+    return onPin || matching.some(isPinned) ? pinnedFirst(matching) : matching;
+  }, [conversations, normalizedQuery, onPin]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <>
@@ -191,6 +258,66 @@ export function ChatHistory({
           </div>
         )}
 
+        {/* Select mode: bulk delete */}
+        {onBulkDelete && conversations.length > 0 && (
+          <div className="flex-shrink-0 border-b border-chat-border-primary px-3 py-1.5">
+            {!selecting ? (
+              <button
+                type="button"
+                onClick={() => setSelecting(true)}
+                className={cn("inline-flex items-center gap-1.5 rounded px-1.5 py-1 text-xs text-chat-text-secondary hover:bg-chat-bg-hover", FOCUS_RING)}
+              >
+                <ListCheckIcon className="h-3.5 w-3.5" />
+                {t("chat.history.select")}
+              </button>
+            ) : (
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between gap-2 text-xs text-chat-text-secondary">
+                  <span role="status" aria-live="polite">{t("chat.history.selectedCount", { count: selected.size })}</span>
+                  <span className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      className={cn("rounded px-1.5 py-1 hover:bg-chat-bg-hover", FOCUS_RING)}
+                      onClick={() => {
+                        setConfirming(false);
+                        setSelected(selected.size === filteredConversations.length ? new Set() : new Set(filteredConversations.map((c) => c.id)));
+                      }}
+                    >
+                      {selected.size === filteredConversations.length && filteredConversations.length > 0 ? t("chat.history.selectNone") : t("chat.history.selectAll")}
+                    </button>
+                    <button type="button" className={cn("rounded px-1.5 py-1 hover:bg-chat-bg-hover", FOCUS_RING)} onClick={leaveSelecting} disabled={deleting}>
+                      {t("chat.history.selectDone")}
+                    </button>
+                  </span>
+                </div>
+                {!confirming ? (
+                  <button
+                    type="button"
+                    disabled={selected.size === 0}
+                    onClick={() => setConfirming(true)}
+                    className={cn(SECONDARY_BUTTON, "w-full !text-chat-danger")}
+                  >
+                    <TrashIcon className="h-3.5 w-3.5" />
+                    {t("chat.history.deleteSelected", { count: selected.size })}
+                  </button>
+                ) : (
+                  <div role="alertdialog" aria-label={t("chat.history.confirmDeleteTitle")} className="rounded-lg border border-chat-danger bg-chat-danger-bg p-2 text-xs text-chat-text-primary">
+                    <p className="mb-2">{t("chat.history.confirmDelete", { count: selected.size })}</p>
+                    <div className="flex gap-2">
+                      <button type="button" autoFocus className={cn(PRIMARY_BUTTON, "!bg-chat-danger")} disabled={deleting} onClick={runBulkDelete}>
+                        {deleting ? t("chat.history.deleting") : t("chat.history.confirmDeleteYes")}
+                      </button>
+                      <button type="button" className={SECONDARY_BUTTON} disabled={deleting} onClick={() => setConfirming(false)}>
+                        {t("chat.history.confirmDeleteNo")}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Conversation list */}
         <div className="flex-1 overflow-y-auto chat-scrollbar">
           {filteredConversations.length === 0 && !isLoading ? (
@@ -207,6 +334,14 @@ export function ChatHistory({
                     isSelected={conversation.id === selectedId}
                     onSelect={() => onSelect(conversation)}
                     onDelete={onDelete ? () => onDelete(conversation.id) : undefined}
+                    onRename={onRename ? (title) => onRename(conversation.id, title) : undefined}
+                    onPin={onPin ? (pinned) => onPin(conversation.id, pinned) : undefined}
+                    selecting={selecting}
+                    checked={selected.has(conversation.id)}
+                    onToggle={() => toggleSelected(conversation.id)}
+                    renaming={renamingId === conversation.id}
+                    onRenameStart={() => setRenamingId(conversation.id)}
+                    onRenameEnd={() => setRenamingId((current) => (current === conversation.id ? null : current))}
                     showAgentName={showAgentName}
                     badge={
                       showStatus
@@ -240,6 +375,19 @@ export function ChatHistory({
           )}
         </div>
 
+        {error && (
+          <div role="alert" className="flex-shrink-0 border-t border-chat-border-primary bg-chat-danger-bg px-3 py-2 text-xs text-chat-danger">
+            <div className="flex items-start justify-between gap-2">
+              <span className="min-w-0 break-words">{error}</span>
+              {onDismissError && (
+                <button type="button" onClick={onDismissError} className={cn("flex-shrink-0 rounded p-0.5", FOCUS_RING)} aria-label={t("chat.error.dismiss")}>
+                  <XIcon className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Footer */}
         {footer && (
           <div className="flex-shrink-0 border-t border-chat-border-primary">
@@ -252,13 +400,22 @@ export function ChatHistory({
 }
 
 /**
- * Individual conversation item: a button to open it, and - beside it, not inside it - a button to delete it
+ * Individual conversation item: a button to open it, and - beside it, not inside it - the buttons that
+ * pin, rename or delete it. In select mode the row is a checkbox instead.
  */
 interface ConversationItemProps {
   conversation: ConversationListItem;
   isSelected: boolean;
   onSelect: () => void;
   onDelete?: () => void;
+  onRename?: (title: string) => Promise<boolean | void> | boolean | void;
+  onPin?: (pinned: boolean) => Promise<boolean | void> | boolean | void;
+  selecting?: boolean;
+  checked?: boolean;
+  onToggle?: () => void;
+  renaming?: boolean;
+  onRenameStart?: () => void;
+  onRenameEnd?: () => void;
   showAgentName?: boolean;
   badge?: BadgeKind;
 }
@@ -268,76 +425,195 @@ function ConversationItem({
   isSelected,
   onSelect,
   onDelete,
+  onRename,
+  onPin,
+  selecting = false,
+  checked = false,
+  onToggle,
+  renaming = false,
+  onRenameStart,
+  onRenameEnd,
   showAgentName = false,
   badge,
 }: ConversationItemProps) {
   const { t } = useI18n();
   const title = conversation.title || t("chat.history.newChat");
+  const pinned = isPinned(conversation);
+  const actionCount = selecting ? 0 : [onDelete, onRename, onPin].filter(Boolean).length;
+  const hasActions = actionCount > 0;
+  // visible on hover, and for a keyboard user as soon as the row or the button has focus
+  const reveal = "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100";
+
+  const body = (
+    <>
+      {pinned ? (
+        <PinIcon className="w-4 h-4 text-chat-accent-primary flex-shrink-0" />
+      ) : (
+        <ChatIcon className="w-4 h-4 text-chat-text-tertiary flex-shrink-0" />
+      )}
+      <span className="flex-1 min-w-0">
+        <span className="block text-sm text-chat-text-primary truncate">{title}</span>
+        <span className="flex items-center gap-1 min-w-0 text-xs text-chat-text-tertiary">
+          {conversation.agentName && showAgentName && (
+            <>
+              <span className="truncate">{conversation.agentName}</span>
+              <span className="flex-shrink-0 opacity-50">·</span>
+            </>
+          )}
+          <span className="flex-shrink-0">{formatRelativeTime(new Date(conversation.updatedAt))}</span>
+        </span>
+      </span>
+      {badge && (
+        <span
+          data-chat-status={badge}
+          className={cn(
+            "inline-flex flex-shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium leading-none",
+            BADGE_TONE[badge]
+          )}
+        >
+          <span
+            aria-hidden="true"
+            className={cn("h-1.5 w-1.5 rounded-full bg-current", badge === "running" && "animate-pulse motion-reduce:animate-none")}
+          />
+          <span>{t(BADGE_LABEL[badge])}</span>
+        </span>
+      )}
+    </>
+  );
 
   return (
     <li
       className={cn(
         "group relative flex items-center rounded-lg transition-colors",
-        isSelected ? "bg-chat-bg-hover" : "hover:bg-chat-bg-tertiary"
+        isSelected && !selecting ? "bg-chat-bg-hover" : "hover:bg-chat-bg-tertiary"
       )}
     >
-      <button
-        type="button"
-        data-chat-conversation={conversation.id}
-        aria-current={isSelected ? "true" : undefined}
-        onClick={onSelect}
-        className={cn(
-          "flex min-w-0 flex-1 items-center gap-2 rounded-lg px-3 py-2 text-left",
-          onDelete && "pr-9",
-          "focus:outline-none focus-visible:ring-2 focus-visible:ring-chat-accent-primary"
-        )}
-      >
-        <ChatIcon className="w-4 h-4 text-chat-text-tertiary flex-shrink-0" />
-        <span className="flex-1 min-w-0">
-          <span className="block text-sm text-chat-text-primary truncate">{title}</span>
-          <span className="flex items-center gap-1 min-w-0 text-xs text-chat-text-tertiary">
-            {conversation.agentName && showAgentName && (
-              <>
-                <span className="truncate">{conversation.agentName}</span>
-                <span className="flex-shrink-0 opacity-50">·</span>
-              </>
-            )}
-            <span className="flex-shrink-0">{formatRelativeTime(new Date(conversation.updatedAt))}</span>
-          </span>
-        </span>
-        {badge && (
-          <span
-            data-chat-status={badge}
-            className={cn(
-              "inline-flex flex-shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium leading-none",
-              BADGE_TONE[badge]
-            )}
-          >
-            <span
-              aria-hidden="true"
-              className={cn("h-1.5 w-1.5 rounded-full bg-current", badge === "running" && "animate-pulse motion-reduce:animate-none")}
-            />
-            <span>{t(BADGE_LABEL[badge])}</span>
-          </span>
-        )}
-      </button>
-      {onDelete && (
+      {selecting ? (
+        <label className={cn("flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-lg px-3 py-2", checked && "bg-chat-bg-hover")}>
+          <input
+            type="checkbox"
+            data-chat-conversation={conversation.id}
+            checked={checked}
+            onChange={onToggle}
+            aria-label={title}
+            className="h-4 w-4 flex-shrink-0 accent-[var(--chat-accent-primary)]"
+          />
+          {body}
+        </label>
+      ) : renaming && onRename ? (
+        <RenameField
+          initial={conversation.title ?? ""}
+          onDone={async (next) => {
+            // an unchanged or empty title just closes the field
+            if (next !== null && next.trim() !== "" && next.trim() !== (conversation.title ?? "")) await onRename(next.trim());
+            onRenameEnd?.();
+          }}
+        />
+      ) : (
         <button
           type="button"
-          onClick={onDelete}
+          data-chat-conversation={conversation.id}
+          aria-current={isSelected ? "true" : undefined}
+          onClick={onSelect}
+          onDoubleClick={onRename ? onRenameStart : undefined}
+          onKeyDown={(event) => {
+            if (event.key === "F2" && onRename) {
+              event.preventDefault();
+              onRenameStart?.();
+            }
+          }}
           className={cn(
-            "absolute right-1 top-1/2 -translate-y-1/2 rounded p-1 transition-all",
-            // visible on hover, and for a keyboard user as soon as the row or the button has focus
-            "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100",
-            "hover:bg-chat-bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-chat-accent-primary"
+            "flex min-w-0 flex-1 items-center gap-2 rounded-lg px-3 py-2 text-left",
+            actionCount === 1 && "pr-9",
+            actionCount === 2 && "pr-16",
+            actionCount >= 3 && "pr-24",
+            "focus:outline-none focus-visible:ring-2 focus-visible:ring-chat-accent-primary"
           )}
-          title={t("chat.history.deleteConversation")}
-          aria-label={`${t("chat.history.deleteConversation")}: ${title}`}
         >
-          <TrashIcon className="w-4 h-4 text-chat-text-tertiary hover:text-chat-danger" />
+          {body}
         </button>
       )}
+      {hasActions && !renaming && (
+        <div className="absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5">
+          {onPin && (
+            <button
+              type="button"
+              onClick={() => onPin(!pinned)}
+              aria-pressed={pinned}
+              className={cn("rounded p-1 transition-all hover:bg-chat-bg-hover", reveal, FOCUS_RING)}
+              title={pinned ? t("chat.history.unpin") : t("chat.history.pin")}
+              aria-label={`${pinned ? t("chat.history.unpin") : t("chat.history.pin")}: ${title}`}
+            >
+              <PinIcon className={cn("w-4 h-4", pinned ? "text-chat-accent-primary" : "text-chat-text-tertiary")} />
+            </button>
+          )}
+          {onRename && (
+            <button
+              type="button"
+              onClick={onRenameStart}
+              className={cn("rounded p-1 transition-all hover:bg-chat-bg-hover", reveal, FOCUS_RING)}
+              title={t("chat.history.rename")}
+              aria-label={`${t("chat.history.rename")}: ${title}`}
+            >
+              <PencilIcon className="w-4 h-4 text-chat-text-tertiary" />
+            </button>
+          )}
+          {onDelete && (
+            <button
+              type="button"
+              onClick={onDelete}
+              className={cn("rounded p-1 transition-all hover:bg-chat-bg-hover", reveal, FOCUS_RING)}
+              title={t("chat.history.deleteConversation")}
+              aria-label={`${t("chat.history.deleteConversation")}: ${title}`}
+            >
+              <TrashIcon className="w-4 h-4 text-chat-text-tertiary hover:text-chat-danger" />
+            </button>
+          )}
+        </div>
+      )}
     </li>
+  );
+}
+
+/** The title of a row while it is renamed: Enter or leaving the field saves, Escape keeps the old title. */
+function RenameField({ initial, onDone }: { initial: string; onDone: (title: string | null) => void | Promise<void> }) {
+  const { t } = useI18n();
+  const [value, setValue] = useState(initial);
+  const settled = useRef(false);
+  const ref = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    ref.current?.focus();
+    ref.current?.select();
+  }, []);
+
+  const finish = (title: string | null) => {
+    if (settled.current) return;
+    settled.current = true;
+    void onDone(title);
+  };
+
+  return (
+    <input
+      ref={ref}
+      type="text"
+      value={value}
+      maxLength={200}
+      aria-label={t("chat.history.renameLabel")}
+      onChange={(event) => setValue(event.target.value)}
+      onBlur={() => finish(value)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          finish(value);
+        } else if (event.key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+          finish(null);
+        }
+      }}
+      className="mx-1 min-w-0 flex-1 rounded-md border border-chat-accent-primary bg-chat-bg-tertiary px-2 py-1.5 text-sm text-chat-text-primary focus:outline-none"
+    />
   );
 }
 

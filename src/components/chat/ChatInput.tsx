@@ -9,6 +9,8 @@ import { useI18n } from "../../hooks";
 export interface ChatInputHandle {
   /** Programmatically focus the textarea */
   focus: () => void;
+  /** Put text in the composer (replacing what is there) and move the caret to its end */
+  setValue: (text: string, options?: { focus?: boolean }) => void;
 }
 
 export interface ChatInputProps {
@@ -51,6 +53,8 @@ export interface ChatInputProps {
   imagesIgnored?: boolean;
   /** Whether input is disabled */
   disabled?: boolean;
+  /** Content under the helper text (a row of legal links) */
+  footer?: React.ReactNode;
   /** Custom class name */
   className?: string;
   /** Render custom send button */
@@ -116,6 +120,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   retentionDays,
   imagesIgnored = false,
   disabled = false,
+  footer,
   className,
   renderSendButton,
   renderStopButton,
@@ -174,6 +179,16 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   useImperativeHandle(ref, () => ({
     focus: () => {
       textareaRef.current?.focus();
+    },
+    setValue: (text: string, options?: { focus?: boolean }) => {
+      restoreRef.current = true; // the textarea grows to fit the new text
+      setValue(text);
+      if (options?.focus !== false) {
+        const field = textareaRef.current;
+        field?.focus();
+        // the caret goes to the end once the value is in
+        setTimeout(() => field?.setSelectionRange(text.length, text.length), 0);
+      }
     },
   }), []);
 
@@ -553,6 +568,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
             ? ` · ${t("chat.input.fileRetention", { days: retentionDays })}`
             : ""}
         </div>
+        {footer}
       </div>
     </div>
   );

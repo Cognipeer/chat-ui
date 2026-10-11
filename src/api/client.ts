@@ -11,11 +11,17 @@ import type {
   ChatConfig,
   PendingAction,
   ActionResolution,
+  FeedbackInput,
+  MessageFeedback,
 } from "../types";
 import type {
+  BulkDeleteResult,
   CancelResult,
   ChatTransport,
   ContinueOptions,
+  EditMessageInput,
+  ExportRequest,
+  ExportResult,
   FollowEventsOptions,
   GetConversationOptions,
   ListFilesResult,
@@ -35,6 +41,8 @@ import {
 } from "./http";
 import { normalizeBudget, normalizeMessagesPage, normalizeRuntime, readContinuable } from "../utils/runtime";
 import { fileFromRecord, uploadMimeType } from "../utils/files";
+import { normalizeFeedback } from "../utils/experience";
+import { filenameFromDisposition, exportFilename } from "../utils/export";
 
 /** How `followEvents` reconnects after losing the connection. */
 export interface FollowReconnectOptions {
@@ -202,7 +210,10 @@ export class AgentServerClient implements ChatTransport {
       conversations: (page.conversations ?? []).map((item) => {
         const { runtime: rawRuntime, ...rest } = item;
         const runtime = normalizeRuntime(rawRuntime);
-        return runtime ? { ...rest, runtime } : rest;
+        // `metadata.pinned` is how the server stores a pin; the list item carries it as `pinned`
+        const pinned = rest.pinned === true || rest.metadata?.pinned === true;
+        const normalized = pinned ? { ...rest, pinned: true } : rest;
+        return runtime ? { ...normalized, runtime } : normalized;
       }),
     };
   }
@@ -299,6 +310,62 @@ export class AgentServerClient implements ChatTransport {
     await this.request("DELETE", `/conversations/${conversationId}`);
   }
 
+  /** Change a conversation's title (`PATCH /conversations/:id`). */
+  async renameConversation(conversationId: string, title: string): Promise<void> {
+    await this.updateConversation(conversationId, { title });
+  }
+
+  /** Pin or unpin a conversation: `metadata.pinned` is what the history sorts by. */
+  async pinConversation(conversationId: string, pinned: boolean): Promise<void> {
+    await this.updateConversation(conversationId, { metadata: { pinned } });
+  }
+
+  /**
+   * Delete several conversations (`POST /conversations/bulk-delete`, at most 100 per call; more
+   * are sent in turns). A server without the route (404 / 405 / 501) is served one by one.
+   */
+  async deleteConversations(ids: string[]): Promise<BulkDeleteResult> {
+    const result: BulkDeleteResult = { deleted: [], failed: [] };
+    for (let at = 0; at < ids.length; at += 100) {
+      const chunk = ids.slice(at, at + 100);
+      try {
+        const body = await this.request<{ deleted?: unknown; failed?: unknown } | undefined>("POST", "/conversations/bulk-delete", { ids: chunk });
+        const deleted = Array.isArray(body?.deleted) ? body!.deleted.filter((id): id is string => typeof id === "string") : [];
+        const failed = Array.isArray(body?.failed)
+          ? body!.failed.flatMap((entry) => {
+              if (typeof entry === "string") return [{ id: entry }];
+              const e = entry as { id?: unknown; code?: unknown } | null;
+              return e && typeof e.id === "string" ? [{ id: e.id, ...(typeof e.code === "string" ? { code: e.code } : {}) }] : [];
+            })
+          : [];
+        // A server that lists what it deleted is believed; one that lists only the failures (or nothing) deleted the rest
+        const failedIds = new Set(failed.map((f) => f.id));
+        if (body?.deleted !== undefined) {
+          const deletedIds = new Set(deleted);
+          result.deleted.push(...deleted);
+          result.failed.push(...failed);
+          for (const id of chunk) if (!deletedIds.has(id) && !failedIds.has(id)) result.failed.push({ id });
+        } else {
+          result.deleted.push(...chunk.filter((id) => !failedIds.has(id)));
+          result.failed.push(...failed);
+        }
+      } catch (err) {
+        const status = (err as { status?: number } | null)?.status;
+        if (status !== 404 && status !== 405 && status !== 501) throw err;
+        for (const id of chunk) {
+          try {
+            await this.deleteConversation(id);
+            result.deleted.push(id);
+          } catch (single) {
+            const code = (single as { code?: string } | null)?.code;
+            result.failed.push({ id, ...(code ? { code } : {}) });
+          }
+        }
+      }
+    }
+    return result;
+  }
+
   // ============================================================================
   // Messages
   // ============================================================================
@@ -387,6 +454,99 @@ export class AgentServerClient implements ChatTransport {
 
     await this.readStream(response, options.callbacks ?? {});
     return undefined;
+  }
+
+  // ============================================================================
+  // Regenerate, edit, feedback, export
+  // ============================================================================
+
+  /** POST that answers with the same stream (or JSON) as a message does. */
+  private async postTurn(
+    path: string,
+    body: Record<string, unknown>,
+    options: ResolveActionOptions
+  ): Promise<SendMessageResponse | undefined> {
+    if (!options.stream) return this.request("POST", path, body);
+    const response = await httpFetch(this.http, `${this.baseUrl}${path}`, {
+      method: "POST",
+      headers: await buildHeaders(this.http),
+      body: JSON.stringify({ ...body, stream: true }),
+      signal: options.signal,
+    });
+    if (!response.ok) throw await errorFromResponse(response);
+    await this.readStream(response, options.callbacks ?? {});
+    return undefined;
+  }
+
+  /**
+   * Run the latest answer again (`POST /conversations/:id/messages/:messageId/regenerate`).
+   * Only the newest assistant message can be regenerated; the server answers `conversation_busy`
+   * (409) while a turn runs.
+   */
+  async regenerateMessage(
+    conversationId: string,
+    messageId: string,
+    options: ResolveActionOptions = {}
+  ): Promise<SendMessageResponse | undefined> {
+    return this.postTurn(
+      `/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(messageId)}/regenerate`,
+      {},
+      options
+    );
+  }
+
+  /**
+   * Replace one of the person's messages and run the turn again
+   * (`POST /conversations/:id/messages/:messageId/edit`); later messages are dropped.
+   */
+  async editMessage(
+    conversationId: string,
+    messageId: string,
+    input: EditMessageInput,
+    options: ResolveActionOptions = {}
+  ): Promise<SendMessageResponse | undefined> {
+    return this.postTurn(
+      `/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(messageId)}/edit`,
+      { content: input.content, ...(input.fileIds && input.fileIds.length > 0 ? { fileIds: input.fileIds } : {}) },
+      options
+    );
+  }
+
+  /**
+   * Rate an answer (`POST /conversations/:id/messages/:messageId/feedback`). `rating: null`
+   * withdraws it. Resolves to the rating the server stored (when it says), or `null`.
+   */
+  async sendFeedback(conversationId: string, messageId: string, input: FeedbackInput): Promise<MessageFeedback | null | undefined> {
+    const body = await this.request<{ feedback?: unknown } | undefined>(
+      "POST",
+      `/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(messageId)}/feedback`,
+      {
+        rating: input.rating,
+        ...(input.reasons && input.reasons.length > 0 ? { reasons: input.reasons } : {}),
+        ...(input.comment ? { comment: input.comment } : {}),
+      }
+    );
+    if (input.rating === null) return null;
+    return normalizeFeedback(body?.feedback);
+  }
+
+  /**
+   * A conversation as a file (`GET /conversations/:id/export?format=&tools=`). The server may
+   * answer a PDF request with a print-friendly `text/html` page when it has no renderer; the
+   * result's `contentType` says so and the chat prints it.
+   */
+  async exportConversation(conversationId: string, request: ExportRequest): Promise<ExportResult> {
+    const query = new URLSearchParams({ format: request.format, tools: request.includeTools ? "1" : "0" });
+    const response = await httpFetch(
+      this.http,
+      `${this.baseUrl}/conversations/${encodeURIComponent(conversationId)}/export?${query.toString()}`,
+      { method: "GET", headers: await this.headersWithout("Content-Type") }
+    );
+    if (!response.ok) throw await errorFromResponse(response);
+    const contentType = (response.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase() || "application/octet-stream";
+    const blob = await response.blob();
+    const filename = filenameFromDisposition(response.headers.get("content-disposition")) ?? exportFilename(undefined, request.format);
+    return { blob, filename, contentType };
   }
 
   private async readStream(response: Response, callbacks: StreamCallbacks): Promise<void> {

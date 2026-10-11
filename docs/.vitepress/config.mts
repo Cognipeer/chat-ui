@@ -43,6 +43,8 @@ export default defineConfig({
             { text: 'Running Turns and Stop', link: '/guide/runs' },
             { text: 'Usage Limits', link: '/guide/budgets' },
             { text: 'History Sidebar', link: '/guide/history' },
+            { text: 'Portal Experience', link: '/guide/portal-experience' },
+            { text: 'Embedding the Chat', link: '/guide/embed' },
             { text: 'Custom Actions', link: '/guide/custom-actions' },
           ],
         },

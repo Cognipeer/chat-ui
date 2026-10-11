@@ -76,6 +76,22 @@ export function pendingActionFromWire(raw: unknown): PendingAction | undefined {
     };
   }
 
+  if (kind === "client_tool") {
+    const toolName = str(raw.tool_name, raw.toolName, raw.name);
+    if (!toolName) return undefined;
+    const toolCallId = str(raw.tool_call_id, raw.toolCallId);
+    const timeout = [raw.timeout_seconds, raw.timeoutSeconds].find((v): v is number => typeof v === "number" && Number.isFinite(v) && v > 0);
+    return {
+      id,
+      type: "client_tool",
+      toolName,
+      ...(toolCallId ? { toolCallId } : {}),
+      ...(isRecord(raw.args) ? { args: raw.args } : {}),
+      ...(timeout !== undefined ? { timeoutSeconds: timeout } : {}),
+      ...(expiresAt ? { expiresAt } : {}),
+    };
+  }
+
   if (kind === "user_question") {
     const questions = (Array.isArray(raw.questions) ? raw.questions : [])
       .map(questionFromWire)
@@ -100,6 +116,12 @@ export function pendingActionsFromWire(list: unknown): PendingAction[] {
 
 /** The body `POST /client/v1/agents/sessions/:id/actions/:actionId` takes for an answer. */
 export function resolutionToWire(resolution: ActionResolution): Record<string, unknown> {
+  if (resolution.type === "client_tool") {
+    return {
+      ...(resolution.output !== undefined ? { output: resolution.output } : {}),
+      ...(resolution.error ? { error: resolution.error } : {}),
+    };
+  }
   if (resolution.type === "tool_approval") {
     return {
       decision: resolution.decision,

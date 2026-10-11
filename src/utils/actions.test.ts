@@ -429,3 +429,32 @@ describe("callsWithOpenActions", () => {
     expect(out).not.toBe(stored);
   });
 });
+
+
+describe("tools of the host page (client_tool)", () => {
+  const hostTool: PendingAction = { id: "h1", type: "client_tool", toolName: "open_ticket", toolCallId: "tc1", args: { id: 7 }, timeoutSeconds: 30 };
+
+  it("keeps a well-formed host tool action", () => {
+    expect(normalizeActions([hostTool, { id: "bad", type: "client_tool" }])).toEqual([hostTool]);
+    expect(normalizeActions([{ id: "h2", kind: "client_tool", toolName: "x" }])[0]).toMatchObject({ id: "h2", type: "client_tool" });
+  });
+
+  it("is not something the person has to answer, but can be listed on request", () => {
+    const messages = [msg({ id: "a", pendingActions: [hostTool, approval], status: "requires_action" })];
+    expect(collectPendingActions(messages).map((e) => e.action.id)).toEqual(["a1"]);
+    expect(collectPendingActions(messages, { includeClientTools: true }).map((e) => e.action.id)).toEqual(["h1", "a1"]);
+  });
+
+  it("is not a waiting call and adds no tool-call row", () => {
+    const message = msg({ pendingActions: [hostTool] });
+    expect(callsWithOpenActions(message, [])).toEqual([]);
+    expect(waitingToolCallIds(message, [{ id: "tc1", name: "open_ticket" }]).size).toBe(0);
+  });
+
+  it("reads its settled state from a stored record", () => {
+    expect(settledStateOf({ status: "resolved", resolution: { output: { ok: 1 } } }, "client_tool")).toEqual({
+      status: "resolved",
+      resolution: { type: "client_tool", output: { ok: 1 } },
+    });
+  });
+});

@@ -15,6 +15,8 @@ Documentation: <https://docs.cognipeer.com/chat-ui/guide/getting-started>
 - 💸 **Usage limits** - A meter, a "limit reached" notice and, where the host allows, raise-and-continue (see `docs/guide/budgets.md`)
 - 💬 **Chat History** - Sidebar with conversation history, status badges (working, waiting for you, limit reached) and keyboard-operable rows
 - 🎯 **Customizable Actions** - Add feedback buttons or custom actions to messages
+- 🏢 **Portal experience** - Copy / regenerate / edit, thumbs with reasons, rename / pin / bulk-delete history, starters and a Markdown welcome, deep links, AI label and legal links, announcements, a terms gate, export and background alerts - each off until you switch it on (see `docs/guide/portal-experience.md`)
+- 🪟 **Embeddable** - `EmbedChat` runs in an iframe signed in with an identity token your server signs: strict `postMessage` origin checks, an in-memory bearer session that renews itself, events for the host page and tools of the host page the agent can call (see `docs/guide/embed.md`)
 - 🌍 **Internationalization** - English and Turkish built in, your own strings and locales on top; friendly messages for server error codes
 - ♿ **Accessible** - Labelled controls, a live message log, focus moved to approval and question cards
 - ⚛️ **React 18+** - Modern React with hooks

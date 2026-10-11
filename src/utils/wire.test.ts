@@ -67,3 +67,17 @@ describe("stopFromResponse", () => {
     expect(stopFromResponse(null)).toEqual({});
   });
 });
+
+describe("tools of the host page on the Console wire", () => {
+  it("reads a client_tool action", () => {
+    expect(
+      pendingActionFromWire({ id: "act_9", kind: "client_tool", tool_name: "open_ticket", tool_call_id: "tc9", args: { id: 7 }, timeout_seconds: 45, status: "pending" })
+    ).toEqual({ id: "act_9", type: "client_tool", toolName: "open_ticket", toolCallId: "tc9", args: { id: 7 }, timeoutSeconds: 45 });
+    expect(pendingActionFromWire({ id: "act_9", kind: "client_tool" })).toBeUndefined();
+  });
+
+  it("writes its answer as output or error", () => {
+    expect(resolutionToWire({ type: "client_tool", output: { done: true } })).toEqual({ output: { done: true } });
+    expect(resolutionToWire({ type: "client_tool", error: "no answer" })).toEqual({ error: "no answer" });
+  });
+});

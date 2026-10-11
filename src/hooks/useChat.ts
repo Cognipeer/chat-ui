@@ -24,6 +24,8 @@ import {
   normalizeBudget,
   normalizeStopReason,
   collectPendingActions,
+  normalizeFeedback,
+  readFeedback,
   singleFreeTextQuestion,
   restorePendingActions,
   runtimeAfterTurn,
@@ -40,9 +42,13 @@ import type {
   FileAttachment,
   ChatConfig,
   ChatCallbacks,
+  ClientToolCall,
+  ClientToolResult,
   ComposerState,
   Conversation,
   ConversationBudget,
+  FeedbackInput,
+  MessageFeedback,
   PendingAction,
   ActionResolution,
   ActionState,
@@ -54,6 +60,7 @@ import {
   type CancelResult,
   type ChatTransport,
   type ListFilesResult,
+  type ResolveActionOptions,
   type SendMessageResponse,
   type StreamCallbacks,
 } from "../api";
@@ -84,6 +91,17 @@ export interface UseChatOptions extends ChatConfig, ChatCallbacks {
   enableQuestions?: boolean;
   /** The chat is a transcript: `composerState` is `readonly` and nothing can be sent */
   readOnly?: boolean;
+  /**
+   * Runs a tool of the host page (an embedded chat). When given, an agent's call to such a tool
+   * (`client_tool` action) is handed to it and its result answers the action; the turn then goes on.
+   * Without it these actions are left alone.
+   */
+  onClientToolCall?: (call: ClientToolCall) => Promise<ClientToolResult>;
+  /**
+   * Extra `metadata` sent with every message (an embedded page's unsigned UI context). Called per
+   * message so it can change; return `undefined` for none.
+   */
+  getMessageMetadata?: () => Record<string, unknown> | undefined;
 }
 
 export interface UseChatReturn {
@@ -195,6 +213,28 @@ export interface UseChatReturn {
    * changed, whatever the continuation then does (how it went is in `error`, if it failed).
    */
   updateBudget: (budget: ConversationBudget | null, options?: { continue?: boolean }) => Promise<boolean>;
+  /** The transport can run the last answer again */
+  canRegenerate: boolean;
+  /** The transport can replace a message of the person's and run the turn again */
+  canEdit: boolean;
+  /** The transport can store a rating of an answer */
+  canRate: boolean;
+  /**
+   * Run the conversation's last answer again from the message that asked for it. The old answer is
+   * replaced by the new one as it streams. Resolves `false` when it cannot (a turn runs, a card
+   * waits, the last message is not an answer, the server refused: `error` says why).
+   */
+  regenerate: () => Promise<boolean>;
+  /**
+   * Replace one of the person's messages and run the turn again from it; every message after it is
+   * dropped. Resolves `false` when it cannot (see `regenerate`).
+   */
+  editMessage: (messageId: string, content: string) => Promise<boolean>;
+  /**
+   * Rate an answer (`rating: null` withdraws the rating). The rating shows at once and is taken back
+   * when the server refuses. Resolves `false` when it was refused or the transport cannot rate.
+   */
+  submitFeedback: (messageId: string, input: FeedbackInput) => Promise<boolean>;
   /** Files the conversation holds: the server's count, or those of the loaded messages */
   heldFiles: number;
   /** The server's own limit of files per conversation, when it says */
@@ -324,6 +364,8 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     followSettleRetryMs = 1500,
     enableQuestions = true,
     readOnly = false,
+    onClientToolCall,
+    getMessageMetadata,
     onMessageSent,
     onMessageReceived,
     onStreamText,
@@ -335,6 +377,8 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     onBackgroundStreamCompleted,
     onBudgetReached,
     onActionResolved,
+    onActionRequired,
+    onFeedback,
   } = options;
 
   const [messages, setMessages] = useState<Message[]>(initialMessages);
@@ -414,6 +458,19 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     hasEarlierRef.current = more;
     setHasEarlierMessages(more);
   }, []);
+
+  // Ids this page gave to the messages it sent (the server's differ): resolved when a message is edited
+  const localUserIdsRef = useRef<Set<string>>(new Set());
+  // Host-page tool calls already handed over, and the handler (latest props, for async callbacks)
+  const dispatchedToolsRef = useRef<Set<string>>(new Set());
+  const onClientToolCallRef = useRef(onClientToolCall);
+  onClientToolCallRef.current = onClientToolCall;
+  const getMessageMetadataRef = useRef(getMessageMetadata);
+  getMessageMetadataRef.current = getMessageMetadata;
+  const onActionRequiredRef = useRef(onActionRequired);
+  onActionRequiredRef.current = onActionRequired;
+  const onFeedbackRef = useRef(onFeedback);
+  onFeedbackRef.current = onFeedback;
 
   // The client this hook built itself (none when the host passed a transport), and the ones it replaced
   const ownClientRef = useRef<AgentServerClient | null>(null);
@@ -934,10 +991,14 @@ export function useChat(options: UseChatOptions): UseChatReturn {
             onActionRequired: (event: StreamEvent) => {
               if (isStale()) return;
               if (event.type !== "stream.action_required") return;
-              streamActionsRef.current = [
-                ...streamActionsRef.current,
-                ...normalizeActions(event.actions),
-              ];
+              const announced = normalizeActions(event.actions);
+              streamActionsRef.current = [...streamActionsRef.current, ...announced];
+              // the tools of the host page have no card, so nothing for the person to be told about
+              for (const action of announced) {
+                if (action.type !== "client_tool") {
+                  onActionRequiredRef.current?.({ conversationId: event.conversationId, action });
+                }
+              }
             },
             onActionResolved: (event: StreamEvent) => {
               if (isStale()) return;
@@ -1363,6 +1424,14 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     // Capture the current session so async callbacks can detect staleness
     const capturedSession = sessionRef.current;
     const isStale = () => sessionRef.current !== capturedSession;
+    // What the host wants sent along with the message (an embedded page's UI context)
+    const messageMetadata = (() => {
+      try {
+        return getMessageMetadataRef.current?.();
+      } catch {
+        return undefined;
+      }
+    })();
 
     setError(null);
     setIsStreaming(true);
@@ -1430,6 +1499,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         updatedAt: new Date(),
       };
       optimisticId = userMessage.id;
+      localUserIdsRef.current.add(userMessage.id);
       setMessages((prev) => [...prev, userMessage]);
       setPendingFiles([]);
 
@@ -1533,6 +1603,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
             message: content,
             files: filesToSend.length > 0 ? filesToSend : undefined,
             fileIds: uploadedIds.length + reused.length > 0 ? [...uploadedIds, ...reused.map((f) => f.id)] : undefined,
+            ...(messageMetadata ? { metadata: messageMetadata } : {}),
           },
           (() => {
             const base = createStreamCallbacksRef.current(isStale);
@@ -1551,6 +1622,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
           message: content,
           files: filesToSend.length > 0 ? filesToSend : undefined,
           fileIds: uploadedIds.length + reused.length > 0 ? [...uploadedIds, ...reused.map((f) => f.id)] : undefined,
+          ...(messageMetadata ? { metadata: messageMetadata } : {}),
           stream: false,
         });
 
@@ -1659,7 +1731,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
   const resolveAction = useCallback(async (actionId: string, resolution: ActionResolution): Promise<boolean> => {
     const client = clientRef.current;
     if (!client?.resolveAction || !conversation) return false;
-    const entry = collectPendingActions(messagesRef.current).find((e) => e.action.id === actionId);
+    const entry = collectPendingActions(messagesRef.current, { includeClientTools: true }).find((e) => e.action.id === actionId);
     if (!entry || entry.state?.status === "resolving") return false;
 
     const capturedSession = sessionRef.current;
@@ -1873,6 +1945,287 @@ export function useChat(options: UseChatOptions): UseChatReturn {
   );
 
   // ---------------------------------------------------------------------------
+  // Regenerate, edit and resend
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Runs a turn the server starts from a message that is already stored (regenerate, edit): the
+   * transcript is cut back first (`prepare`) and the new answer streams in. A refusal before the
+   * server took the turn puts the transcript back; afterwards the stored conversation is read once
+   * more, so the ids and texts on screen are the server's.
+   */
+  const rerunTurn = useCallback(
+    async (
+      start: (client: ChatTransport, conversationId: string, options: ResolveActionOptions) => Promise<SendMessageResponse | undefined>,
+      prepare: (prev: Message[]) => Message[]
+    ): Promise<boolean> => {
+      const client = clientRef.current;
+      const conv = conversationRef.current;
+      if (!client || !conv) return false;
+      if (turnSessionRef.current === sessionRef.current || followRef.current || isStreamingRef.current) return false;
+      if (collectPendingActions(messagesRef.current).length > 0) return false;
+
+      const capturedSession = sessionRef.current;
+      const isStale = () => sessionRef.current !== capturedSession;
+      const snapshot = messagesRef.current;
+      const cutBack = prepare(snapshot);
+
+      setError(null);
+      streamActionsRef.current = [];
+      turnSessionRef.current = capturedSession;
+      setIsStreaming(true);
+      streamingTextRef.current = "";
+      setStreamingText("");
+      setActiveToolCalls(new Map());
+      activeToolCallsRef.current = new Map();
+      toolCallStartTimeRef.current = null;
+      setProgressMessage("");
+      // the ref is what the stream callbacks look at before the next render
+      messagesRef.current = cutBack;
+      setMessages(cutBack);
+
+      let accepted = false;
+      let finished = false;
+      try {
+        if (streaming) {
+          const abortController = new AbortController();
+          abortControllerRef.current = abortController;
+          const base = createStreamCallbacksRef.current(isStale);
+          await start(client, conv.id, {
+            stream: true,
+            signal: abortController.signal,
+            callbacks: {
+              ...base,
+              onStart: (e) => { accepted = true; base.onStart?.(e); },
+              onText: (text, full) => { accepted = true; base.onText?.(text, full); },
+              onDone: (e) => { accepted = true; finished = true; base.onDone?.(e); },
+            },
+          });
+        } else {
+          const response = await start(client, conv.id, { stream: false });
+          accepted = true;
+          finished = true;
+          if (!isStale()) showReply(response);
+        }
+      } catch (err) {
+        if (isStale()) return true;
+        if (isAbort(err)) return accepted;
+        const code = (err as { code?: string } | null)?.code;
+        const shown = friendly(err instanceof Error ? err : new Error(t("chat.error.sendFailed")));
+        if (accepted && dropped(err)) {
+          recoverDroppedTurn(conv.id, capturedSession, shown);
+          return true;
+        }
+        // The server never took the turn: the transcript is as it was
+        if (!accepted) {
+          messagesRef.current = snapshot;
+          setMessages(snapshot);
+        }
+        setError(shown);
+        onError?.(shown);
+        if (!accepted && isConflictCode(code)) {
+          turnSessionRef.current = null;
+          void refreshConversation(conv.id, capturedSession);
+        }
+        return accepted;
+      } finally {
+        if (turnSessionRef.current === capturedSession) turnSessionRef.current = null;
+        if (!isStale()) {
+          setIsStreaming(false);
+          abortControllerRef.current = null;
+        }
+      }
+      // The ids and texts on screen become the server's (an error frame ends the stream without an answer)
+      if (!isStale()) await refreshConversation(conv.id, capturedSession, { follow: !finished });
+      return true;
+    },
+    [t, has, streaming, showReply, refreshConversation, dropped, recoverDroppedTurn, onError] // eslint-disable-line react-hooks/exhaustive-deps
+  );
+
+  const canRegenerate = typeof clientRef.current?.regenerateMessage === "function";
+  const canEdit = typeof clientRef.current?.editMessage === "function";
+  const canRate = typeof clientRef.current?.sendFeedback === "function";
+
+  const regenerate = useCallback(async (): Promise<boolean> => {
+    const list = messagesRef.current;
+    const last = list[list.length - 1];
+    if (!clientRef.current?.regenerateMessage || !last || last.role !== "assistant") return false;
+    // Only the answer to a message of the person's can be asked for again
+    if (!list.slice(0, -1).some((m) => m.role === "user")) return false;
+    const target = last.id;
+    return rerunTurn(
+      (client, conversationId, opts) => client.regenerateMessage!(conversationId, target, opts),
+      (prev) => prev.slice(0, -1)
+    );
+  }, [rerunTurn]);
+
+  /** The server's id of a message this page numbered itself (found by position among the person's messages). */
+  const serverIdOf = useCallback(
+    async (messageId: string): Promise<string | undefined> => {
+      if (!localUserIdsRef.current.has(messageId)) return messageId;
+      const client = clientRef.current;
+      const conv = conversationRef.current;
+      if (!client || !conv) return undefined;
+      try {
+        const { messages: stored } = await client.getConversation(conv.id);
+        const storedUsers = stored.filter((m) => m.role === "user");
+        const shownUsers = messagesRef.current.filter((m) => m.role === "user");
+        const at = shownUsers.findIndex((m) => m.id === messageId);
+        if (at === -1) return undefined;
+        // counted from the end: the server may page away the oldest messages
+        const match = storedUsers[storedUsers.length - (shownUsers.length - at)];
+        if (!match) return undefined;
+        localUserIdsRef.current.delete(messageId);
+        const stableId = match.id;
+        setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, id: stableId } : m)));
+        messagesRef.current = messagesRef.current.map((m) => (m.id === messageId ? { ...m, id: stableId } : m));
+        return stableId;
+      } catch {
+        return undefined;
+      }
+    },
+    []
+  );
+
+  const editMessage = useCallback(
+    async (messageId: string, content: string): Promise<boolean> => {
+      const text = content.trim();
+      if (!clientRef.current?.editMessage || !text) return false;
+      const shown = messagesRef.current.find((m) => m.id === messageId);
+      if (!shown || shown.role !== "user") return false;
+      if (turnSessionRef.current === sessionRef.current || followRef.current || isStreamingRef.current) return false;
+      const id = await serverIdOf(messageId);
+      if (!id) {
+        const failure = friendly(new Error(t("chat.error.editUnavailable")));
+        setError(failure);
+        onError?.(failure);
+        return false;
+      }
+      // Files the message carries stay with it
+      const fileIds = (shown.files ?? []).filter((f) => !f.expired && !isFileExpired(f) && !f.status).map((f) => f.id);
+      return rerunTurn(
+        (client, conversationId, opts) => client.editMessage!(conversationId, id, { content: text, ...(fileIds.length > 0 ? { fileIds } : {}) }, opts),
+        (prev) => {
+          const at = prev.findIndex((m) => m.id === id);
+          if (at === -1) return prev;
+          return [...prev.slice(0, at), { ...prev[at], content: text, updatedAt: new Date() }];
+        }
+      );
+    },
+    [rerunTurn, serverIdOf, onError, t, has] // eslint-disable-line react-hooks/exhaustive-deps
+  );
+
+  // ---------------------------------------------------------------------------
+  // Feedback
+  // ---------------------------------------------------------------------------
+
+  const submitFeedback = useCallback(
+    async (messageId: string, input: FeedbackInput): Promise<boolean> => {
+      const client = clientRef.current;
+      const conv = conversationRef.current;
+      if (!client?.sendFeedback || !conv) return false;
+      const target = messagesRef.current.find((m) => m.id === messageId);
+      if (!target || target.role !== "assistant") return false;
+      const before = readFeedback(target);
+      const capturedSession = sessionRef.current;
+      const optimistic: MessageFeedback | undefined = input.rating
+        ? {
+            rating: input.rating,
+            ...(input.reasons && input.reasons.length > 0 ? { reasons: input.reasons } : {}),
+            ...(input.comment ? { comment: input.comment } : {}),
+          }
+        : undefined;
+      const show = (feedback: MessageFeedback | undefined) =>
+        setMessages((prev) =>
+          prev.map((m) => {
+            if (m.id !== messageId) return m;
+            const { feedback: _old, ...rest } = m;
+            return feedback ? { ...rest, feedback } : rest;
+          })
+        );
+      show(optimistic);
+      try {
+        const stored = await client.sendFeedback(conv.id, messageId, input);
+        if (sessionRef.current !== capturedSession) return true;
+        // what the server kept (it may trim the comment) wins over the optimistic copy
+        const kept = input.rating ? normalizeFeedback(stored) ?? optimistic : undefined;
+        if (kept && kept !== optimistic) show(kept);
+        onFeedbackRef.current?.({ conversationId: conv.id, messageId, feedback: kept ?? null });
+        return true;
+      } catch (err) {
+        if (sessionRef.current !== capturedSession) return false;
+        show(before);
+        const shown = friendly(err instanceof Error ? err : new Error(t("chat.error.feedbackFailed")));
+        setError(shown);
+        onError?.(shown);
+        return false;
+      }
+    },
+    [t, has, onError] // eslint-disable-line react-hooks/exhaustive-deps
+  );
+
+  // ---------------------------------------------------------------------------
+  // Tools of the host page (embedded chat)
+  // ---------------------------------------------------------------------------
+
+  const clientToolEntries = useMemo(
+    () =>
+      onClientToolCall
+        ? collectPendingActions(messages, { includeClientTools: true }).filter((e) => e.action.type === "client_tool")
+        : [],
+    [messages, Boolean(onClientToolCall)] // eslint-disable-line react-hooks/exhaustive-deps
+  );
+  const [toolTick, setToolTick] = useState(0);
+  const resolveActionRef = useRef(resolveAction);
+  resolveActionRef.current = resolveAction;
+
+  useEffect(() => {
+    if (isFollowing) return;
+    const due = clientToolEntries.filter(
+      ({ action, state }) =>
+        action.type === "client_tool" && (!state || state.status === "pending") && !dispatchedToolsRef.current.has(action.id)
+    );
+    if (due.length === 0) return;
+    // The turn that paused for the tool is still winding down: the answer would meet its lease
+    if (turnSessionRef.current !== null) {
+      const timer = setTimeout(() => setToolTick((tick) => tick + 1), 25);
+      return () => clearTimeout(timer);
+    }
+    for (const { action } of due) {
+      if (action.type !== "client_tool") continue;
+      dispatchedToolsRef.current.add(action.id);
+      const session = sessionRef.current;
+      void (async () => {
+        const handler = onClientToolCallRef.current;
+        if (!handler) return;
+        const failure = (message: string): ActionResolution => ({ type: "client_tool", error: message, output: { error: message } });
+        let resolution: ActionResolution;
+        try {
+          const result = await handler({
+            actionId: action.id,
+            ...(action.toolCallId ? { toolCallId: action.toolCallId } : {}),
+            name: action.toolName,
+            args: action.args ?? {},
+            ...(action.timeoutSeconds ? { timeoutSeconds: action.timeoutSeconds } : {}),
+          });
+          resolution = result.ok ? { type: "client_tool", output: result.output } : failure(result.error);
+        } catch (err) {
+          resolution = failure(err instanceof Error && err.message ? err.message : "The host page could not run the tool");
+        }
+        // The answer can meet a server that is still letting go of the paused turn: a short second and third try
+        for (let attempt = 0; attempt < 3; attempt++) {
+          // The person moved to another conversation meanwhile: the server's own deadline settles it
+          if (sessionRef.current !== session) return;
+          if (await resolveActionRef.current(action.id, resolution)) return;
+          const entry = collectPendingActions(messagesRef.current, { includeClientTools: true }).find((e) => e.action.id === action.id);
+          if (!entry || (entry.state && entry.state.status !== "pending")) return;
+          await sleep(400 * (attempt + 1));
+        }
+      })();
+    }
+  }, [clientToolEntries, isFollowing, toolTick]);
+
+  // ---------------------------------------------------------------------------
   // Stop, clear, retry
   // ---------------------------------------------------------------------------
 
@@ -1998,13 +2351,17 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         content: partial,
         status: "cancelled",
         stopReason: "cancelled",
-        metadata: toolCalls.size > 0
-          ? {
-              toolCallDetails: Array.from(toolCalls.entries()).map(([id, call]) => ({
-                id, name: call.name, args: call.args, result: call.result,
-              })),
-            }
-          : undefined,
+        // `localOnly`: this page numbered it itself, so there is no stored answer to rate or run again yet
+        metadata: {
+          localOnly: true,
+          ...(toolCalls.size > 0
+            ? {
+                toolCallDetails: Array.from(toolCalls.entries()).map(([id, call]) => ({
+                  id, name: call.name, args: call.args, result: call.result,
+                })),
+              }
+            : {}),
+        },
         createdAt: at,
         updatedAt: at,
       };
@@ -2085,6 +2442,9 @@ export function useChat(options: UseChatOptions): UseChatReturn {
           ? "budget_paused"
           : "open";
 
+  // The agent waits for the host page's answer to a tool call: the chat is working, not idle
+  const hostToolBusy = clientToolEntries.length > 0 && !isFollowing;
+
   const canGetFileUrl = typeof clientRef.current?.getFileUrl === "function";
   const resolveFileUrl = useMemo(
     () =>
@@ -2103,8 +2463,8 @@ export function useChat(options: UseChatOptions): UseChatReturn {
   return {
     messages,
     conversation,
-    isLoading: isStreaming || isLoadingConversation,
-    isStreaming,
+    isLoading: isStreaming || hostToolBusy || isLoadingConversation,
+    isStreaming: isStreaming || hostToolBusy,
     isLoadingConversation,
     isFollowing,
     streamingText,
@@ -2139,6 +2499,12 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     canUpdateBudget: typeof clientRef.current?.updateBudget === "function",
     continueConversation,
     updateBudget,
+    canRegenerate,
+    canEdit,
+    canRate,
+    regenerate,
+    editMessage,
+    submitFeedback,
     heldFiles,
     heldFilesMax: fileList?.max,
     hasEarlierMessages,
