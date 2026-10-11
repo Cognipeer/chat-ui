@@ -148,3 +148,61 @@ describe("files without a URL of their own", () => {
     expect(screen.queryByText("Download")).toBeNull();
   });
 });
+
+describe("files still going up in a sent message", () => {
+  it("a chip shows how far the file is and offers nothing to open or download yet", () => {
+    const resolve = vi.fn(async () => "blob:fetched");
+    render(<ChatMessage message={message([pdf({ status: "uploading", progress: 0.42, url: "https://x/f1" })])} resolveFileUrl={resolve} />);
+    const chip = screen.getByText("report").closest("[data-chat-file-status]")!;
+    expect(chip.getAttribute("data-chat-file-status")).toBe("uploading");
+    expect(screen.getByText("Uploading 42%")).toBeTruthy();
+    const bar = screen.getByRole("progressbar", { name: "Upload progress: report.pdf" });
+    expect(bar.getAttribute("aria-valuenow")).toBe("42");
+    expect((bar.firstElementChild as HTMLElement).style.width).toBe("42%");
+    // not stored: no Download, whether the file came with an address or the transport could make one
+    expect(screen.queryByText("Download")).toBeNull();
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
+  it("starts at 0% and never draws past the ends", () => {
+    render(<ChatMessage message={message([pdf({ status: "uploading" }), pdf({ id: "f2", name: "more.pdf", status: "uploading", progress: 7 })])} />);
+    expect(screen.getByRole("progressbar", { name: "Upload progress: report.pdf" }).getAttribute("aria-valuenow")).toBe("0");
+    expect(screen.getByRole("progressbar", { name: "Upload progress: more.pdf" }).getAttribute("aria-valuenow")).toBe("100");
+  });
+
+  it("the Download button appears once the file is stored (the chip loses its upload state)", () => {
+    const resolve = vi.fn(async () => "blob:fetched");
+    const { rerender } = render(<ChatMessage message={message([pdf({ status: "uploading", progress: 0.9 })])} resolveFileUrl={resolve} />);
+    expect(screen.queryByText("Download")).toBeNull();
+    rerender(
+      <ChatI18nProvider locale="en">
+        <ChatMessage message={message([pdf({ id: "stored-1" })])} resolveFileUrl={resolve} />
+      </ChatI18nProvider>
+    );
+    expect(screen.getByText("Download")).toBeTruthy();
+    expect(screen.queryByRole("progressbar")).toBeNull();
+  });
+
+  it("a picture going up keeps its local thumbnail with a bar under it, and is not fetched from the server", () => {
+    const resolve = vi.fn(async () => "blob:fetched");
+    render(<ChatMessage message={message([png({ status: "uploading", progress: 0.5, previewUrl: "blob:mine" })])} resolveFileUrl={resolve} />);
+    expect(screen.getByRole("img", { name: "cat.png" }).getAttribute("src")).toBe("blob:mine");
+    expect(screen.getByRole("progressbar", { name: "Upload progress: cat.png" }).getAttribute("aria-valuenow")).toBe("50");
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
+  it("a picture going up with no local preview does not ask the server for a copy that is not there", () => {
+    const resolve = vi.fn(async () => "blob:fetched");
+    render(<ChatMessage message={message([png({ status: "uploading", progress: 0.1 })])} resolveFileUrl={resolve} />);
+    expect(screen.queryByRole("img", { name: "cat.png" })).toBeNull();
+    expect(screen.getByText("Uploading 10%")).toBeTruthy();
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
+  it("a refused upload says so on the chip", () => {
+    render(<ChatMessage message={message([pdf({ status: "failed", uploadError: "Too big" })])} />);
+    expect(screen.getByText("Too big")).toBeTruthy();
+    expect(screen.queryByText("Download")).toBeNull();
+    expect(screen.queryByRole("progressbar")).toBeNull();
+  });
+});

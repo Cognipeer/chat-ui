@@ -531,7 +531,14 @@ export class AgentServerClient implements ChatTransport {
             frame = {
               ...(typeof raw.seq === "number" ? { seq: raw.seq } : {}),
               type,
-              data: raw.data && typeof raw.data === "object" ? (raw.data as Record<string, unknown>) : {},
+              // The reattach snapshot is the one frame that is not in the log: no `id:` line, so no `seq`
+              // (the cursor stays where it is). Its payload may also come unwrapped, like a delta's.
+              data:
+                raw.data && typeof raw.data === "object"
+                  ? (raw.data as Record<string, unknown>)
+                  : type === "agent.message.snapshot" && typeof raw.type !== "string"
+                    ? (parsed as Record<string, unknown>)
+                    : {},
               ...(typeof raw.run_id === "string" ? { runId: raw.run_id } : {}),
               ...(typeof raw.created_at === "string" ? { createdAt: raw.created_at } : {}),
             };

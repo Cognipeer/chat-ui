@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   formatUsd,
   isBudgetExhausted,
+  isInterruptedTurn,
   messageStopDetail,
   messageStopReason,
   messageWarnings,
@@ -22,6 +23,9 @@ describe("normalizeStopReason", () => {
     expect(normalizeStopReason("paused")).toBe("requires_action");
     expect(normalizeStopReason("canceled")).toBe("cancelled");
     expect(normalizeStopReason(" LIMIT ")).toBe("limit");
+    // a run cut off by a restart is filed under error
+    expect(normalizeStopReason("interrupted")).toBe("error");
+    expect(normalizeStopReason("run_interrupted")).toBe("error");
   });
 
   it("returns undefined for anything else", () => {
@@ -165,5 +169,30 @@ describe("normalizeMessagesPage", () => {
     for (const value of [undefined, null, "x", {}, { limit: 100 }, { hasMoreBefore: "yes" }]) {
       expect(normalizeMessagesPage(value)).toBeUndefined();
     }
+  });
+});
+
+describe("isInterruptedTurn", () => {
+  const user = { role: "user" as const };
+  const assistant = { role: "assistant" as const };
+  const stopped = { status: "idle" as const, stopReason: "error" as const };
+
+  it("the conversation ends on the person's message and the runtime stopped on an error", () => {
+    expect(isInterruptedTurn([user], stopped)).toBe(true);
+    expect(isInterruptedTurn([user, assistant, user], stopped)).toBe(true);
+  });
+
+  it("not once an answer follows, and not for any other end", () => {
+    expect(isInterruptedTurn([user, assistant], stopped)).toBe(false);
+    expect(isInterruptedTurn([user], { status: "idle", stopReason: "end_turn" })).toBe(false);
+    expect(isInterruptedTurn([user], { status: "idle", stopReason: "cancelled" })).toBe(false);
+    expect(isInterruptedTurn([user], { status: "idle" })).toBe(false);
+  });
+
+  it("not while a turn runs or waits, with no runtime, or with nothing in the conversation", () => {
+    expect(isInterruptedTurn([user], { status: "running", stopReason: "error" })).toBe(false);
+    expect(isInterruptedTurn([user], { status: "requires_action", stopReason: "error" })).toBe(false);
+    expect(isInterruptedTurn([user], undefined)).toBe(false);
+    expect(isInterruptedTurn([], stopped)).toBe(false);
   });
 });

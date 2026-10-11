@@ -1,6 +1,9 @@
 /** @type {import('tailwindcss').Config} */
 module.exports = {
   content: ["./src/**/*.{js,ts,jsx,tsx}"],
+  // The scanner reads every bracketed word with a colon in the sources as an arbitrary property, a
+  // regex character class included. Naming such lookalikes here keeps them out of styles.css.
+  blocklist: ["[-:T]"],
   darkMode: "class",
   theme: {
     extend: {

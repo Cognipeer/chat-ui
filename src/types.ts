@@ -333,8 +333,8 @@ export interface AgentInfo {
 
 /**
  * What an agent takes as attachments (`AgentInfo.capabilities.attachments`). agent-server fills `enabled`,
- * `maxFiles`, `maxFileSize`, `allowedMimeTypes` and `acceptsImages`; the other fields come from a host
- * that sets them (or, for the retention hint, from `metadata.fileRetentionDays`).
+ * `maxFiles`, `maxFileSize`, `allowedMimeTypes` and `acceptsImages`; the other fields (`retentionDays`,
+ * `maxFilesScope`) are read when the server or the host sets them.
  */
 export interface AgentAttachmentsCapability {
   /** `false` hides the paperclip */
@@ -348,8 +348,8 @@ export interface AgentAttachmentsCapability {
   /** `false`: the agent's model does not look at images; an attached image gets a warning */
   acceptsImages?: boolean;
   /**
-   * Days an uploaded file is kept; shown as a hint under the composer. agent-server does not send it:
-   * a host sets it here or as `metadata.fileRetentionDays`, and without it there is no hint.
+   * Days an uploaded file is kept; shown as a hint under the composer ("Files are kept for 30 days")
+   * when present. A host can also set `metadata.fileRetentionDays`; without either there is no hint.
    */
   retentionDays?: number;
   /** What `maxFiles` counts: files per `conversation` (agent-server) or per `message`. Default `conversation`. */
@@ -716,6 +716,12 @@ export interface StopNoticeRenderProps {
   detail?: string;
   /** The message has text (a partial answer) */
   hasText: boolean;
+  /**
+   * Present when the notice is for a turn that was cut off before it wrote anything (the stored
+   * conversation ends on the person's own message): `message` is that message, and this sends it again.
+   * Absent where sending is not possible (a transcript, a turn that is running).
+   */
+  onRetry?: () => void;
 }
 
 export interface ToolCallDisplayProps {

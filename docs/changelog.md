@@ -44,6 +44,11 @@ All notable changes to Chat UI will be documented here.
 - Question options may carry a `preview` (a collapsed panel); a request the server refused on its own after it lapsed (`resolvedBy: "system:timeout"`) reads Expired, not Denied
 - Long conversations: agent-server sends the newest page of a long history (100 messages by default). `ChatTransport.getConversation(id, { before, limit })` and `AgentServerClient.getConversation` take a cursor and return `messagesPage` (`MessagesPage`); `useChat` returns `hasEarlierMessages`, `isLoadingEarlierMessages` and `loadEarlierMessages`, and `ChatMessageList` (`hasEarlier`, `isLoadingEarlier`, `onLoadEarlier`) shows "Show earlier messages" above the first message and keeps the reader's place when the older page arrives. Pages already loaded stay when the conversation is fetched again. Strings `chat.messages.loadEarlier`, `chat.messages.loadingEarlier`, `chat.error.loadEarlierFailed`
 - Strings for all of the above in English and Turkish, and codes `budget_forbidden`, `invalid_budget`, `budget_unavailable`, `nothing_to_continue`, `run_interrupted`, `identity_required`, `payload_too_large`, `authorization_error`, `conversation_conflict`, `lease_lost`, `storage_limit_exceeded`
+- Reattach snapshot: the first frame of `GET /conversations/:id/events/stream` while a run is active is `agent.message.snapshot` (`{ run_id, text, user_message }`, no `id:` line). The follower seeds its live bubble with the text written so far, adds the person's own message when the stored history lacks it, and appends the deltas that follow; a reconnect's fresh snapshot replaces the text instead of doubling it. `ConversationEvent` frames without a `seq` leave the cursor where it is. See [Running turns](/guide/runs#the-reattach-snapshot)
+- A conversation that ends on the person's own message after a run that was cut off (`runtime.stopReason` `error`, also read from `interrupted`) shows "The reply was interrupted" with Retry (`InterruptedNotice`, `useChat` `interrupted` / `retryInterrupted()`, `ChatMessageList` `interrupted` / `onRetryInterrupted`, `StopNoticeRenderProps.onRetry`). Retry sends the text again with the files it carried (`sendMessage(text, { reuseFiles })`)
+- A tool call that the turn paused on (an open question or approval) shows a clock, not the tick of a finished call (`ToolCalls` `waitingIds`, `waitingToolCallIds`)
+- A message bubble's file chip shows "Uploading N%" and a progress bar while a file is going up (`fileTransport: "upload"`), and offers no Download until the file is stored
+- `dist/styles.css` is checked for declarations a minifier cannot parse (`npm run verify:dist`), and `scripts/styles.test.mjs` builds the stylesheet from the sources and checks it
 
 ### Changed
 
@@ -72,6 +77,10 @@ All notable changes to Chat UI will be documented here.
 - A followed turn that ended is not followed again while the store still reads it as running; Stop on a followed turn the server has nothing to cancel in stops watching; Stop while a message's files are still going up no longer asks the server to cancel (the message was never sent)
 - Previews of pictures waiting in the composer survive opening another conversation; the blob URLs of stored files are released when a conversation is left (and at most 200 are kept)
 - The reasons Approve is off (an argument that does not fit the schema) show on the card without opening the editor
+- "Increase and continue" looks at the server's answer to the change and asks to continue only when the conversation is still `budget_paused` (a turn that had finished its answer is idle after the change, and a continue would only be refused with a 409); after a continuation the conversation is fetched again, so `spentUsd` is the server's figure
+- The message that refuses files over the conversation's limit counts the files accepted from the same batch ("This chat can hold 3 files; 3 already attached", not "0")
+- `pendingActionFromWire` and `normalizeActions` keep the arguments' JSON Schema (`argsSchema`, also read from `args_schema`, `input_schema`, `inputSchema`), so the editor in an approval card checks an edit against it
+- The pasted-screenshot name is built without a bracketed regex class that Tailwind's scanner turned into the invalid rule `.\[-\:T\]{-:T}` in `dist/styles.css` (a css-syntax warning in a consumer's Vite build); `tailwind.config.js` also blocklists it
 
 ## [0.3.0] - 2026-10-07
 

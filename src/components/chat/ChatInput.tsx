@@ -85,7 +85,9 @@ function dragHasFiles(e: DragEvent): boolean {
 function nameForPasted(file: File, index: number): File {
   if (!/^image\.[a-z0-9]+$/i.test(file.name)) return file;
   const ext = file.name.slice(file.name.lastIndexOf("."));
-  const stamp = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14);
+  // Digits only (YYYYMMDDHHMMSS). Keep a bracketed class with a colon inside out of this file: the
+  // Tailwind scanner would read it as an arbitrary-property class and emit it as (invalid) CSS.
+  const stamp = new Date().toISOString().replace(/\D/g, "").slice(0, 14);
   return new File([file], `pasted-${stamp}${index > 0 ? `-${index + 1}` : ""}${ext}`, {
     type: file.type,
     lastModified: file.lastModified,

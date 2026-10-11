@@ -5,7 +5,7 @@ export { ChatMessageList, type ChatMessageListProps } from "./components/chat";
 export { ChatInput, type ChatInputProps, type ChatInputHandle } from "./components/chat";
 export { ChatHistory, type ChatHistoryProps } from "./components/chat";
 export { BudgetBanner, type BudgetBannerProps } from "./components/chat";
-export { MessageStopNotice, MessageWarnings, type MessageStopNoticeProps } from "./components/chat";
+export { MessageStopNotice, MessageWarnings, InterruptedNotice, type MessageStopNoticeProps, type InterruptedNoticeProps } from "./components/chat";
 export { ToolCall, ToolCalls, type ToolCallProps, type ToolCallsProps } from "./components/chat";
 export { MessageActions, type MessageActionsProps } from "./components/chat";
 export {
@@ -18,7 +18,7 @@ export {
 } from "./components/chat";
 
 // Hooks
-export { useChat, type UseChatOptions, type UseChatReturn } from "./hooks";
+export { useChat, type UseChatOptions, type UseChatReturn, type SendUserMessageOptions } from "./hooks";
 export { useChatHistory, type UseChatHistoryOptions, type UseChatHistoryReturn } from "./hooks";
 export { useI18n, type UseI18nReturn } from "./hooks";
 

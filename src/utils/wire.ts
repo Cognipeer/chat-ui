@@ -61,6 +61,8 @@ export function pendingActionFromWire(raw: unknown): PendingAction | undefined {
     const toolCallId = str(raw.tool_call_id, raw.toolCallId);
     const title = str(raw.title);
     const summary = str(raw.summary);
+    // The JSON Schema of the arguments: the edit in the approval card is checked against it
+    const argsSchema = [raw.args_schema, raw.argsSchema, raw.input_schema, raw.inputSchema].find(isRecord);
     return {
       id,
       type: "tool_approval",
@@ -69,6 +71,7 @@ export function pendingActionFromWire(raw: unknown): PendingAction | undefined {
       ...(title ? { title } : {}),
       ...(summary ? { summary } : {}),
       ...(isRecord(raw.args) ? { args: raw.args } : {}),
+      ...(argsSchema ? { argsSchema } : {}),
       ...(expiresAt ? { expiresAt } : {}),
     };
   }

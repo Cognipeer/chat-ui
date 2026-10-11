@@ -40,6 +40,7 @@ import { ToolCall, ToolCalls } from "@cognipeer/chat-ui";
 | `toolCalls` | `ToolCallData[]` | Array of tool calls |
 | `results` | `Record<string, any>` | Results by call ID |
 | `loadingIds` | `string[]` | IDs of loading calls |
+| `waitingIds` | `ReadonlySet<string>` | Calls paused on an approval or a question (`waitingToolCallIds(message, calls)`): a clock instead of the tick of a finished call. `ChatMessage` sets it for a message with open cards |
 
 ## ToolCall Data
 

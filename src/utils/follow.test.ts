@@ -77,6 +77,60 @@ describe("applyFollowEvent", () => {
     expect(fold([ev("user.message", { content: "no id" })]).userMessage).toBeUndefined();
   });
 
+  describe("the reattach snapshot", () => {
+    const snapshot = (data: Record<string, unknown>) => ev("agent.message.snapshot", data);
+
+    it("seeds the text the run has written so far, and the message that started it", () => {
+      const state = fold([
+        snapshot({ run_id: "run_1", text: "Half of an ans", user_message: { id: "u1", content: "go", files: [{ id: "f1", name: "a.txt", mime_type: "text/plain", size: 3 }] } }),
+      ]);
+      expect(state.text).toBe("Half of an ans");
+      expect(state.streamed).toBe(true);
+      expect(state.snapshotRunId).toBe("run_1");
+      expect(state.userMessage).toEqual({ id: "u1", content: "go", files: [{ id: "f1", name: "a.txt", mimeType: "text/plain", size: 3 }] });
+      // not stored: the cursor does not move
+      expect(state.lastSeq).toBeUndefined();
+    });
+
+    it("later deltas add to it, and a finished message that repeats the text does not replace it", () => {
+      const state = fold([
+        snapshot({ run_id: "run_1", text: "Half of " }),
+        ev("agent.message.delta", { text: "an answer" }),
+        ev("agent.message", { content: "Half of an answer!", message_id: "m2" }, 9),
+      ]);
+      expect(state.text).toBe("Half of an answer");
+      expect(state.messageId).toBe("m2");
+    });
+
+    it("an empty snapshot (nothing written yet) leaves room for the first delta, and a null user message changes nothing", () => {
+      const state = fold([snapshot({ run_id: "run_1", text: "", user_message: null }), ev("agent.message.delta", { text: "Hi" })]);
+      expect(state.text).toBe("Hi");
+      expect(state.userMessage).toBeUndefined();
+      const kept = fold([ev("user.message", { content: "go", message_id: "u1" }), snapshot({ run_id: "run_1", text: "x", user_message: null })]);
+      expect(kept.userMessage?.id).toBe("u1");
+    });
+
+    it("a reconnect brings a fresh snapshot with everything so far: it replaces, never doubles, the text", () => {
+      const state = fold([
+        snapshot({ run_id: "run_1", text: "Hello" }),
+        ev("agent.message.delta", { text: ", wor" }),
+        snapshot({ run_id: "run_1", text: "Hello, world" }),
+        ev("agent.message.delta", { text: "!" }),
+      ]);
+      expect(state.text).toBe("Hello, world!");
+    });
+
+    it("the log replayed after the snapshot starts the same run again without wiping what the snapshot brought", () => {
+      const replayed = { ...ev("session.status_running", { trigger: "message" }, 3), runId: "run_1" };
+      const state = fold([snapshot({ run_id: "run_1", text: "Half" }), replayed]);
+      expect(state.text).toBe("Half");
+      // but another run starting is a new turn
+      const next = fold([snapshot({ run_id: "run_1", text: "Half" }), { ...ev("session.status_running", {}, 12), runId: "run_2" }]);
+      expect(next.text).toBe("");
+      expect(next.snapshotRunId).toBeUndefined();
+    });
+  });
+
   it("never moves the cursor back and does not mutate the state it was given", () => {
     const start = newFollowState();
     const a = applyFollowEvent(start, ev("agent.message.delta", { text: "x" }, 9));

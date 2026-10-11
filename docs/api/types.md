@@ -397,6 +397,9 @@ interface StopNoticeRenderProps {
   stopReason: StopReason | "incomplete";
   detail?: string;     // the runtime's own wording; end users get the localized notice
   hasText: boolean;    // the message has text (a partial answer)
+  // Set for a reply that was cut off before it wrote anything (the conversation ends on the person's
+  // own message, `message`): sends that message again. Absent where nothing can be sent.
+  onRetry?: () => void;
 }
 
 // Handed to renderImage

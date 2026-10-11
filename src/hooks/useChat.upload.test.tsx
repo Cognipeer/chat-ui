@@ -459,7 +459,19 @@ describe("useChat: how many files the conversation holds", () => {
 
     await attach(result, file("c.txt"), file("d.txt"));
     expect(result.current.pendingFiles.map((f) => f.name)).toEqual(["c.txt"]);
-    expect(result.current.error?.message).toBe("This chat can hold 3 files; 2 already attached");
+    // two stored, one more accepted from this batch: three are attached when d.txt is refused
+    expect(result.current.error?.message).toBe("This chat can hold 3 files; 3 already attached");
+  });
+
+  it("the refusal counts the files accepted from the same batch as attached", async () => {
+    const { result } = renderHook(
+      () => useChat({ transport: makeTransport(), agentId: "agent", maxFiles: 3, maxFilesScope: "conversation" }),
+      { wrapper }
+    );
+    // an empty chat, four files at once: three fit, and the message says three are attached (not none)
+    await attach(result, file("a.txt"), file("b.txt"), file("c.txt"), file("d.txt"));
+    expect(result.current.pendingFiles.map((f) => f.name)).toEqual(["a.txt", "b.txt", "c.txt"]);
+    expect(result.current.error?.message).toBe("This chat can hold 3 files; 3 already attached");
   });
 
   it("per message, what the conversation holds does not count", async () => {

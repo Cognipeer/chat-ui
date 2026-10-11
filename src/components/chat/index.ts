@@ -14,5 +14,5 @@ export {
   type ChatActionsConfig,
 } from "./ActionCards";
 export { BudgetBanner, type BudgetBannerProps } from "./BudgetBanner";
-export { MessageStopNotice, MessageWarnings, type MessageStopNoticeProps } from "./StopNotice";
+export { MessageStopNotice, MessageWarnings, InterruptedNotice, type MessageStopNoticeProps, type InterruptedNoticeProps } from "./StopNotice";
 export * from "./Icons";

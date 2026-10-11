@@ -4,6 +4,7 @@ import React from "react";
 import { cn, messageStopDetail, messageWarnings, stopNoticeKind, type StopNoticeKind } from "../../utils";
 import type { Message, StopNoticeRenderProps, TurnWarning } from "../../types";
 import { AlertIcon } from "./Icons";
+import { SECONDARY_BUTTON } from "./styles";
 import { useI18n } from "../../hooks/useI18n";
 
 /** The localized sentence for a stop; `budget_reached` and `error` are the ones that are not just "stopped". */
@@ -64,6 +65,48 @@ export function MessageStopNotice({ message, hasText, render, className }: Messa
           <div className="text-xs opacity-90">{hasText ? t("chat.stop.partialText") : t("chat.stop.noText")}</div>
         )}
       </div>
+    </div>
+  );
+}
+
+export interface InterruptedNoticeProps {
+  /** The person's last message, the one that was left without an answer */
+  message: Message;
+  /** Send it again; without it (a transcript) the notice only says what happened */
+  onRetry?: () => void;
+  /** Replace the notice */
+  render?: (props: StopNoticeRenderProps) => React.ReactNode;
+  className?: string;
+}
+
+/**
+ * Under a person's message the run never answered (it was cut off, say by a restart): says the reply
+ * was interrupted and offers to send the message again.
+ */
+export function InterruptedNotice({ message, onRetry, render, className }: InterruptedNoticeProps) {
+  const { t } = useI18n();
+  if (render) {
+    return <>{render({ message, stopReason: "error", detail: messageStopDetail(message), hasText: false, ...(onRetry ? { onRetry } : {}) })}</>;
+  }
+  return (
+    <div
+      role="status"
+      data-chat-stop="interrupted"
+      className={cn(
+        "flex items-start gap-2 rounded-lg border border-chat-danger bg-chat-danger-bg px-3 py-2 text-sm text-chat-danger",
+        className
+      )}
+    >
+      <AlertIcon className="mt-0.5 h-4 w-4 flex-shrink-0" />
+      <div className="min-w-0 flex-1">
+        <div className="font-medium">{t("chat.stop.interrupted")}</div>
+        <div className="text-xs opacity-90">{t("chat.stop.interruptedBody")}</div>
+      </div>
+      {onRetry && (
+        <button type="button" onClick={onRetry} className={cn(SECONDARY_BUTTON, "flex-shrink-0 !py-1 text-xs")}>
+          {t("chat.error.retry")}
+        </button>
+      )}
     </div>
   );
 }

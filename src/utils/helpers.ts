@@ -1,5 +1,6 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
+import type { Message } from "../types";
 
 // Type definition for i18n function
 type I18nFunction = (key: string, values?: Record<string, string | number>) => string;
@@ -114,4 +115,13 @@ export function getMessageTextContent(content: string | Array<{ type: string; te
     .filter((part) => part.type === "text" && part.text)
     .map((part) => part.text)
     .join("");
+}
+
+/** The text of a message: its string content, or the text parts of a content array, one per line. */
+export function messageText(content: Message["content"]): string {
+  if (typeof content === "string") return content;
+  return content
+    .filter((part) => part.type === "text" && "text" in part)
+    .map((part) => (part as { type: "text"; text: string }).text)
+    .join("\n");
 }

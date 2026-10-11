@@ -3,7 +3,7 @@
 import React from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { cn, formatFileSize, imagePartSource, isFileExpired, isImageType, isRasterImageType, safeFileHref, safeImageSrc } from "../../utils";
+import { cn, formatFileSize, imagePartSource, isFileExpired, isImageType, isRasterImageType, safeFileHref, safeImageSrc, messageText, waitingToolCallIds } from "../../utils";
 import {
   insertCitationMarkers,
   parseCitationHref,
@@ -11,7 +11,7 @@ import {
   citationUrlTransform,
 } from "../../utils/citations";
 import type { Message, MessageActionProps, FileAttachment, Citation, StopNoticeRenderProps } from "../../types";
-import { FileIcon, ImageIcon } from "./Icons";
+import { FileIcon, ImageIcon, LoadingIcon } from "./Icons";
 import { ToolCalls } from "./ToolCall";
 import { MessageActionCards, type ChatActionsConfig } from "./ActionCards";
 import { MessageStopNotice, MessageWarnings } from "./StopNotice";
@@ -84,7 +84,7 @@ export function ChatMessage({
 }: ChatMessageProps) {
   const isUser = message.role === "user";
   const isAssistant = message.role === "assistant";
-  const content = isStreaming && streamingText ? streamingText : getTextContent(message.content);
+  const content = isStreaming && streamingText ? streamingText : messageText(message.content);
   const images = React.useMemo(() => getImages(message.content), [message.content]);
 
   // Offsets index the finished answer, so markers only go in once it is whole.
@@ -314,7 +314,28 @@ function useStoredFileUrl(
   return state;
 }
 
-/** One attached file: a thumbnail for a picture, otherwise a chip with its name, size and state. */
+/** How far a file has gone up, as a thin bar (the chip's own bottom edge, or under a thumbnail). */
+function UploadBar({ name, percent, className }: { name: string; percent: number; className?: string }) {
+  const { t } = useI18n();
+  return (
+    <span
+      role="progressbar"
+      aria-label={`${t("chat.a11y.uploadProgress")}: ${name}`}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={percent}
+      className={cn("block h-0.5 bg-chat-bg-hover", className)}
+    >
+      <span className="block h-full bg-chat-accent-primary transition-all" style={{ width: `${percent}%` }} />
+    </span>
+  );
+}
+
+/**
+ * One attached file: a thumbnail for a picture, otherwise a chip with its name, size and state. A file
+ * still going up (the message was sent with files stored first) shows how far it is and offers nothing
+ * to open or download: it is not on the server yet.
+ */
 function FileAttachmentItem({
   file,
   renderImage,
@@ -327,6 +348,11 @@ function FileAttachmentItem({
   const { t, formatDate } = useI18n();
   const [downloadFailed, setDownloadFailed] = React.useState(false);
   const expired = isFileExpired(file);
+  // Going up (or refused by the server): there is no stored copy to show, open or download yet
+  const uploading = file.status === "uploading" || file.status === "queued";
+  const failed = file.status === "failed";
+  const notStored = uploading || failed;
+  const percent = Math.round(Math.min(1, Math.max(0, file.progress ?? 0)) * 100);
   const image = isImageType(file.mimeType);
   // Only pictures a browser shows without running anything become thumbnails; an SVG or the like is a file chip
   const raster = isRasterImageType(file.mimeType);
@@ -336,12 +362,12 @@ function FileAttachmentItem({
   const local = raster ? usable(safeImageSrc(file.previewUrl)) : undefined;
   const ownUrl = raster ? usable(safeImageSrc(file.url)) : undefined;
   // A picture that is still on this device shows even if its server copy is gone
-  const stored = useStoredFileUrl(file, resolveFileUrl, raster && !local && !ownUrl && !expired);
-  const thumb = raster ? local ?? (expired ? undefined : ownUrl ?? usable(stored.src)) : undefined;
+  const stored = useStoredFileUrl(file, resolveFileUrl, raster && !local && !ownUrl && !expired && !notStored);
+  const thumb = raster ? local ?? (expired || notStored ? undefined : ownUrl ?? usable(stored.src)) : undefined;
 
   if (thumb) {
     return (
-      <figure className="m-0 max-w-full">
+      <figure className="m-0 max-w-full" data-chat-file-status={file.status}>
         <ImageThumb
           src={thumb}
           alt={file.name}
@@ -352,16 +378,19 @@ function FileAttachmentItem({
         />
         <figcaption className="mt-1 text-xs text-chat-text-secondary truncate max-w-[16rem]" title={file.name}>
           {file.name} · {formatFileSize(file.size)}
+          {uploading && <span aria-hidden="true"> · {t("chat.file.uploading", { percent })}</span>}
+          {failed && <span className="text-chat-danger"> · {file.uploadError ?? t("chat.file.uploadFailed")}</span>}
         </figcaption>
+        {uploading && <UploadBar name={file.name} percent={percent} className="mt-1 max-w-[16rem] rounded" />}
       </figure>
     );
   }
 
   const { base, ext } = splitFileName(file.name);
-  const href = expired ? undefined : safeFileHref(file.url);
+  const href = expired || notStored ? undefined : safeFileHref(file.url);
   const noText = file.conversionStatus === "failed" || file.conversionStatus === "skipped";
   const keptUntil = !expired && file.expiresAt ? formatDate(new Date(file.expiresAt), { dateStyle: "medium" }) : undefined;
-  const canDownload = !expired && !href && Boolean(resolveFileUrl);
+  const canDownload = !expired && !notStored && !href && Boolean(resolveFileUrl);
 
   const download = async () => {
     setDownloadFailed(false);
@@ -383,18 +412,21 @@ function FileAttachmentItem({
   return (
     <div
       data-chat-file={expired ? "expired" : noText ? "no-text" : undefined}
+      data-chat-file-status={file.status}
       title={
         expired
           ? t("chat.file.expiredTitle", { fileName: file.name })
-          : noText
-            ? t("chat.file.noTextTitle", { fileName: file.name })
-            : keptUntil
-              ? t("chat.file.keptUntil", { date: keptUntil })
-              : undefined
+          : failed
+            ? t("chat.input.fileFailed", { fileName: file.name, reason: file.uploadError ?? "" })
+            : noText
+              ? t("chat.file.noTextTitle", { fileName: file.name })
+              : keptUntil
+                ? t("chat.file.keptUntil", { date: keptUntil })
+                : undefined
       }
       className={cn(
-        "flex items-center gap-2 px-3 py-2 bg-chat-bg-tertiary rounded-lg text-sm border",
-        expired ? "border-transparent opacity-60" : noText ? "border-chat-warning" : "border-transparent"
+        "relative flex items-center gap-2 overflow-hidden px-3 py-2 bg-chat-bg-tertiary rounded-lg text-sm border",
+        expired ? "border-transparent opacity-60" : failed ? "border-chat-danger" : noText ? "border-chat-warning" : "border-transparent"
       )}
     >
       {image ? (
@@ -413,6 +445,19 @@ function FileAttachmentItem({
       {file.size > 0 && (
         <span className="text-chat-text-tertiary text-xs flex-shrink-0">
           {formatFileSize(file.size)}
+        </span>
+      )}
+      {uploading && (
+        <>
+          <LoadingIcon className="w-3.5 h-3.5 flex-shrink-0 text-chat-text-tertiary animate-spin motion-reduce:animate-none" />
+          <span className="text-chat-text-tertiary text-xs tabular-nums flex-shrink-0" aria-hidden="true">
+            {t("chat.file.uploading", { percent })}
+          </span>
+        </>
+      )}
+      {failed && (
+        <span role="status" className="text-xs text-chat-danger flex-shrink-0">
+          {file.uploadError ?? t("chat.file.uploadFailed")}
         </span>
       )}
       {expired && (
@@ -449,6 +494,7 @@ function FileAttachmentItem({
           {t("chat.file.downloadFailed")}
         </span>
       )}
+      {uploading && <UploadBar name={file.name} percent={percent} className="absolute inset-x-0 bottom-0" />}
     </div>
   );
 }
@@ -644,19 +690,6 @@ function MessageCitations({ citations }: { citations: Citation[] }) {
   );
 }
 
-/**
- * Extract text content from message content: the text parts, one per line.
- */
-function getTextContent(content: Message["content"]): string {
-  if (typeof content === "string") {
-    return content;
-  }
-  return content
-    .filter((part) => part.type === "text" && "text" in part)
-    .map((part) => (part as { type: "text"; text: string }).text)
-    .join("\n");
-}
-
 /** The safe image URLs among the content parts, in order. */
 function getImages(content: Message["content"]): string[] {
   if (typeof content === "string") return [];
@@ -698,6 +731,9 @@ function MessageToolCalls({ message }: { message: Message }) {
 
   if (!details || details.length === 0) return null;
 
+  // A call the turn paused on (an approval or a question that is still open) is not a finished one
+  const waitingIds = waitingToolCallIds(message, details);
+
   return (
     <div className="mt-2">
       <ToolCalls
@@ -705,6 +741,7 @@ function MessageToolCalls({ message }: { message: Message }) {
         isExecuting={false}
         durationSeconds={durationSeconds}
         defaultExpanded={false}
+        waitingIds={waitingIds}
       />
     </div>
   );

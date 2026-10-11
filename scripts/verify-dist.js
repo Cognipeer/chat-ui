@@ -21,4 +21,13 @@ if (missing.length > 0) {
   process.exit(1);
 }
 
+// The stylesheet is shipped as is: a rule a consumer's minifier cannot parse shows up as a css-syntax warning in every build
+const { invalidDeclarations } = require('./css-check');
+const invalid = invalidDeclarations(fs.readFileSync(path.join(__dirname, '..', 'dist/styles.css'), 'utf8'));
+if (invalid.length > 0) {
+  console.error('[verify-dist] dist/styles.css has declarations that are not valid CSS:');
+  for (const d of invalid) console.error(`- ${d.selector} { ${d.prop}: ${d.value} }`);
+  process.exit(1);
+}
+
 console.log('[verify-dist] Build artifacts are complete.');

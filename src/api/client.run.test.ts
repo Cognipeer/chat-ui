@@ -64,6 +64,49 @@ describe("AgentServerClient.followEvents", () => {
     expect(seen[3].seq).toBe(10);
   });
 
+  it("passes the reattach snapshot (the one frame without an id) through without moving the cursor", async () => {
+    const snapshot = {
+      type: "agent.message.snapshot",
+      data: { run_id: "run_7", text: "So far: ", user_message: { id: "u7", content: "go", files: [] } },
+    };
+    const urls: string[] = [];
+    const responses = [
+      // first connection: the snapshot (no `id:` line), then a live delta, then the server drops the stream
+      textResponse(`event: agent.message.snapshot\ndata: ${JSON.stringify(snapshot)}\n\n` + `event: agent.message.delta\ndata: ${JSON.stringify({ text: "more" })}\n\n`),
+      textResponse(frame(5, "session.status_idle", { stop_reason: "end_turn" })),
+    ];
+    const fetchMock = vi.fn(async (url: string) => {
+      urls.push(url);
+      return responses.shift()!;
+    });
+    const client = new AgentServerClient({ baseUrl: "http://x", fetch: as(fetchMock), reconnect: { delayMs: 1, maxDelayMs: 1 } });
+    const controller = new AbortController();
+    const seen: ConversationEvent[] = [];
+    await client.followEvents("c1", {
+      after: 4,
+      signal: controller.signal,
+      onEvent: (e) => {
+        seen.push(e);
+        if (e.type === "session.status_idle") controller.abort();
+      },
+    });
+    expect(seen.map((e) => e.type)).toEqual(["agent.message.snapshot", "agent.message.delta", "session.status_idle"]);
+    expect(seen[0]).toEqual({ type: "agent.message.snapshot", data: snapshot.data });
+    expect(seen[0].seq).toBeUndefined();
+    // the snapshot is not part of the log: the next connection still asks from the same place
+    expect(urls[1]).toBe("http://x/conversations/c1/events/stream?after=4");
+  });
+
+  it("reads a snapshot whose payload comes unwrapped, like a delta's", async () => {
+    const data = { run_id: "run_7", text: "abc", user_message: null };
+    const fetchMock = vi.fn(async () => textResponse(`event: agent.message.snapshot\ndata: ${JSON.stringify(data)}\n\n`));
+    const client = new AgentServerClient({ baseUrl: "http://x", fetch: as(fetchMock), reconnect: { retries: 0 } });
+    const controller = new AbortController();
+    const seen: ConversationEvent[] = [];
+    await client.followEvents("c1", { signal: controller.signal, onEvent: (e) => { seen.push(e); controller.abort(); } });
+    expect(seen[0]).toEqual({ type: "agent.message.snapshot", data, runId: "run_7" });
+  });
+
   it("asks for the given event types", async () => {
     const fetchMock = vi.fn(async () => textResponse(frame(1, "session.status_idle")));
     const client = new AgentServerClient({ baseUrl: "http://x", fetch: as(fetchMock) });

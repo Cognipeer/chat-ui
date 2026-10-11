@@ -5,6 +5,7 @@ import { cn, collectPendingActions } from "../../utils";
 import type { Message, MessageActionProps, StopNoticeRenderProps } from "../../types";
 import { ChatMessage, type ImageRenderProps, type ResolveFileUrl } from "./ChatMessage";
 import { ToolCalls } from "./ToolCall";
+import { InterruptedNotice } from "./StopNotice";
 import type { ChatActionsConfig } from "./ActionCards";
 import { SECONDARY_BUTTON } from "./styles";
 import { useI18n } from "../../hooks/useI18n";
@@ -50,6 +51,13 @@ export interface ChatMessageListProps {
   isLoadingEarlier?: boolean;
   /** Fetch the older messages (the button shows only together with `hasEarlier`) */
   onLoadEarlier?: () => void;
+  /**
+   * The list ends on a message of the person's that the run never answered (it was cut off): a
+   * "the reply was interrupted" notice follows it (see `useChat().interrupted`).
+   */
+  interrupted?: boolean;
+  /** Sends the interrupted message again; the notice offers a retry button only with it */
+  onRetryInterrupted?: () => void;
 }
 
 // A layout effect keeps the scroll position steady before the browser paints; on a server there is nothing to scroll
@@ -132,6 +140,8 @@ export function ChatMessageList({
   hasEarlier = false,
   isLoadingEarlier = false,
   onLoadEarlier,
+  interrupted = false,
+  onRetryInterrupted,
 }: ChatMessageListProps) {
   const { t } = useI18n();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -221,6 +231,17 @@ export function ChatMessageList({
             resolveFileUrl={resolveFileUrl}
           />
         ))}
+
+        {/* The run that was answering the last message was cut off before it wrote anything */}
+        {interrupted && !isStreaming && messages.length > 0 && messages[messages.length - 1].role === "user" && (
+          // lined up with the text of the message above it (avatar width and gap); a host's own render owns its layout
+          <InterruptedNotice
+            message={messages[messages.length - 1]}
+            onRetry={onRetryInterrupted}
+            render={renderStopNotice}
+            className={cn("mx-4 mb-6", showAvatars && "ml-16")}
+          />
+        )}
 
         {/* Streaming placeholder for new assistant message */}
         {isStreaming && streamingText && (

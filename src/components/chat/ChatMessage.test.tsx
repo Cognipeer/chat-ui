@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, render as rtlRender, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render as rtlRender, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { ChatI18nProvider } from "../../providers";
 import { ChatMessage } from "./ChatMessage";
@@ -125,5 +125,45 @@ describe("file attachments", () => {
   it("offers no download link for an unsafe URL", () => {
     render(<ChatMessage message={message({ files: [file({ url: "javascript:alert(1)" })] })} />);
     expect(screen.queryByRole("link", { name: "Download" })).toBeNull();
+  });
+});
+
+describe("tool calls the turn paused on", () => {
+  const ask = message({
+    content: "",
+    status: "requires_action",
+    pendingActions: [{ id: "q1", type: "user_question", questions: [{ question: "Which environment?" }] }],
+    metadata: { toolCallDetails: [{ id: "t1", name: "search", args: {} }, { id: "t2", name: "ask_user_question", args: {} }] },
+  });
+
+  it("shows a waiting mark, not the tick of a finished call, while the question is open", () => {
+    render(<ChatMessage message={ask} />);
+    const mark = screen.getByRole("img", { name: "Waiting for your answer" });
+    expect(mark.getAttribute("data-chat-tool-status")).toBe("waiting");
+    // the latest call is the question: it is the prominent one
+    expect(screen.getByText("Ask User Question")).toBeTruthy();
+  });
+
+  it("an approval's own call waits too, wherever it sits among the older steps", () => {
+    const approval = message({
+      content: "",
+      status: "requires_action",
+      pendingActions: [{ id: "a1", type: "tool_approval", toolName: "deploy", toolCallId: "t1" }],
+      metadata: { toolCallDetails: [{ id: "t1", name: "deploy", args: {} }, { id: "t2", name: "search", args: {} }] },
+    });
+    render(<ChatMessage message={approval} />);
+    // the older step is behind "previous steps": open it
+    fireEvent.click(screen.getByRole("button", { name: /1 previous step/ }));
+    expect(screen.getAllByRole("img", { name: "Waiting for your answer" })).toHaveLength(1);
+  });
+
+  it("goes back to the tick once the card has an outcome", () => {
+    render(<ChatMessage message={{ ...ask, actionStates: { q1: { status: "resolved", resolution: { type: "user_question", answers: { "Which environment?": "staging" } } } } }} />);
+    expect(screen.queryByRole("img", { name: "Waiting for your answer" })).toBeNull();
+  });
+
+  it("calls of a message that paused on nothing keep their tick", () => {
+    render(<ChatMessage message={message({ content: "done", metadata: { toolCallDetails: [{ id: "t1", name: "search", args: {} }] } })} />);
+    expect(screen.queryByRole("img", { name: "Waiting for your answer" })).toBeNull();
   });
 });

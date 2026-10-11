@@ -446,6 +446,11 @@ function ChatContent({
     wasAwaiting.current = chat.awaitingAction;
   }, [chat.awaitingAction]);
 
+  // The last message never got its answer (the run was cut off): sending it again
+  const retryInterrupted = useCallback(() => {
+    void chat.retryInterrupted();
+  }, [chat.retryInterrupted]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const handleSend = useCallback(
     (text: string) => {
       const q = chat.answerableQuestion;
@@ -643,6 +648,8 @@ function ChatContent({
               hasEarlier={chat.hasEarlierMessages}
               isLoadingEarlier={chat.isLoadingEarlierMessages}
               onLoadEarlier={chat.loadEarlierMessages}
+              interrupted={chat.interrupted}
+              onRetryInterrupted={composerState === "open" ? retryInterrupted : undefined}
               emptyState={renderEmptyState?.()}
             />
           )}

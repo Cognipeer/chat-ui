@@ -11,10 +11,13 @@ import {
   generateId,
   isBudgetExhausted,
   isConflictCode,
+  isFileExpired,
   isFileTypeAllowed,
+  isInterruptedTurn,
   isRasterImageType,
   keepSettledDetail,
   localizeError,
+  messageText,
   newFollowState,
   normalizeActions,
   normalizeBudget,
@@ -118,7 +121,7 @@ export interface UseChatReturn {
    * keep the typed text. `true` otherwise. Empty text is fine while files are attached
    * (see `attachmentsOnlyMessage`).
    */
-  sendMessage: (content: string) => Promise<boolean>;
+  sendMessage: (content: string, options?: SendUserMessageOptions) => Promise<boolean>;
   /** Add files to pending */
   addFiles: (files: File[]) => Promise<void>;
   /** Remove a pending file (a file already stored for the message is deleted from the server) */
@@ -133,6 +136,17 @@ export interface UseChatReturn {
   createConversation: (title?: string) => Promise<Conversation>;
   /** Retry the last message */
   retry: () => Promise<void>;
+  /**
+   * The conversation ends on a message of the person's that never got its answer: the run was cut off
+   * (the runtime says it stopped on an error). `Chat` shows a "reply was interrupted" notice.
+   */
+  interrupted: boolean;
+  /**
+   * Send the message that was left without an answer again (its text and the files it carried, which are
+   * stored already). Resolves `false` when it cannot be sent (nothing to retry, the composer is closed,
+   * the server refused).
+   */
+  retryInterrupted: () => Promise<boolean>;
   /**
    * Stop the turn. Where the transport can (`ChatTransport.cancel`, agent-server) the run is
    * stopped on the server, so tools stop running and spending stops; the partial answer is kept
@@ -214,6 +228,15 @@ export interface UseChatReturn {
 }
 
 type ToolCallMap = Map<string, { name: string; args: Record<string, unknown>; result?: unknown; reasoning?: string; displayName?: string }>;
+
+/** Extra input of `sendMessage` besides the text. */
+export interface SendUserMessageOptions {
+  /**
+   * Files already stored in the conversation that go with this message (sending an interrupted message
+   * again): named in the request, shown on the bubble, and left alone when the send fails.
+   */
+  reuseFiles?: FileAttachment[];
+}
 
 /** Attaches the pause info a non-streaming response carries next to the message. */
 function withActions(
@@ -992,6 +1015,17 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     setIsStreaming(true);
     setIsFollowing(true);
 
+    /** The message that started the followed turn, when the stored history does not have it yet. */
+    const showFollowedUserMessage = () => {
+      const user = state.userMessage;
+      if (user && !messagesRef.current.some((m) => m.id === user.id)) {
+        const at = new Date();
+        const added: Message = { id: user.id, conversationId, role: "user", content: user.content, files: user.files, createdAt: at, updatedAt: at };
+        // a snapshot and the `user.message` it stands for may both arrive before the next render
+        setMessages((prev) => (prev.some((m) => m.id === added.id) ? prev : [...prev, added]));
+      }
+    };
+
     const onEvent = (event: Parameters<typeof applyFollowEvent>[1]) => {
       if (stale()) {
         controller.abort();
@@ -999,22 +1033,23 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       }
       state = applyFollowEvent(state, event);
       switch (event.type) {
-        case "user.message": {
-          const user = state.userMessage;
-          if (user && !messagesRef.current.some((m) => m.id === user.id)) {
-            const at = new Date();
-            setMessages((prev) => [
-              ...prev,
-              { id: user.id, conversationId, role: "user", content: user.content, files: user.files, createdAt: at, updatedAt: at },
-            ]);
-          }
+        case "user.message":
+          showFollowedUserMessage();
           break;
-        }
+        case "agent.message.snapshot":
+          // Joined a run in progress: what it has written so far seeds the bubble (and the message that
+          // started it, when the stored history lacks it); the live deltas that follow add to it
+          showFollowedUserMessage();
+          setProgressMessage("");
+          streamingTextRef.current = state.text;
+          setStreamingText(state.text);
+          break;
         case "session.status_running":
-          streamingTextRef.current = "";
-          setStreamingText("");
-          activeToolCallsRef.current = new Map();
-          setActiveToolCalls(new Map());
+          // A new turn starts empty; the run a snapshot seeded keeps what the snapshot brought
+          streamingTextRef.current = state.text;
+          setStreamingText(state.text);
+          activeToolCallsRef.current = new Map(state.tools);
+          setActiveToolCalls(new Map(state.tools));
           break;
         case "agent.message.delta":
         case "agent.message":
@@ -1216,11 +1251,12 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     const held = maxFilesScope === "conversation" ? heldFiles : 0;
 
     for (const file of files) {
-      // Check file count
-      if (held + pendingFiles.length + validFiles.length >= maxFiles) {
+      // Check file count; the files accepted from this very batch count as attached too
+      const attached = held + pendingFiles.length + validFiles.length;
+      if (attached >= maxFiles) {
         refuse(
           maxFilesScope === "conversation"
-            ? t("chat.file.tooManyInChat", { maxFiles, held })
+            ? t("chat.file.tooManyInChat", { maxFiles, held: attached })
             : t("chat.file.tooMany", { maxFiles })
         );
         break;
@@ -1303,9 +1339,11 @@ export function useChat(options: UseChatOptions): UseChatReturn {
   // Sending
   // ---------------------------------------------------------------------------
 
-  const sendMessage = useCallback(async (typed: string): Promise<boolean> => {
+  const sendMessage = useCallback(async (typed: string, sendOptions: SendUserMessageOptions = {}): Promise<boolean> => {
+    // Files already stored for this message (sending an interrupted one again)
+    const reused = sendOptions.reuseFiles ?? [];
     // Files alone are a message: they go with the configured text (a server rejects an empty one)
-    const attachmentsOnly = !typed.trim() && pendingFiles.length > 0;
+    const attachmentsOnly = !typed.trim() && (pendingFiles.length > 0 || reused.length > 0);
     if (!clientRef.current || (!typed.trim() && !attachmentsOnly)) return false;
     const content = attachmentsOnly ? (attachmentsOnlyMessage ?? t("chat.input.attachmentsOnlyMessage")) : typed;
 
@@ -1373,8 +1411,11 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         conversationId: currentConversation.id,
         role: "user",
         content,
-        files: attached.length > 0
-          ? attached.map((f) => (storeFirst ? { ...f, status: "uploading" as const, progress: 0 } : f))
+        files: attached.length > 0 || reused.length > 0
+          ? [
+              ...attached.map((f) => (storeFirst ? { ...f, status: "uploading" as const, progress: 0 } : f)),
+              ...reused.map((f) => ({ ...f })),
+            ]
           : undefined,
         createdAt: new Date(),
         updatedAt: new Date(),
@@ -1482,7 +1523,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
           {
             message: content,
             files: filesToSend.length > 0 ? filesToSend : undefined,
-            fileIds: uploadedIds.length > 0 ? uploadedIds : undefined,
+            fileIds: uploadedIds.length + reused.length > 0 ? [...uploadedIds, ...reused.map((f) => f.id)] : undefined,
           },
           (() => {
             const base = createStreamCallbacksRef.current(isStale);
@@ -1500,7 +1541,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         const response = await clientRef.current.sendMessage(currentConversation.id, {
           message: content,
           files: filesToSend.length > 0 ? filesToSend : undefined,
-          fileIds: uploadedIds.length > 0 ? uploadedIds : undefined,
+          fileIds: uploadedIds.length + reused.length > 0 ? [...uploadedIds, ...reused.map((f) => f.id)] : undefined,
           stream: false,
         });
 
@@ -1717,6 +1758,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     setProgressMessage("");
 
     let accepted = false;
+    let carriedOn = false;
     try {
       if (streaming) {
         const abortController = new AbortController();
@@ -1737,7 +1779,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         accepted = true;
         if (!isStale()) showReply(response);
       }
-      return true;
+      carriedOn = true;
     } catch (err) {
       if (isStale()) return true;
       if (isAbort(err)) return accepted;
@@ -1764,6 +1806,10 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         abortControllerRef.current = null;
       }
     }
+    // What the conversation has cost (and where it stands) after the continuation is the server's to say: not
+    // every transport reports it with the turn's end
+    if (carriedOn && !isStale()) await refreshConversation(conv.id, capturedSession, { follow: false });
+    return true;
   }, [t, has, streaming, showReply, refreshConversation, dropped, recoverDroppedTurn, onError]);
 
   const updateBudget = useCallback(
@@ -1778,6 +1824,8 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         const updated = await client.updateBudget(conv.id, next);
         if (sessionRef.current !== capturedSession) return true;
         const budget = updated.budget === undefined ? next : normalizeBudget(updated.budget) ?? next;
+        const spentAfter = typeof updated.spentUsd === "number" ? updated.spentUsd : conversationRef.current?.spentUsd ?? conv.spentUsd;
+        const usedUpAfter = Boolean(budget && typeof spentAfter === "number" && spentAfter >= budget.maxCostUsd);
         setConversation((prev) => {
           if (!prev) return prev;
           const spentUsd = typeof updated.spentUsd === "number" ? updated.spentUsd : prev.spentUsd;
@@ -1793,8 +1841,12 @@ export function useChat(options: UseChatOptions): UseChatReturn {
           };
         });
         // The limit is changed. Carrying on is a turn of its own: how it went is in `error` (and nothing
-        // to carry on, a handler agent that cannot be continued, is not worth one)
-        if (opts.continue && wasPaused) await continueConversation();
+        // to carry on, a handler agent that cannot be continued, is not worth one). Only a turn the budget
+        // still holds paused is carried on: when the server's answer says the conversation is idle (the turn
+        // had finished, or raising the limit already released it) a continue would only be refused. A server
+        // that does not report the runtime leaves it to what this page knew.
+        const stillPaused = updated.runtime ? updated.runtime.status === "budget_paused" : wasPaused && !usedUpAfter;
+        if (opts.continue && wasPaused && stillPaused) await continueConversation();
         return true;
       } catch (err) {
         if (sessionRef.current !== capturedSession) return true;
@@ -1838,6 +1890,20 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       });
       await sendMessage(lastUserMessageRef.current);
     }
+  }, [sendMessage]);
+
+  // The conversation ends on the person's own message, and the run that was working on it was cut off
+  const interrupted =
+    !isStreaming && !isFollowing && !isLoadingConversation && isInterruptedTurn(messages, conversation?.runtime);
+
+  const retryInterrupted = useCallback(async (): Promise<boolean> => {
+    const last = messagesRef.current[messagesRef.current.length - 1];
+    if (!last || last.role !== "user" || isStreamingRef.current || followRef.current) return false;
+    // The files it carried are stored in the conversation already; the ones the server dropped are not offered again
+    const files = (last.files ?? []).filter((f) => !f.expired && !isFileExpired(f) && !f.status);
+    const text = messageText(last.content);
+    if (!text.trim() && files.length === 0) return false;
+    return sendMessage(text, { reuseFiles: files });
   }, [sendMessage]);
 
   /** Tell the server to stop the run. Quiet when the route is missing (an older server); anything else is shown. */
@@ -2043,6 +2109,8 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     loadConversation,
     createConversation,
     retry,
+    interrupted,
+    retryInterrupted,
     stop,
     pendingActions,
     awaitingAction,

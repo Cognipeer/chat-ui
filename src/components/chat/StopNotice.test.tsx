@@ -3,7 +3,9 @@ import { cleanup, render as rtlRender, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { ChatI18nProvider } from "../../providers";
 import { ChatMessage } from "./ChatMessage";
-import { MessageStopNotice } from "./StopNotice";
+import { InterruptedNotice, MessageStopNotice } from "./StopNotice";
+import { fireEvent } from "@testing-library/react";
+import { vi } from "vitest";
 import type { Message } from "../../types";
 
 afterEach(cleanup);
@@ -110,5 +112,37 @@ describe("a stopped answer in ChatMessage", () => {
     render(<ChatMessage message={message({ stopReason: "error" })} renderStopNotice={() => <p>mine</p>} />);
     expect(screen.getByText("mine")).toBeTruthy();
     expect(screen.queryByText("Something went wrong and the assistant stopped.")).toBeNull();
+  });
+});
+
+describe("InterruptedNotice", () => {
+  const sent = message({ role: "user", content: "go" });
+
+  it("says the reply was interrupted and offers to send the message again", () => {
+    const onRetry = vi.fn();
+    render(<InterruptedNotice message={sent} onRetry={onRetry} />);
+    const notice = screen.getByRole("status");
+    expect(notice.getAttribute("data-chat-stop")).toBe("interrupted");
+    expect(notice.textContent).toContain("The reply was interrupted");
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it("without a way to send (a transcript) it only says what happened", () => {
+    render(<InterruptedNotice message={sent} />);
+    expect(screen.getByText("The reply was interrupted")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  });
+
+  it("speaks Turkish, and a host's own render replaces it (with the retry it can offer)", () => {
+    render(<InterruptedNotice message={sent} onRetry={() => {}} />, "tr");
+    expect(screen.getByText("Yanıt yarıda kesildi")).toBeTruthy();
+    cleanup();
+    const onRetry = vi.fn();
+    render(
+      <InterruptedNotice message={sent} onRetry={onRetry} render={(p) => <button onClick={p.onRetry}>mine {p.stopReason}</button>} />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "mine error" }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
   });
 });

@@ -165,16 +165,24 @@ describe("Chat and the conversation's usage limit", () => {
   });
 
   it("with the host's permission a person raises the limit and the paused turn carries on", async () => {
-    const updateBudget = vi.fn(async (_id: string, next: unknown) => conversation({ budget: next as typeof budget, spentUsd: 5.2, runtime: { status: "idle", stopReason: "budget_reached", lastEventSeq: 4 } }));
+    // the server's answer to the change: raised, and the turn it stopped is still paused
+    const updateBudget = vi.fn(async (_id: string, next: unknown) => conversation({ budget: next as typeof budget, spentUsd: 5.2, runtime: { status: "budget_paused", stopReason: "budget_reached", lastEventSeq: 4 } }));
+    let continued = false;
     const continueConversation = vi.fn(async (_id: string, options?: { callbacks?: StreamCallbacks }) => {
       options?.callbacks?.onDone?.({
         type: "stream.done", conversationId: "c1", messageId: "m3", content: "and the rest", stopReason: "end_turn",
         budget: { maxCostUsd: 10, onReach: "pause" }, spentUsd: 5.6, timestamp: 1,
       });
+      continued = true;
       return undefined;
     });
+    const getConversation = vi.fn(async () =>
+      continued
+        ? { conversation: conversation({ budget: { maxCostUsd: 10, onReach: "pause" }, spentUsd: 5.6, runtime: { status: "idle", stopReason: "end_turn", lastEventSeq: 7 } }), messages: [user, message({ id: "m2", content: "cut" }), message({ id: "m3", content: "and the rest" })] }
+        : { conversation: pausedConversation(), messages: [user, message({ id: "m2", content: "cut" })] }
+    );
     renderChat(
-      transportFor({ conversation: pausedConversation(), messages: [user, message({ id: "m2", content: "cut" })], overrides: { updateBudget, continueConversation } }),
+      transportFor({ conversation: pausedConversation(), messages: [user, message({ id: "m2", content: "cut" })], overrides: { updateBudget, continueConversation, getConversation } }),
       { conversationId: "c1", allowBudgetEdit: true }
     );
     const field = (await screen.findByLabelText("New limit (USD)")) as HTMLInputElement;
@@ -206,19 +214,27 @@ describe("Chat and the conversation's usage limit", () => {
 
   it("shows the continuation as the live turn, next to the answer it carries on instead of over it", async () => {
     let finish!: () => void;
+    let continued = false;
     const continueConversation = vi.fn(async (_id: string, options?: { callbacks?: StreamCallbacks }) => {
       options?.callbacks?.onStart?.({ type: "stream.start", conversationId: "c1", messageId: "m2", timestamp: 1 });
       options?.callbacks?.onText?.("and the rest", "and the rest");
       await new Promise<void>((resolve) => (finish = resolve));
       options?.callbacks?.onDone?.({ type: "stream.done", conversationId: "c1", messageId: "m3", content: "and the rest", stopReason: "end_turn", timestamp: 2 });
+      continued = true;
       return undefined;
     });
+    const cut = message({ id: "m2", content: "The answer was cut", status: "incomplete", stopReason: "budget_reached" });
+    const getConversation = vi.fn(async () =>
+      continued
+        ? { conversation: conversation({ budget, spentUsd: 5.3, runtime: { status: "idle", stopReason: "end_turn", lastEventSeq: 7 } }), messages: [user, cut, message({ id: "m3", content: "and the rest" })] }
+        : { conversation: pausedConversation(), messages: [user, cut] }
+    );
     renderChat(
       transportFor({
         agents: [agent({ capabilities: { budget: { allowContinue: true } } })],
         conversation: pausedConversation(),
-        messages: [user, message({ id: "m2", content: "The answer was cut", status: "incomplete", stopReason: "budget_reached" })],
-        overrides: { continueConversation },
+        messages: [user, cut],
+        overrides: { continueConversation, getConversation },
       }),
       { conversationId: "c1" }
     );
@@ -284,7 +300,7 @@ describe("Chat reads the composer from what the agent says", () => {
         target: { files: [new File(["x"], "c.pdf", { type: "application/pdf" }), new File(["y"], "d.pdf", { type: "application/pdf" })] },
       });
     });
-    expect(await screen.findByText("This chat can hold 3 files; 2 already attached")).toBeTruthy();
+    expect(await screen.findByText("This chat can hold 3 files; 3 already attached")).toBeTruthy();
     expect(screen.getByText("3 of 3 files in this chat")).toBeTruthy();
   });
 
@@ -335,5 +351,108 @@ describe("Chat stores files as they are picked", () => {
     });
     expect(await screen.findByText("read it")).toBeTruthy();
     expect((sendMessageStream.mock.calls[0][1] as { fileIds?: string[] }).fileIds).toEqual(["srv-1"]);
+  });
+});
+
+describe("Chat: files that go up with the message (stored first)", () => {
+  it("the bubble's chip shows how far the upload is, offers no Download until the file is stored, then does", async () => {
+    let report!: (p: { loaded: number; total: number }) => void;
+    let finish!: (file: FileAttachment) => void;
+    const uploadFile = vi.fn(
+      (p: UploadFileParams) =>
+        new Promise<FileAttachment>((resolve) => {
+          report = p.onProgress!;
+          finish = resolve;
+        })
+    );
+    const sendMessageStream = vi.fn(async (_c: string, _o: unknown, cb: StreamCallbacks) => {
+      cb.onDone?.({ type: "stream.done", conversationId: "new", messageId: "m9", content: "read it", timestamp: 1 });
+    });
+    const getFileUrl = vi.fn(async () => "blob:stored");
+    renderChat(transportFor({ overrides: { uploadFile, sendMessageStream, getFileUrl, supportsRawUpload: true } }), { fileTransport: "upload" });
+    const input = (await screen.findByTitle("Attach files")).parentElement!.querySelector("input[type=file]") as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(input, { target: { files: [new File(["hello"], "notes.txt", { type: "text/plain" })] } });
+    });
+    fireEvent.change(textbox(), { target: { value: "read" } });
+    await act(async () => {
+      fireEvent.click(screen.getByTitle("Send message"));
+    });
+
+    // the message is on screen at once; its chip is the one in the transcript, going up
+    const bubble = (await screen.findByText("read")).closest(".group") as HTMLElement;
+    await waitFor(() => expect(within(bubble).getByRole("progressbar")).toBeTruthy());
+    act(() => report({ loaded: 1, total: 4 }));
+    expect(within(bubble).getByRole("progressbar").getAttribute("aria-valuenow")).toBe("25");
+    expect(within(bubble).getByText("Uploading 25%")).toBeTruthy();
+    expect(within(bubble).queryByText("Download")).toBeNull();
+    expect(sendMessageStream).not.toHaveBeenCalled();
+
+    await act(async () => {
+      finish({ id: "srv-1", name: "notes.txt", mimeType: "text/plain", size: 5 });
+    });
+    expect(await screen.findByText("read it")).toBeTruthy();
+    // stored: the bubble's chip is plain and can be downloaded
+    await waitFor(() => expect(within(bubble).queryByRole("progressbar")).toBeNull());
+    expect(within(bubble).getByText("Download")).toBeTruthy();
+    expect((sendMessageStream.mock.calls[0][1] as { fileIds?: string[] }).fileIds).toEqual(["srv-1"]);
+  });
+});
+
+describe("Chat: a reply that was interrupted", () => {
+  const stopped = () => conversation({ runtime: { status: "idle", stopReason: "error", lastEventSeq: 4, pendingActionIds: [] } });
+  const asked = message({ id: "u1", role: "user", content: "summarize the report", files: [{ id: "f1", name: "report.pdf", mimeType: "application/pdf", size: 10 }] });
+
+  it("says so under the message that got no answer, and sends it again (with its stored files) on Retry", async () => {
+    let answered = false;
+    const getConversation = vi.fn(async () =>
+      answered
+        ? { conversation: conversation({ runtime: { status: "idle", stopReason: "end_turn", lastEventSeq: 8 } }), messages: [asked, message({ id: "u2", role: "user", content: "summarize the report", files: asked.files }), message({ id: "m2", content: "Here it is." })] }
+        : { conversation: stopped(), messages: [asked] }
+    );
+    const sendMessageStream = vi.fn(async (_c: string, _o: unknown, cb: StreamCallbacks) => {
+      cb.onStart?.({ type: "stream.start", conversationId: "c1", messageId: "m2", timestamp: 1 });
+      cb.onDone?.({ type: "stream.done", conversationId: "c1", messageId: "m2", content: "Here it is.", stopReason: "end_turn", timestamp: 2 });
+      answered = true;
+    });
+    renderChat(transportFor({ overrides: { getConversation, sendMessageStream } }), { conversationId: "c1" });
+
+    expect(await screen.findByText("The reply was interrupted")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("Here it is.")).toBeTruthy();
+    expect(sendMessageStream).toHaveBeenCalledTimes(1);
+    expect(sendMessageStream.mock.calls[0][0]).toBe("c1");
+    expect(sendMessageStream.mock.calls[0][1]).toMatchObject({ message: "summarize the report", fileIds: ["f1"] });
+    // answered: no notice any more
+    await waitFor(() => expect(screen.queryByText("The reply was interrupted")).toBeNull());
+  });
+
+  it("a transcript says it too, but has nothing to send with", async () => {
+    renderChat(transportFor({ conversation: stopped(), messages: [asked] }), { conversationId: "c1", readOnly: true });
+    expect(await screen.findByText("The reply was interrupted")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  });
+
+  it("no notice for a conversation that ended well, or whose last message is an answer", async () => {
+    renderChat(transportFor({ conversation: conversation({ runtime: { status: "idle", stopReason: "end_turn", lastEventSeq: 4 } }), messages: [asked] }), { conversationId: "c1" });
+    await screen.findByText("summarize the report");
+    expect(screen.queryByText("The reply was interrupted")).toBeNull();
+    cleanup();
+    renderChat(transportFor({ conversation: stopped(), messages: [asked, message({ id: "m2", content: "partial", status: "incomplete", stopReason: "error" })] }), { conversationId: "c1" });
+    await screen.findByText("partial");
+    expect(screen.queryByText("The reply was interrupted")).toBeNull();
+    expect(screen.getByText("Something went wrong and the assistant stopped.")).toBeTruthy();
+  });
+
+  it("a host's own stop notice renders it, with the retry", async () => {
+    const sendMessageStream = vi.fn(async (_c: string, _o: unknown, cb: StreamCallbacks) => {
+      cb.onDone?.({ type: "stream.done", conversationId: "c1", messageId: "m2", content: "ok", timestamp: 1 });
+    });
+    renderChat(transportFor({ conversation: stopped(), messages: [asked], overrides: { sendMessageStream } }), {
+      conversationId: "c1",
+      renderStopNotice: (p) => (p.onRetry ? <button onClick={p.onRetry}>again {p.message.id}</button> : <span>no retry</span>),
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "again u1" }));
+    await waitFor(() => expect(sendMessageStream).toHaveBeenCalledTimes(1));
   });
 });

@@ -63,7 +63,7 @@ Enable file attachments in your chat.
 | `maxFiles` | How many files **one conversation** may hold (unless `maxFilesScope: "message"`). The chat counts what the conversation holds - the server's file list, or the files of the loaded messages - and shows "3 of 10 files in this chat" |
 | `maxFileSize`, `allowedMimeTypes` | Checked before a file is attached, with the limit in the message |
 | `acceptsImages: false` | An attached image gets a warning (below) |
-| `retentionDays` | Shown under the composer: "Files are kept for 30 days". agent-server does not send it; set it from your own agent listing or as `metadata.fileRetentionDays`, and without it there is no hint |
+| `retentionDays` | Shown under the composer: "Files are kept for 30 days". Taken from `capabilities.attachments.retentionDays` when the agent listing carries it, else from `metadata.fileRetentionDays`; without either there is no hint |
 
 The older keys (`metadata.enableFileUpload`, `maxFileSize`, `maxFiles`, `allowedFileTypes`, `acceptsImages`, `maxFilesScope`, `fileRetentionDays`) keep working.
 
@@ -121,7 +121,7 @@ Each file is first stored with `POST /files` (with the conversation id) and the 
 <Chat baseUrl="/api/agents" fileTransport="upload" />
 ```
 
-The message bubble appears **at once**, with a progress bar on each file's chip, and turns plain when the files are in. A failed upload or a refused message takes the bubble back and returns the files and the text to the composer; a file stored for a message that then fails is removed again. Stop aborts the upload.
+The message bubble appears **at once**, with each file's chip going up in it: "Uploading 40%" and a progress bar (a picture keeps its local thumbnail with the bar under it). A file that is not stored yet offers no Download and is never fetched from the server; the chip turns plain, and gets its Download, once the files are in. A failed upload or a refused message takes the bubble back and returns the files and the text to the composer; a file stored for a message that then fails is removed again. Stop aborts the upload.
 
 ### `upload-on-select`: as soon as they are picked
 

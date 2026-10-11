@@ -37,6 +37,10 @@ export function normalizeStopReason(value: unknown): StopReason | undefined {
       return "requires_action";
     case "canceled":
       return "cancelled";
+    case "interrupted":
+    case "run_interrupted":
+      // a run cut off by a restart: the runtime files it under `error`
+      return "error";
     default:
       return undefined;
   }
@@ -71,6 +75,19 @@ export function stopNoticeKind(
   if (message.status === "cancelled") return "cancelled";
   if (message.status === "incomplete") return "incomplete";
   return undefined;
+}
+
+/**
+ * The person's last message never got its answer: the run that was working on it was cut off (the
+ * server restarted, the run failed) and nothing was written, so the conversation ends on a message of
+ * theirs while the runtime says it stopped on an error. Not while a turn is running or waiting.
+ */
+export function isInterruptedTurn(
+  messages: ReadonlyArray<Pick<Message, "role">>,
+  runtime: ConversationRuntime | undefined
+): boolean {
+  if (!runtime || runtime.status !== "idle" || runtime.stopReason !== "error") return false;
+  return messages.length > 0 && messages[messages.length - 1]!.role === "user";
 }
 
 /** The warnings a turn left on its message (`metadata.warnings`), well-formed ones only. */

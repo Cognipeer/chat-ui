@@ -59,7 +59,7 @@ The host that lists the agents (`GET /agents`) can say these in each agent, the 
 With `allowArgumentEdit` (or the agent's `capabilities.approvalArgsEdit: true`), the approval card's "Edit arguments" opens the call's arguments as JSON. The edit is checked before Approve is allowed:
 
 - it has to be valid JSON, and an object;
-- when the action carries an `argsSchema` (the tool's JSON Schema), the edit is checked against it. Supported keywords: `type` (also unions), `enum`, `const`, `properties`, `required`, `additionalProperties`, `items`, `minimum` / `maximum` (and the exclusive forms), `minLength` / `maxLength`, `pattern`, `minItems` / `maxItems`, `anyOf` / `oneOf` / `allOf`. Keywords it does not know (`$ref`, `format`, ...) are ignored, and the server validates the edit again.
+- when the action carries an `argsSchema` (the tool's JSON Schema; `args_schema` and `inputSchema` are read as the same thing, also on the Console wire), the edit is checked against it. Supported keywords: `type` (also unions), `enum`, `const`, `properties`, `required`, `additionalProperties`, `items`, `minimum` / `maximum` (and the exclusive forms), `minLength` / `maxLength`, `pattern`, `minItems` / `maxItems`, `anyOf` / `oneOf` / `allOf`. Keywords it does not know (`$ref`, `format`, ...) are ignored, and the server validates the edit again.
 
 The problems are listed under the editor in the person's language. A changed call is marked "Arguments edited", **Reset arguments** puts the proposal back, and Approve sends `approvedArgs` only when the arguments differ from what the agent proposed (a reordered but identical object is not an edit). Deny ignores the edit. Once approved the card says "Approved with edited arguments" and its Details show what was approved.
 

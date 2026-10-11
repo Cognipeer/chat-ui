@@ -46,7 +46,12 @@ export function normalizeActions(value: unknown): PendingAction[] {
   for (const item of value) {
     const kind = kindOf(item);
     if (!kind) continue;
-    const action = { ...(item as Record<string, unknown>), type: kind };
+    const action: Record<string, unknown> = { ...(item as Record<string, unknown>), type: kind };
+    // A snake_case or MCP-style spelling of the arguments' JSON Schema reads as `argsSchema`
+    if (kind === "tool_approval" && !isRecord(action.argsSchema)) {
+      const schema = [action.args_schema, action.input_schema, action.inputSchema].find(isRecord);
+      if (schema) action.argsSchema = schema;
+    }
     if (isAction(action)) out.push(action);
   }
   return out;
@@ -323,6 +328,44 @@ export function actionDeadline(action: Pick<PendingAction, "expiresAt">): number
   if (!action.expiresAt) return undefined;
   const at = Date.parse(action.expiresAt);
   return Number.isFinite(at) ? at : undefined;
+}
+
+/** A tool whose whole job is asking the person something (`ask_user_question`, `AskUserQuestion`, ...). */
+const isQuestionTool = (name: string) => /question|askuser/.test(name.toLowerCase().replace(/[^a-z]/g, ""));
+
+/**
+ * The tool calls of a paused message that still wait for the person: the ones its open approvals name
+ * (`toolCallId`), and, for an open question (which names none), the calls of the question tool that
+ * have no result. A call that is waiting is not a finished one, so it must not be drawn with the
+ * "done" tick. Nothing is waiting once every card of the message has an outcome (answered, cancelled,
+ * expired) or its deadline passed.
+ */
+export function waitingToolCallIds(
+  message: Pick<Message, "pendingActions" | "actionStates">,
+  calls: ReadonlyArray<{ id: string; name: string; result?: unknown }>,
+  now: number = Date.now()
+): Set<string> {
+  const waiting = new Set<string>();
+  const open = (message.pendingActions ?? []).filter((action) => {
+    const status = message.actionStates?.[action.id]?.status;
+    if (status && status !== "pending" && status !== "resolving") return false;
+    const at = actionDeadline(action);
+    return status === "resolving" || at === undefined || at > now;
+  });
+  if (open.length === 0 || calls.length === 0) return waiting;
+
+  const known = new Set(calls.map((call) => call.id));
+  let unnamedQuestions = 0;
+  for (const action of open) {
+    const id = (action as { toolCallId?: unknown }).toolCallId;
+    if (typeof id === "string" && known.has(id)) waiting.add(id);
+    else if (action.type === "user_question") unnamedQuestions += 1;
+  }
+  if (unnamedQuestions > 0) {
+    const candidates = calls.filter((call) => call.result === undefined && !waiting.has(call.id) && isQuestionTool(call.name));
+    for (const call of candidates.slice(-unnamedQuestions)) waiting.add(call.id);
+  }
+  return waiting;
 }
 
 /**

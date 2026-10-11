@@ -12,6 +12,7 @@ import {
   singleFreeTextQuestion,
   splitRemaining,
   stateForSpentAction,
+  waitingToolCallIds,
 } from "./actions";
 
 const approval: PendingAction = { id: "a1", type: "tool_approval", toolName: "sandbox_exec", args: { cmd: "ls" } };
@@ -297,5 +298,65 @@ describe("expireLapsedActions", () => {
       ],
     });
     expect(expireLapsedActions([message], now)[0].actionStates).toEqual({ late: { status: "expired" } });
+  });
+});
+
+describe("normalizeActions: the arguments' JSON Schema", () => {
+  const schema = { type: "object", properties: { cmd: { type: "string" } } };
+
+  it("keeps argsSchema as it comes, and reads the snake_case and MCP spellings as argsSchema", () => {
+    expect(normalizeActions([{ ...approval, argsSchema: schema }])[0]).toMatchObject({ argsSchema: schema });
+    expect(normalizeActions([{ ...approval, args_schema: schema }])[0]).toMatchObject({ argsSchema: schema });
+    expect(normalizeActions([{ ...approval, inputSchema: schema }])[0]).toMatchObject({ argsSchema: schema });
+    expect(normalizeActions([{ ...approval, args_schema: "nope" }])[0]).not.toHaveProperty("argsSchema");
+  });
+
+  it("an argsSchema of its own wins over another spelling", () => {
+    const own = { type: "object" };
+    expect(normalizeActions([{ ...approval, argsSchema: own, args_schema: schema }])[0]).toMatchObject({ argsSchema: own });
+  });
+});
+
+describe("waitingToolCallIds", () => {
+  const calls = [
+    { id: "t1", name: "search" },
+    { id: "t2", name: "ask_user_question" },
+    { id: "t3", name: "deploy_service" },
+  ];
+  const paused = (extra: Partial<Message>): Message => msg({ id: "m1", ...extra });
+
+  it("an open question marks the question tool's call as waiting, not the finished ones", () => {
+    const ids = waitingToolCallIds(paused({ pendingActions: [question] }), calls);
+    expect(Array.from(ids)).toEqual(["t2"]);
+  });
+
+  it("an open approval marks the call it names", () => {
+    const ids = waitingToolCallIds(paused({ pendingActions: [{ ...approval, toolCallId: "t3" }] }), calls);
+    expect(Array.from(ids)).toEqual(["t3"]);
+  });
+
+  it("two open questions mark the last two calls of the question tool", () => {
+    const more = [...calls, { id: "t4", name: "AskUserQuestion" }, { id: "t5", name: "ask_user_question" }];
+    const ids = waitingToolCallIds(paused({ pendingActions: [question, { ...question, id: "q2" }] }), more);
+    expect(Array.from(ids).sort()).toEqual(["t4", "t5"]);
+  });
+
+  it("nothing waits once the card has an outcome, or while the call has its result", () => {
+    for (const status of ["resolved", "cancelled", "expired"] as const) {
+      expect(waitingToolCallIds(paused({ pendingActions: [question], actionStates: { q1: { status } } }), calls).size, status).toBe(0);
+    }
+    expect(waitingToolCallIds(paused({ pendingActions: [question] }), [{ id: "t2", name: "ask_user_question", result: { ok: true } }]).size).toBe(0);
+  });
+
+  it("an answer being sent still counts as waiting; a deadline that has passed does not", () => {
+    expect(waitingToolCallIds(paused({ pendingActions: [question], actionStates: { q1: { status: "resolving" } } }), calls).size).toBe(1);
+    const lapsed = { ...question, expiresAt: "2026-10-11T09:00:00Z" };
+    expect(waitingToolCallIds(paused({ pendingActions: [lapsed] }), calls, Date.parse("2026-10-11T10:00:00Z")).size).toBe(0);
+  });
+
+  it("no open action, no calls, or a question with no question tool among the calls: nothing waits", () => {
+    expect(waitingToolCallIds(paused({}), calls).size).toBe(0);
+    expect(waitingToolCallIds(paused({ pendingActions: [question] }), []).size).toBe(0);
+    expect(waitingToolCallIds(paused({ pendingActions: [question] }), [{ id: "t1", name: "search" }]).size).toBe(0);
   });
 });

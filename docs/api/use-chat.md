@@ -153,7 +153,14 @@ interface UseChatReturn {
   // Resolves false when the message was refused before the server took it: the
   // transcript is unchanged, the files are still in pendingFiles, `error` says why.
   // Empty text is fine while files are attached.
-  sendMessage: (content: string) => Promise<boolean>;
+  // `options.reuseFiles`: files already stored in the conversation that go with this message (used by
+  // `retryInterrupted`); they are named in the request and left alone if it fails.
+  sendMessage: (content: string, options?: { reuseFiles?: FileAttachment[] }) => Promise<boolean>;
+  // The conversation ends on a message of the person's that never got its answer: the run was cut off
+  // (the runtime stopped on an error). `Chat` shows "The reply was interrupted" with a retry.
+  interrupted: boolean;
+  // Send that message again, with the stored files it carried. false: nothing to retry / it was refused.
+  retryInterrupted: () => Promise<boolean>;
   // Stops the run on the server (transport.cancel) and closes the stream; the partial answer stays, marked stopped.
   // Without cancel it only closes the connection.
   stop: () => void;

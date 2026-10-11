@@ -4,6 +4,7 @@ import type { ReactElement } from "react";
 import { ChatI18nProvider } from "../../providers";
 import { QuestionCard, ToolApprovalCard } from "./ActionCards";
 import type { PendingAction } from "../../types";
+import { normalizeActions } from "../../utils";
 
 afterEach(cleanup);
 
@@ -442,5 +443,34 @@ describe("focus on a card that just appeared", () => {
   it("does not take focus unless asked", () => {
     render(<ToolApprovalCard action={approval} onResolve={() => {}} />);
     expect(document.activeElement).toBe(document.body);
+  });
+});
+
+describe("ToolApprovalCard: the schema the server sends with the action drives the editor's checks", () => {
+  // as an agent-server or a Console wire answer carries it, through the same reading the hook uses
+  const [fromServer] = normalizeActions([
+    {
+      id: "a9",
+      type: "tool_approval",
+      toolName: "deploy_service",
+      args: { service: "web", version: "1.0.0" },
+      args_schema: { type: "object", required: ["service", "version"], properties: { service: { type: "string" }, version: { type: "string" } } },
+    },
+  ]) as [Approval];
+
+  it("refuses an edit the schema rejects, says why, and takes one that fits", () => {
+    const onResolve = vi.fn();
+    render(<ToolApprovalCard action={fromServer} allowArgumentEdit onResolve={onResolve} />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit arguments" }));
+    const editor = screen.getByRole("textbox", { name: "Arguments (JSON)" });
+    fireEvent.change(editor, { target: { value: '{"service":9}' } });
+    const approve = screen.getByRole("button", { name: "Approve" }) as HTMLButtonElement;
+    expect(approve.disabled).toBe(true);
+    expect(screen.getByRole("alert").textContent).toMatch(/service/);
+    expect(screen.getByRole("alert").textContent).toMatch(/version/);
+    fireEvent.change(editor, { target: { value: '{"service":"api","version":"2.0.0"}' } });
+    expect(approve.disabled).toBe(false);
+    fireEvent.click(approve);
+    expect(onResolve).toHaveBeenCalledWith({ type: "tool_approval", decision: "allow", approvedArgs: { service: "api", version: "2.0.0" } });
   });
 });

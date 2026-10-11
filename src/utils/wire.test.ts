@@ -8,6 +8,16 @@ describe("pendingActionFromWire", () => {
     ).toEqual({ id: "act_1", type: "tool_approval", toolName: "sandbox_exec", args: { cmd: "ls" }, expiresAt: "2026-10-12T00:00:00Z" });
   });
 
+  it("keeps the JSON Schema of the arguments, whichever way the server spells it", () => {
+    const schema = { type: "object", required: ["cmd"], properties: { cmd: { type: "string" } } };
+    for (const key of ["args_schema", "argsSchema", "input_schema", "inputSchema"]) {
+      const action = pendingActionFromWire({ id: "a", kind: "tool_approval", tool_name: "t", args: { cmd: "ls" }, [key]: schema });
+      expect(action, key).toMatchObject({ argsSchema: schema });
+    }
+    // something that is not a schema is not kept
+    expect(pendingActionFromWire({ id: "a", kind: "tool_approval", tool_name: "t", args_schema: "nope" })).not.toHaveProperty("argsSchema");
+  });
+
   it("reads a question, turning snake_case keys back", () => {
     expect(
       pendingActionFromWire({

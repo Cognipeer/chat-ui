@@ -118,6 +118,65 @@ describe("useChat: a turn that is still running when the conversation opens", ()
     expect(result.current.composerState).toBe("open");
   });
 
+  it("a snapshot brings the text written so far and the user message the history lacks, then the deltas add to them", async () => {
+    // the stored history is empty while the run goes on: the snapshot is what shows the person's own message
+    const getConversation = vi
+      .fn()
+      .mockResolvedValueOnce({ conversation: conversation({ runtime: { status: "running", lastEventSeq: 2, activeRunId: "run_1" } }), messages: [] })
+      .mockResolvedValue({
+        conversation: conversation({ runtime: { status: "idle", stopReason: "end_turn", lastEventSeq: 6 } }),
+        messages: [user, message({ id: "m2", content: "Here is the report." })],
+      });
+    const gate = deferred();
+    const followEvents = vi.fn(async (_id: string, options: FollowEventsOptions) => {
+      options.onEvent(event("agent.message.snapshot", { run_id: "run_1", text: "Here is ", user_message: { id: "u1", content: "research it", files: [] } }));
+      options.onEvent(event("agent.message.delta", { text: "the report." }));
+      await gate.promise;
+      options.onEvent(event("agent.message", { content: "Here is the report.", message_id: "m2" }, 5));
+      options.onEvent(event("session.status_idle", { stop_reason: "end_turn" }, 6));
+    });
+    const { result } = renderHook(
+      () => useChat({ transport: makeTransport({ getConversation, followEvents }), agentId: "agent" }),
+      { wrapper }
+    );
+    await act(async () => {
+      await result.current.loadConversation("c1");
+    });
+    await waitFor(() => expect(result.current.streamingText).toBe("Here is the report."));
+    // the run's own message is on screen once, the answer so far below it
+    expect(result.current.messages.map((m) => [m.id, m.role, m.content])).toEqual([["u1", "user", "research it"]]);
+    expect(result.current.isFollowing).toBe(true);
+
+    await act(async () => {
+      gate.resolve();
+    });
+    await waitFor(() => expect(result.current.isFollowing).toBe(false));
+    // the stored history replaces the live view, with the user message exactly once
+    expect(result.current.messages.map((m) => m.id)).toEqual(["u1", "m2"]);
+    expect(result.current.streamingText).toBe("");
+  });
+
+  it("a snapshot does not add the user message again when the history already has it", async () => {
+    const getConversation = vi.fn().mockResolvedValue({
+      conversation: conversation({ runtime: { status: "running", lastEventSeq: 2 } }),
+      messages: [user],
+    });
+    const followEvents = vi.fn(async (_id: string, options: FollowEventsOptions) => {
+      options.onEvent(event("agent.message.snapshot", { run_id: "run_1", text: "Partly", user_message: { id: "u1", content: "research it" } }));
+      options.onEvent(event("user.message", { content: "research it", message_id: "u1" }, 1));
+      await new Promise<void>((resolve) => options.signal?.addEventListener("abort", () => resolve()));
+    });
+    const { result } = renderHook(
+      () => useChat({ transport: makeTransport({ getConversation, followEvents }), agentId: "agent" }),
+      { wrapper }
+    );
+    await act(async () => {
+      await result.current.loadConversation("c1");
+    });
+    await waitFor(() => expect(result.current.streamingText).toBe("Partly"));
+    expect(result.current.messages.map((m) => m.id)).toEqual(["u1"]);
+  });
+
   it("shows the answer of a turn that did not stream once it is written", async () => {
     const getConversation = vi
       .fn()
@@ -833,12 +892,21 @@ describe("useChat: the conversation's usage limit", () => {
   });
 
   it("raising the limit and continuing carries the paused turn on into a new message", async () => {
-    const getConversation = vi.fn(async () => ({
-      conversation: conversation({ budget, spentUsd: 1.02, runtime: { status: "budget_paused", stopReason: "budget_reached", lastEventSeq: 3 } }),
-      messages: [message({ id: "u1", role: "user", content: "go" }), message({ id: "m1", content: "partial", status: "incomplete", stopReason: "budget_reached" })],
-    }));
+    let continued = false;
+    const getConversation = vi.fn(async () =>
+      continued
+        ? {
+            conversation: conversation({ budget: { maxCostUsd: 5, onReach: "pause" }, spentUsd: 1.3, runtime: { status: "idle", stopReason: "end_turn", lastEventSeq: 6 } }),
+            messages: [message({ id: "u1", role: "user", content: "go" }), message({ id: "m1", content: "partial", status: "incomplete", stopReason: "budget_reached" }), message({ id: "m2", content: "and the rest" })],
+          }
+        : {
+            conversation: conversation({ budget, spentUsd: 1.02, runtime: { status: "budget_paused", stopReason: "budget_reached", lastEventSeq: 3 } }),
+            messages: [message({ id: "u1", role: "user", content: "go" }), message({ id: "m1", content: "partial", status: "incomplete", stopReason: "budget_reached" })],
+          }
+    );
+    // raising the limit leaves a turn the budget stopped midway paused: it is still to be carried on
     const updateBudget = vi.fn(async (_id: string, next: { maxCostUsd: number; onReach: "pause" | "stop" } | null) =>
-      conversation({ budget: next, spentUsd: 1.02, runtime: { status: "idle", stopReason: "budget_reached", lastEventSeq: 3 } })
+      conversation({ budget: next, spentUsd: 1.02, runtime: { status: "budget_paused", stopReason: "budget_reached", lastEventSeq: 3 } })
     );
     const continueConversation = vi.fn(async (_id: string, options?: { callbacks?: StreamCallbacks }) => {
       options?.callbacks?.onStart?.({ type: "stream.start", conversationId: "c1", messageId: "m1", timestamp: 1 });
@@ -846,6 +914,7 @@ describe("useChat: the conversation's usage limit", () => {
         type: "stream.done", conversationId: "c1", messageId: "m2", content: "and the rest", stopReason: "end_turn",
         budget: { maxCostUsd: 5, onReach: "pause" }, spentUsd: 1.3, timestamp: 2,
       });
+      continued = true;
       return undefined;
     });
     const { result } = renderHook(
@@ -868,6 +937,85 @@ describe("useChat: the conversation's usage limit", () => {
     expect(result.current.budgetExhausted).toBe(false);
     expect(result.current.composerState).toBe("open");
     expect(result.current.conversation).toMatchObject({ spentUsd: 1.3, budget: { maxCostUsd: 5 } });
+    // the conversation was fetched again once the continuation ended
+    expect(getConversation).toHaveBeenCalledTimes(2);
+  });
+
+  it("looks at the conversation again after a continuation: what it has cost now comes from the server, not from the turn", async () => {
+    let continued = false;
+    const getConversation = vi.fn(async () => ({
+      conversation: conversation({
+        budget,
+        spentUsd: continued ? 20 : 10,
+        runtime: continued ? { status: "idle", stopReason: "end_turn", lastEventSeq: 9 } : { status: "budget_paused", stopReason: "budget_reached", lastEventSeq: 3 },
+      }),
+      messages: [message({ id: "u1", role: "user", content: "go" }), ...(continued ? [message({ id: "m2", content: "done" })] : [])],
+    }));
+    // a transport that does not report the spend with the end of the turn (the portal)
+    const continueConversation = vi.fn(async (_id: string, options?: { callbacks?: StreamCallbacks }) => {
+      options?.callbacks?.onDone?.({ type: "stream.done", conversationId: "c1", messageId: "m2", content: "done", stopReason: "end_turn", timestamp: 2 });
+      continued = true;
+      return undefined;
+    });
+    const { result } = renderHook(
+      () => useChat({ transport: makeTransport({ getConversation, continueConversation }), agentId: "agent", conversationId: "c1" }),
+      { wrapper }
+    );
+    await waitFor(() => expect(result.current.spentUsd).toBe(10));
+    await act(async () => {
+      await result.current.continueConversation();
+    });
+    expect(result.current.spentUsd).toBe(20);
+    expect(result.current.conversation?.runtime?.status).toBe("idle");
+    expect(result.current.messages.map((m) => m.id)).toEqual(["u1", "m2"]);
+  });
+
+  it("raises the limit but does not ask to continue when the server's answer says the conversation is idle already", async () => {
+    // the turn had finished its answer before the limit was reached: raising the limit releases the conversation
+    const getConversation = vi.fn(async () => ({
+      conversation: conversation({ budget, spentUsd: 1.02, runtime: { status: "budget_paused", stopReason: "budget_reached", lastEventSeq: 3 } }),
+      messages: [message({ id: "u1", role: "user", content: "go" }), message({ id: "m1", content: "complete answer" })],
+    }));
+    const updateBudget = vi.fn(async (_id: string, next: { maxCostUsd: number; onReach: "pause" | "stop" } | null) =>
+      conversation({ budget: next, spentUsd: 1.02, runtime: { status: "idle", stopReason: "budget_reached", lastEventSeq: 3 } })
+    );
+    const continueConversation = vi.fn(async () => {
+      throw Object.assign(new Error("nothing"), { code: "conversation_not_paused", status: 409 });
+    });
+    const { result } = renderHook(
+      () => useChat({ transport: makeTransport({ getConversation, updateBudget, continueConversation }), agentId: "agent", conversationId: "c1" }),
+      { wrapper }
+    );
+    await waitFor(() => expect(result.current.budgetExhausted).toBe(true));
+    let ok: boolean | undefined;
+    await act(async () => {
+      ok = await result.current.updateBudget({ maxCostUsd: 5, onReach: "pause" }, { continue: true });
+    });
+    expect(ok).toBe(true);
+    expect(updateBudget).toHaveBeenCalledTimes(1);
+    expect(continueConversation).not.toHaveBeenCalled();
+    expect(result.current.error).toBeNull();
+    expect(result.current.budgetExhausted).toBe(false);
+    expect(result.current.composerState).toBe("open");
+  });
+
+  it("a server that does not report the runtime with the change still gets the continue, as before", async () => {
+    const getConversation = vi.fn(async () => ({
+      conversation: conversation({ budget, spentUsd: 1.02, runtime: { status: "budget_paused", stopReason: "budget_reached", lastEventSeq: 3 } }),
+      messages: [message({ id: "u1", role: "user", content: "go" })],
+    }));
+    // an answer with no `runtime` at all
+    const updateBudget = vi.fn(async (_id: string, next: { maxCostUsd: number; onReach: "pause" | "stop" } | null) => conversation({ budget: next, spentUsd: 1.02 }));
+    const continueConversation = vi.fn(async () => undefined);
+    const { result } = renderHook(
+      () => useChat({ transport: makeTransport({ getConversation, updateBudget, continueConversation }), agentId: "agent", conversationId: "c1" }),
+      { wrapper }
+    );
+    await waitFor(() => expect(result.current.budgetExhausted).toBe(true));
+    await act(async () => {
+      await result.current.updateBudget({ maxCostUsd: 5, onReach: "pause" }, { continue: true });
+    });
+    expect(continueConversation).toHaveBeenCalledTimes(1);
   });
 
   it("raising a stop-mode limit does not try to continue, and reopens the composer", async () => {
@@ -928,13 +1076,20 @@ describe("useChat: the conversation's usage limit", () => {
       conversation: conversation({ budget, spentUsd: 0.5, runtime: { status: "budget_paused", lastEventSeq: 3 } }),
       messages: [message({ id: "m1", content: "x" })],
     }));
-    const continueConversation = vi.fn(async () => ({
-      response: message({ id: "m2", content: "carried on" }),
-    }));
+    let continued = false;
+    const continueConversation = vi.fn(async () => {
+      continued = true;
+      return { response: message({ id: "m2", content: "carried on" }) };
+    });
+    const afterContinue = vi.fn(async () =>
+      continued
+        ? { conversation: conversation({ budget, spentUsd: 0.7, runtime: { status: "idle", stopReason: "end_turn", lastEventSeq: 5 } }), messages: [message({ id: "m1", content: "x" }), message({ id: "m2", content: "carried on" })] }
+        : getConversation()
+    );
     const { result } = renderHook(
       () =>
         useChat({
-          transport: makeTransport({ getConversation, continueConversation: continueConversation as unknown as ChatTransport["continueConversation"] }),
+          transport: makeTransport({ getConversation: afterContinue, continueConversation: continueConversation as unknown as ChatTransport["continueConversation"] }),
           agentId: "agent",
           conversationId: "c1",
           streaming: false,
@@ -1009,5 +1164,78 @@ describe("useChat: composerState", () => {
     const off = open({ enableQuestions: false });
     await waitFor(() => expect(off.result.current.awaitingAction).toBe(true));
     expect(off.result.current.composerState).toBe("blocked");
+  });
+});
+
+describe("useChat: a message the run never answered", () => {
+  const stoppedOnError = () => conversation({ runtime: { status: "idle", stopReason: "error", lastEventSeq: 4, pendingActionIds: [] } });
+  const asked = message({ id: "u1", role: "user", content: "summarize it", files: [{ id: "f1", name: "a.pdf", mimeType: "application/pdf", size: 3 }] });
+
+  it("is `interrupted` while the conversation ends on the person's message and the runtime stopped on an error", async () => {
+    const getConversation = vi.fn(async () => ({ conversation: stoppedOnError(), messages: [asked] }));
+    const { result } = renderHook(() => useChat({ transport: makeTransport({ getConversation }), agentId: "agent", conversationId: "c1" }), { wrapper });
+    await waitFor(() => expect(result.current.interrupted).toBe(true));
+  });
+
+  it("Retry sends the same text with the files it carried, and a refused send leaves those files alone", async () => {
+    const deleteFile = vi.fn(async () => {});
+    let fail = true;
+    const sendMessageStream = vi.fn(async (_c: string, _o: unknown, cb: StreamCallbacks) => {
+      if (fail) throw Object.assign(new Error("down"), { status: 503, code: "agent_unavailable" });
+      cb.onStart?.({ type: "stream.start", conversationId: "c1", messageId: "m2", timestamp: 1 });
+      cb.onDone?.({ type: "stream.done", conversationId: "c1", messageId: "m2", content: "Here.", stopReason: "end_turn", timestamp: 2 });
+    });
+    const getConversation = vi.fn(async () => ({ conversation: stoppedOnError(), messages: [asked] }));
+    const { result } = renderHook(
+      () => useChat({ transport: makeTransport({ getConversation, sendMessageStream, deleteFile }), agentId: "agent", conversationId: "c1" }),
+      { wrapper }
+    );
+    await waitFor(() => expect(result.current.interrupted).toBe(true));
+
+    let ok: boolean | undefined;
+    await act(async () => {
+      ok = await result.current.retryInterrupted();
+    });
+    expect(ok).toBe(false);
+    expect(sendMessageStream.mock.calls[0][1]).toMatchObject({ message: "summarize it", fileIds: ["f1"] });
+    // refused: the bubble is gone again, the notice still there, the stored file untouched
+    expect(result.current.messages.map((m) => m.id)).toEqual(["u1"]);
+    expect(result.current.interrupted).toBe(true);
+    expect(deleteFile).not.toHaveBeenCalled();
+
+    fail = false;
+    await act(async () => {
+      ok = await result.current.retryInterrupted();
+    });
+    expect(ok).toBe(true);
+    expect(result.current.messages.map((m) => m.role)).toEqual(["user", "user", "assistant"]);
+    expect(result.current.messages[1].files?.map((f) => f.id)).toEqual(["f1"]);
+    expect(result.current.interrupted).toBe(false);
+  });
+
+  it("does not offer again a file that has expired, and has nothing to retry on an answered conversation", async () => {
+    const sendMessageStream = vi.fn(async (_c: string, _o: unknown, cb: StreamCallbacks) => {
+      cb.onDone?.({ type: "stream.done", conversationId: "c1", messageId: "m2", content: "ok", timestamp: 2 });
+    });
+    const getConversation = vi.fn(async () => ({
+      conversation: stoppedOnError(),
+      messages: [{ ...asked, files: [{ id: "f1", name: "a.pdf", mimeType: "application/pdf", size: 3, expired: true }] }],
+    }));
+    const { result } = renderHook(() => useChat({ transport: makeTransport({ getConversation, sendMessageStream }), agentId: "agent", conversationId: "c1" }), { wrapper });
+    await waitFor(() => expect(result.current.interrupted).toBe(true));
+    await act(async () => {
+      await result.current.retryInterrupted();
+    });
+    expect((sendMessageStream.mock.calls[0][1] as { fileIds?: string[] }).fileIds).toBeUndefined();
+
+    const answered = vi.fn(async () => ({ conversation: stoppedOnError(), messages: [asked, message({ id: "m1", content: "hi" })] }));
+    const second = renderHook(() => useChat({ transport: makeTransport({ getConversation: answered }), agentId: "agent", conversationId: "c1" }), { wrapper });
+    await waitFor(() => expect(second.result.current.messages).toHaveLength(2));
+    expect(second.result.current.interrupted).toBe(false);
+    let ok: boolean | undefined;
+    await act(async () => {
+      ok = await second.result.current.retryInterrupted();
+    });
+    expect(ok).toBe(false);
   });
 });

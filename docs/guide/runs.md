@@ -25,7 +25,7 @@ All of it needs a transport with the run methods (`AgentServerClient` has them).
 { "status": "running", "stopReason": null, "lastEventSeq": 41, "pendingActionIds": [], "activeRunId": "run_x1" }
 ```
 
-When `status` is `running`, `useChat` calls `transport.followEvents(conversationId, { after: runtime.lastEventSeq })`, which reads `GET /conversations/:id/events/stream` (Server-Sent Events). The events are folded into the same live view an own turn has: streamed text (`agent.message.delta`), tool calls (`agent.tool_use` / `agent.tool_result`), and the finished `agent.message`. When `session.status_idle` arrives the conversation is loaded again, and that is what stays: the stored answer, the cards of a pause (`requires_action`), the stop notice.
+When `status` is `running`, `useChat` calls `transport.followEvents(conversationId, { after: runtime.lastEventSeq })`, which reads `GET /conversations/:id/events/stream` (Server-Sent Events). The events are folded into the same live view an own turn has: streamed text (`agent.message.delta`), tool calls (`agent.tool_use` / `agent.tool_result`), and the finished `agent.message`. Live text is not stored, so a page that joins a run in progress would see only the words that come after it joined; the server therefore starts the stream with a snapshot (below). When `session.status_idle` arrives the conversation is loaded again, and that is what stays: the stored answer, the cards of a pause (`requires_action`), the stop notice.
 
 - If the stored answer is not there yet at the first look, the page looks once more after `followSettleRetryMs` (default 1500).
 - Opening another conversation, starting a new chat or unmounting stops following (the run itself goes on).
@@ -46,6 +46,17 @@ new AgentServerClient({
 ```
 
 Frames that carry no `seq` (`agent.message.delta`, live text that is not stored) are delivered too; a follower built only on the stored events loses nothing.
+
+### The reattach snapshot
+
+When a client connects to `GET /conversations/:id/events/stream` while a run is active, the server first sends **one frame that is not part of the log** (no `id:` line, so the cursor does not move), then the replay and the live frames:
+
+```
+event: agent.message.snapshot
+data: {"type":"agent.message.snapshot","data":{"run_id":"run_x1","text":"<what the run has written so far>","user_message":{"id":"u7","content":"...","files":[]}}}
+```
+
+`user_message` is the message that started the run, or `null`. `Chat` seeds the live bubble with `text`, and adds the person's own message to the transcript when the stored history does not have it yet (the stored history of a conversation that is still answering may not include it); the live `agent.message.delta` frames that follow are appended. The same frame comes again after a reconnect and replaces the text (it holds everything written so far, so nothing is doubled), and the `session.status_running` of the run the snapshot belongs to, if the replay still reaches it, does not wipe the text. A server that sends no snapshot works as before.
 
 ## Stop
 
@@ -73,6 +84,8 @@ An assistant message carries `status` and, where the server says, `stopReason` (
 | `max_turns` | "The assistant used up its allowed steps and stopped." |
 | `budget_reached` | "This conversation reached its usage limit." (the [usage limit](/guide/budgets) banner explains the rest) |
 | `error` | "Something went wrong and the assistant stopped." |
+
+A conversation that **ends on the person's own message** while the runtime says it stopped on an `error` (the run that was answering was cut off, say by a restart, before it wrote anything) shows "The reply was interrupted" under that message, with **Retry**. Retry sends the same text again, with the files the message carried (they are stored in the conversation already; one that has expired is left out). It is the same notice, `InterruptedNotice`, and `renderStopNotice` receives it with `stopReason: "error"` and an `onRetry` to call. A transcript (`readOnly`) shows the sentence without the button. `useChat` returns `interrupted` and `retryInterrupted()`.
 
 A message that is `incomplete` or `cancelled` without a reason still says so. Under a stopped answer the notice adds whether the text above is a partial answer or nothing was written. The runtime's own wording (`stopDetail`) is not shown to end users; it reaches `renderStopNotice`:
 

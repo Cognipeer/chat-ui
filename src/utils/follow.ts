@@ -21,8 +21,13 @@ export interface FollowState {
   tools: Map<string, FollowedTool>;
   /** The assistant message the turn wrote, once it did */
   messageId?: string;
-  /** The user message of the followed turn, when its `user.message` was in the part we saw */
+  /** The user message of the followed turn, when its `user.message` (or the reattach snapshot) was in the part we saw */
   userMessage?: { id: string; content: string; files?: FileAttachment[] };
+  /**
+   * The run a reattach snapshot (`agent.message.snapshot`) seeded the text from. Its own
+   * `session.status_running`, replayed after the snapshot, must not wipe that text.
+   */
+  snapshotRunId?: string;
   /** The turn is over: why, and the runtime's wording */
   idle?: { stopReason?: StopReason; detail?: string; pendingActionIds: string[] };
   error?: { message: string; code?: string };
@@ -67,8 +72,29 @@ export function applyFollowEvent(state: FollowState, event: ConversationEvent): 
 
   switch (event.type) {
     case "session.status_running":
+      // The run the snapshot seeded is the one that starts here (the log is replayed from before it began):
+      // what the snapshot brought stays
+      if (base.snapshotRunId !== undefined && event.runId === base.snapshotRunId) {
+        return { ...base, idle: undefined, error: undefined };
+      }
       // A new turn begins: nothing of the previous one is on screen any more
-      return { ...base, text: "", streamed: false, tools: new Map(), idle: undefined, error: undefined, messageId: undefined };
+      return { ...base, text: "", streamed: false, tools: new Map(), idle: undefined, error: undefined, messageId: undefined, snapshotRunId: undefined };
+
+    case "agent.message.snapshot": {
+      // The server's first frame to a follower that joins a run in progress: everything the run has
+      // written so far (live deltas are not replayed), and the user message that started it when the
+      // stored history may not have it yet. Live deltas follow and add to it. Not stored: no `seq`.
+      const text = asString(data.text) ?? "";
+      const user = asRecord(data.user_message ?? data.userMessage);
+      const userId = asString(user.id) ?? asString(user.message_id);
+      return {
+        ...base,
+        text,
+        streamed: text.length > 0 ? true : base.streamed,
+        snapshotRunId: asString(data.run_id) ?? asString(data.runId) ?? event.runId ?? base.snapshotRunId,
+        ...(userId ? { userMessage: { id: userId, content: asString(user.content) ?? "", files: filesOf(user.files) } } : {}),
+      };
+    }
 
     case "user.message": {
       const id = asString(data.message_id);
