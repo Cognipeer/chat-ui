@@ -178,7 +178,13 @@ export function safeLegalHref(url: unknown, options: { allowMailto?: boolean } =
   if (typeof url !== "string") return undefined;
   // the browser's URL parser ignores tabs and line breaks anywhere and control characters at the ends
   // eslint-disable-next-line no-control-regex
-  const value = url.replace(/[\t\n\r]/g, "").replace(/^[\u0000- ]+/, "").replace(/[\u0000- ]+$/, "");
+  const stripped = url.replace(/[\t\n\r]/g, "");
+  // (loops, not `[\u0000- ]+$`: that regex backtracks quadratically on a long run of control characters)
+  let from = 0;
+  let to = stripped.length;
+  while (from < to && stripped.charCodeAt(from) <= 32) from++;
+  while (to > from && stripped.charCodeAt(to - 1) <= 32) to--;
+  const value = stripped.slice(from, to);
   if (!value) return undefined;
   if (/^\/(?!\/)/.test(value)) return value;
   if (/^mailto:[^\s<>]+$/i.test(value)) return options.allowMailto === false ? undefined : value;
