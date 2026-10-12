@@ -1,8 +1,8 @@
 "use client";
 
 import React, { useRef, useEffect, useLayoutEffect, useMemo, useState } from "react";
-import { cn, collectPendingActions, messageText, readFeedback } from "../../utils";
-import type { FeedbackInput, Message, MessageActionProps, StopNoticeRenderProps } from "../../types";
+import { cn, collectPendingActions, messageText, modelLabel, modelOfMessage, readFeedback } from "../../utils";
+import type { AgentModelOption, FeedbackInput, Message, MessageActionProps, StopNoticeRenderProps } from "../../types";
 import { ChatMessage, type ImageRenderProps, type ResolveFileUrl } from "./ChatMessage";
 import { ToolCalls } from "./ToolCall";
 import { InterruptedNotice } from "./StopNotice";
@@ -80,6 +80,10 @@ export interface ChatMessageListProps {
   canAct?: boolean;
   /** Label every answer as AI-generated with this text */
   aiLabel?: string;
+  /** The agent's models (`AgentInfo.models`). With two or more, a change of model shows as a divider and answers can say which model wrote them. */
+  models?: AgentModelOption[];
+  /** Under each answer, "Answered with <model>" when the answer reports its model (needs `models`; default true) */
+  showAnsweredWith?: boolean;
 }
 
 // A layout effect keeps the scroll position steady before the browser paints; on a server there is nothing to scroll
@@ -167,6 +171,8 @@ export function ChatMessageList({
   toolbar,
   canAct = false,
   aiLabel,
+  models,
+  showAnsweredWith = true,
 }: ChatMessageListProps) {
   const { t } = useI18n();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -238,6 +244,21 @@ export function ChatMessageList({
     return {};
   };
 
+  const offered = models && models.length > 1 ? models : undefined;
+  /** For each answer: the model it reports and whether that differs from the answer before it */
+  const answerModels = useMemo(() => {
+    const out = new Map<string, { label?: string; switched: boolean }>();
+    if (!offered) return out;
+    let previous: string | undefined;
+    for (const message of messages) {
+      const key = modelOfMessage(message);
+      if (!key) continue;
+      out.set(message.id, { label: modelLabel(offered, key), switched: previous !== undefined && previous !== key });
+      previous = key;
+    }
+    return out;
+  }, [messages, offered]);
+
   const loadEarlier = () => {
     const container = containerRef.current;
     anchor.current = container ? { top: container.scrollTop, height: container.scrollHeight } : null;
@@ -281,8 +302,15 @@ export function ChatMessageList({
         )}
         {/* A stored message always shows what was stored; the turn being streamed is drawn below, never in one of them */}
         {messages.map((message, index) => (
+          <React.Fragment key={message.id}>
+          {answerModels.get(message.id)?.switched && answerModels.get(message.id)?.label && (
+            <div role="separator" aria-label={t("chat.model.switched", { model: answerModels.get(message.id)!.label! })} className="mx-4 my-2 flex items-center gap-3 text-xs text-chat-text-tertiary">
+              <span className="h-px flex-1 bg-chat-border-primary" />
+              <span>{t("chat.model.switched", { model: answerModels.get(message.id)!.label! })}</span>
+              <span className="h-px flex-1 bg-chat-border-primary" />
+            </div>
+          )}
           <ChatMessage
-            key={message.id}
             message={message}
             aiLabel={aiLabel}
             {...toolbarFor(message, index)}
@@ -296,6 +324,12 @@ export function ChatMessageList({
             renderStopNotice={renderStopNotice}
             resolveFileUrl={resolveFileUrl}
           />
+          {showAnsweredWith && answerModels.get(message.id)?.label && (
+            <p className={cn("-mt-4 mb-6 px-4 text-xs text-chat-text-tertiary", showAvatars && "pl-16")}>
+              {t("chat.model.answeredWith", { model: answerModels.get(message.id)!.label! })}
+            </p>
+          )}
+          </React.Fragment>
         ))}
 
         {/* The run that was answering the last message was cut off before it wrote anything */}

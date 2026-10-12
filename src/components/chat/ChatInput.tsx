@@ -55,6 +55,8 @@ export interface ChatInputProps {
   disabled?: boolean;
   /** Content under the helper text (a row of legal links) */
   footer?: React.ReactNode;
+  /** Shown left of the send button (the `ModelPicker`) */
+  modelPicker?: React.ReactNode;
   /** Custom class name */
   className?: string;
   /** Render custom send button */
@@ -121,6 +123,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   imagesIgnored = false,
   disabled = false,
   footer,
+  modelPicker,
   className,
   renderSendButton,
   renderStopButton,
@@ -524,7 +527,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
           />
 
           {/* Send/Stop button */}
-          <div className="flex-shrink-0 p-2">
+          <div className="flex flex-shrink-0 items-center gap-2 p-2">
+            {modelPicker}
             {isLoading && onStop ? (
               renderStopButton ? (
                 renderStopButton({ onClick: onStop })

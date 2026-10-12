@@ -44,6 +44,8 @@ import type {
 import { ChatThemeProvider, ChatI18nProvider, type ChatMessages, type SupportedLocale } from "../../providers";
 import { AgentServerClient, type ChatTransport } from "../../api";
 import { useBackgroundAlerts, useChat, useChatHistory, useI18n } from "../../hooks";
+import { useModelChoice } from "../../hooks/useModelChoice";
+import { ModelPicker } from "./ModelPicker";
 import { ChatMessageList, type ListToolbarConfig } from "./ChatMessageList";
 import { ChatEmptyState } from "./ChatEmptyState";
 import { AnnouncementBanner } from "./AnnouncementBanner";
@@ -222,6 +224,11 @@ export interface ChatProps extends ChatConfig, ChatCallbacks {
   /** Extra `metadata` sent with every message (an embedded page's unsigned UI context) */
   getMessageMetadata?: () => Record<string, unknown> | undefined;
   /**
+   * Under each answer, a quiet "Answered with <model>" when the answer reports the model that wrote it.
+   * Applies to agents that offer a choice of models (`AgentInfo.models`). Default true.
+   */
+  showAnsweredWith?: boolean;
+  /**
    * Language/locale. Without it, the locale of an enclosing `ChatI18nProvider` applies, or
    * else it is auto-detected from the `?lang` query param.
    */
@@ -349,6 +356,7 @@ function ChatContent({
   controllerRef,
   onClientToolCall,
   getMessageMetadata,
+  showAnsweredWith = true,
 }: ChatContentProps) {
   const { t, has } = useI18n();
   const [historyOpen, setHistoryOpen] = useState(defaultHistoryOpen);
@@ -458,6 +466,8 @@ function ChatContent({
   // Use refs for callbacks that will depend on history (defined later)
   const onMessageReceivedRef = useRef(onMessageReceived);
   onMessageReceivedRef.current = onMessageReceived;
+  // (the choice hook needs the chat's conversation, the chat needs the choice: they meet through this ref)
+  const modelChoiceRef = useRef<ReturnType<typeof useModelChoice> | null>(null);
   const onConversationCreatedRef = useRef(onConversationCreated);
   onConversationCreatedRef.current = onConversationCreated;
   const onConversationTitleGeneratedRef = useRef(onConversationTitleGenerated);
@@ -473,6 +483,7 @@ function ChatContent({
 
   const wrappedOnConversationCreated = useCallback((conv: Conversation) => {
     onConversationCreatedRef.current?.(conv);
+    modelChoiceRef.current?.adopt(conv.id);
     if (showHistory) {
       historyRef.current?.refresh();
     }
@@ -530,7 +541,10 @@ function ChatContent({
     onFeedback,
     onClientToolCall,
     getMessageMetadata,
+    getModel: () => modelChoiceRef.current?.getModel(),
   });
+  const modelChoice = useModelChoice(selectedAgent?.models, chat.conversation?.id, chat.messages);
+  modelChoiceRef.current = modelChoice;
 
   // Approval / question cards
   const actionsConfig = useMemo<ChatActionsConfig>(
@@ -988,6 +1002,8 @@ function ChatContent({
               toolbar={toolbar}
               canAct={canAct}
               aiLabel={aiLabelText}
+              models={modelChoice.models}
+              showAnsweredWith={showAnsweredWith}
             />
           )}
 
@@ -1043,6 +1059,16 @@ function ChatContent({
             autoFocus={autoFocusInput}
             state={composerState}
             footer={legalFooter}
+            modelPicker={
+              modelChoice.models ? (
+                <ModelPicker
+                  models={modelChoice.models}
+                  value={modelChoice.selected}
+                  onChange={modelChoice.select}
+                  disabled={chat.isStreaming || composerState === "readonly"}
+                />
+              ) : undefined
+            }
           />
         </div>
       </div>

@@ -2,6 +2,13 @@
 
 All notable changes to Chat UI will be documented here.
 
+## [0.5.0] - 2026-10-12
+
+### Added
+
+- Per-message model choice (agent-server 0.4.0+). `AgentInfo.models` (`AgentModelOption`) adds a `ModelPicker` pill left of the send button when an agent offers two or more models. The pick is kept per conversation, a new chat starts on the default, and `model` is sent with every message, regenerate and edit (`SendMessageOptions.model`, `EditMessageInput.model`, `ResolveActionOptions.model`, `useChat` option `getModel`).
+- `Chat` prop `showAnsweredWith` (default true): "Answered with <model>" under answers that report their model (`metadata.model`, `agentModel` or `cognipeer.agent_model`), and a divider where the model changes. `ChatInput` prop `modelPicker`; `ChatMessageList` props `models` and `showAnsweredWith`; `modelOfMessage` / `modelLabel` helpers; strings `chat.model.*` (English, Turkish).
+
 ## [0.4.0] - 2026-10-10
 
 ### Added

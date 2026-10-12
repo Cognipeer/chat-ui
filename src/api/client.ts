@@ -515,7 +515,7 @@ export class AgentServerClient implements ChatTransport {
   ): Promise<SendMessageResponse | undefined> {
     return this.postTurn(
       `/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(messageId)}/regenerate`,
-      {},
+      options.model ? { model: options.model } : {},
       options
     );
   }
@@ -532,7 +532,11 @@ export class AgentServerClient implements ChatTransport {
   ): Promise<SendMessageResponse | undefined> {
     return this.postTurn(
       `/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(messageId)}/edit`,
-      { content: input.content, ...(input.fileIds && input.fileIds.length > 0 ? { fileIds: input.fileIds } : {}) },
+      {
+        content: input.content,
+        ...(input.fileIds && input.fileIds.length > 0 ? { fileIds: input.fileIds } : {}),
+        ...(input.model ? { model: input.model } : {}),
+      },
       options
     );
   }

@@ -4,6 +4,7 @@ export { ChatMessage, type ChatMessageProps, type ImageRenderProps, type Resolve
 export { ChatMessageList, type ChatMessageListProps } from "./components/chat";
 export { ChatInput, type ChatInputProps, type ChatInputHandle } from "./components/chat";
 export { ChatHistory, type ChatHistoryProps } from "./components/chat";
+export { ModelPicker, type ModelPickerProps } from "./components/chat";
 export { BudgetBanner, type BudgetBannerProps } from "./components/chat";
 export {
   AnnouncementBanner,
@@ -147,6 +148,7 @@ export type {
   Conversation,
   ConversationListItem,
   AgentInfo,
+  AgentModelOption,
   StreamEvent,
   StreamStartEvent,
   StreamTextEvent,

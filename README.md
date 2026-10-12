@@ -289,6 +289,16 @@ function MessageActions({ message, isStreaming }) {
 />
 ```
 
+## Choosing a model
+
+When the agent advertises two or more `models` (`AgentInfo.models`, agent-server >= 0.4.0), the composer shows a `ModelPicker` pill left of the send button. The pick is kept per conversation (a reopened conversation shows the model of its last answer; a new chat starts on the default) and is sent as `model` with every message, regenerate and edit.
+
+```tsx
+<Chat baseUrl="/api/agents" agentId="support" showAnsweredWith /> {/* "Answered with <model>" under answers (default true) */}
+```
+
+The picker is keyboard accessible (arrows, Home/End, Enter, Escape), follows the theme tokens and becomes a bottom sheet on narrow screens. A divider marks a change of model in the thread. Use it on its own: `<ModelPicker models={...} value={key} onChange={setKey} />`; with `useChat`, pass `getModel: () => key`. Answers report their model in `metadata.model` (also `metadata.agentModel`, `metadata.cognipeer.agent_model`).
+
 ## Using Hooks Directly
 
 For more control, use the hooks directly. A custom layout shows approval and question cards through `actions`, and the composer follows `composerState` (one value for a waiting card, a turn running elsewhere, a used-up usage limit, a read-only chat):

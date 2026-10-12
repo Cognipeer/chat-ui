@@ -354,5 +354,9 @@
   "chat.embed.failed.rate_limited": "Too many sign-in attempts. Wait a moment and try again.",
   "chat.embed.failed.generic": "You could not be signed in. Try again or contact your administrator.",
   "chat.embed.retry": "Try again",
-  "chat.embed.reference": "Reference: {reference}"
+  "chat.embed.reference": "Reference: {reference}",
+  "chat.model.label": "Model",
+  "chat.model.choose": "Choose a model",
+  "chat.model.answeredWith": "Answered with {model}",
+  "chat.model.switched": "Switched to {model}"
 }
