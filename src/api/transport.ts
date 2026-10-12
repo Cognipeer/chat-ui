@@ -45,6 +45,8 @@ export interface SendMessageOptions {
   /** Files uploaded earlier with `uploadFile` (for this conversation) that the message attaches */
   fileIds?: string[];
   metadata?: Record<string, unknown>;
+  /** The model to answer with: a key of `AgentInfo.models` */
+  model?: string;
   stream?: boolean;
 }
 
@@ -88,6 +90,8 @@ export interface ResolveActionOptions {
   stream?: boolean;
   callbacks?: StreamCallbacks;
   signal?: AbortSignal;
+  /** The model to answer with (`regenerateMessage` only; a key of `AgentInfo.models`) */
+  model?: string;
 }
 
 /** Options of `ChatTransport.continueConversation` (same shape as answering an action). */
@@ -154,6 +158,8 @@ export interface EditMessageInput {
   content: string;
   /** Files stored earlier that go with the edited message (the ones it already carried stay unless named here) */
   fileIds?: string[];
+  /** The model to answer with: a key of `AgentInfo.models` */
+  model?: string;
 }
 
 /** The answer to deleting several conversations at once. */

@@ -102,6 +102,11 @@ export interface UseChatOptions extends ChatConfig, ChatCallbacks {
    * message so it can change; return `undefined` for none.
    */
   getMessageMetadata?: () => Record<string, unknown> | undefined;
+  /**
+   * The model key to send with a message (`AgentInfo.models`); called per message. Return
+   * `undefined` to let the agent use its own.
+   */
+  getModel?: () => string | undefined;
 }
 
 export interface UseChatReturn {
@@ -366,6 +371,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     readOnly = false,
     onClientToolCall,
     getMessageMetadata,
+    getModel,
     onMessageSent,
     onMessageReceived,
     onStreamText,
@@ -467,6 +473,16 @@ export function useChat(options: UseChatOptions): UseChatReturn {
   onClientToolCallRef.current = onClientToolCall;
   const getMessageMetadataRef = useRef(getMessageMetadata);
   getMessageMetadataRef.current = getMessageMetadata;
+  const getModelRef = useRef(getModel);
+  getModelRef.current = getModel;
+  /** The model key the person picked for the next turn, if any */
+  const readModel = useCallback((): string | undefined => {
+    try {
+      return getModelRef.current?.() || undefined;
+    } catch {
+      return undefined;
+    }
+  }, []);
   const onActionRequiredRef = useRef(onActionRequired);
   onActionRequiredRef.current = onActionRequired;
   const onFeedbackRef = useRef(onFeedback);
@@ -1433,6 +1449,8 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       }
     })();
 
+    const model = readModel();
+
     setError(null);
     setIsStreaming(true);
     turnSessionRef.current = capturedSession;
@@ -1604,6 +1622,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
             files: filesToSend.length > 0 ? filesToSend : undefined,
             fileIds: uploadedIds.length + reused.length > 0 ? [...uploadedIds, ...reused.map((f) => f.id)] : undefined,
             ...(messageMetadata ? { metadata: messageMetadata } : {}),
+            ...(model ? { model } : {}),
           },
           (() => {
             const base = createStreamCallbacksRef.current(isStale);
@@ -1623,6 +1642,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
           files: filesToSend.length > 0 ? filesToSend : undefined,
           fileIds: uploadedIds.length + reused.length > 0 ? [...uploadedIds, ...reused.map((f) => f.id)] : undefined,
           ...(messageMetadata ? { metadata: messageMetadata } : {}),
+          ...(model ? { model } : {}),
           stream: false,
         });
 
@@ -1726,6 +1746,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     onError,
     onConversationTitleGenerated,
     onBackgroundStreamCompleted,
+    readModel,
   ]);
 
   const resolveAction = useCallback(async (actionId: string, resolution: ActionResolution): Promise<boolean> => {
@@ -2054,10 +2075,13 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     if (!list.slice(0, -1).some((m) => m.role === "user")) return false;
     const target = last.id;
     return rerunTurn(
-      (client, conversationId, opts) => client.regenerateMessage!(conversationId, target, opts),
+      (client, conversationId, opts) => {
+        const model = readModel();
+        return client.regenerateMessage!(conversationId, target, model ? { ...opts, model } : opts);
+      },
       (prev) => prev.slice(0, -1)
     );
-  }, [rerunTurn]);
+  }, [rerunTurn, readModel]);
 
   /** The server's id of a message this page numbered itself (found by position among the person's messages). */
   const serverIdOf = useCallback(
@@ -2104,7 +2128,10 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       // Files the message carries stay with it
       const fileIds = (shown.files ?? []).filter((f) => !f.expired && !isFileExpired(f) && !f.status).map((f) => f.id);
       return rerunTurn(
-        (client, conversationId, opts) => client.editMessage!(conversationId, id, { content: text, ...(fileIds.length > 0 ? { fileIds } : {}) }, opts),
+        (client, conversationId, opts) => {
+          const model = readModel();
+          return client.editMessage!(conversationId, id, { content: text, ...(fileIds.length > 0 ? { fileIds } : {}), ...(model ? { model } : {}) }, opts);
+        },
         (prev) => {
           const at = prev.findIndex((m) => m.id === id);
           if (at === -1) return prev;

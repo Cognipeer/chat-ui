@@ -349,11 +349,28 @@ export interface ConversationListItem {
 // Agent Types
 // ============================================================================
 
+/** One model a person can pick for a message (`AgentInfo.models`, agent-server >= 0.4.0). */
+export interface AgentModelOption {
+  /** What is sent as `model` with the message */
+  key: string;
+  /** What the picker shows */
+  label: string;
+  /** One line under the label */
+  description?: string;
+  /** The model the agent uses when none is picked */
+  default: boolean;
+}
+
 export interface AgentInfo {
   id: string;
   name: string;
   description?: string;
   version?: string;
+  /**
+   * Models the person can choose between per message. The `ModelPicker` shows only with two or
+   * more. Absent when the agent offers no choice.
+   */
+  models?: AgentModelOption[];
   /**
    * Free-form. `Chat` reads these keys to adapt itself to the agent (each overrides
    * the matching prop): `enableFileUpload`, `maxFileSize`, `maxFiles`,

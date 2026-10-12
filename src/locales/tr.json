@@ -354,5 +354,9 @@
   "chat.embed.failed.rate_limited": "Çok fazla oturum açma denemesi. Biraz bekleyip tekrar deneyin.",
   "chat.embed.failed.generic": "Oturumunuz açılamadı. Tekrar deneyin veya yöneticinizle iletişime geçin.",
   "chat.embed.retry": "Tekrar dene",
-  "chat.embed.reference": "Referans: {reference}"
+  "chat.embed.reference": "Referans: {reference}",
+  "chat.model.label": "Model",
+  "chat.model.choose": "Model seçin",
+  "chat.model.answeredWith": "{model} ile yanıtlandı",
+  "chat.model.switched": "{model} modeline geçildi"
 }
