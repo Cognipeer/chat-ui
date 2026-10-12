@@ -71,6 +71,10 @@ describe("the strings behind the codes", () => {
     "lease_lost", "storage_limit_exceeded",
     "not_latest_message", "message_not_found", "message_not_editable", "invalid_rating", "feedback_disabled",
     "export_disabled", "too_many_ids",
+    "invalid_message_target", "invalid_feedback", "action_disabled", "export_format_unsupported",
+    "invalid_client_tool_result", "task_busy", "task_finished", "unsupported_media_type", "invalid_host_result",
+    // the portal: the terms a person has to accept before the chat takes a request
+    "terms_required", "terms_changed", "invalid_version",
   ];
 
   it.each(Object.entries({ en, tr }))("%s has a message for every code", (_locale, messages) => {

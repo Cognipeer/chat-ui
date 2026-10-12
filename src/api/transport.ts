@@ -334,7 +334,8 @@ export interface ChatTransport {
   /**
    * Pin or unpin a conversation (`PATCH /conversations/:id { pinned }`). Optional: without it the history
    * offers no pin. Resolves with the pin the server stored when it says (the list takes the row back
-   * when that is not what was asked for), `undefined` when it does not.
+   * when that is not what was asked for), `undefined` when it does not. For an unpin, a transport whose answer can
+   * echo the conversation as it was before the write reads it again first (`AgentServerClient` does).
    */
   pinConversation?(conversationId: string, pinned: boolean): Promise<boolean | void>;
 

@@ -4,6 +4,7 @@ import React, { useEffect, useId, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { cn } from "../../utils";
 import { useI18n } from "../../hooks/useI18n";
+import { localizeError } from "../../utils/errors";
 import { InfoMarkdown } from "./ChatEmptyState";
 import { AlertIcon } from "./Icons";
 import { PRIMARY_BUTTON, SECONDARY_BUTTON } from "./styles";
@@ -21,7 +22,8 @@ export interface TermsGateProps {
   version?: string | number;
   /**
    * Records the acceptance (for the portal: a request to its server). The children appear once it
-   * resolves; if it throws, the form stays and says it could not be saved.
+   * resolves; if it throws, the form stays and says it could not be saved (or, for an error with a `code` the
+   * library knows - `terms_changed`, `invalid_version`, `rate_limited` ... - says that, in the person's language).
    */
   onAccept: () => void | Promise<void>;
   /** The person pressed "Decline" */
@@ -57,10 +59,10 @@ export function TermsGate({
   className,
   children,
 }: TermsGateProps) {
-  const { t } = useI18n();
+  const { t, has } = useI18n();
   const [phase, setPhase] = useState<"asking" | "declined" | "accepted">("asking");
   const [busy, setBusy] = useState(false);
-  const [failed, setFailed] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
   const bodyId = useId();
@@ -69,7 +71,7 @@ export function TermsGate({
   useEffect(() => {
     if (required) {
       setPhase("asking");
-      setFailed(false);
+      setFailure(null);
     }
   }, [required, version]);
 
@@ -83,12 +85,14 @@ export function TermsGate({
   const accept = async () => {
     if (busy) return;
     setBusy(true);
-    setFailed(false);
+    setFailure(null);
     try {
       await onAccept();
       setPhase("accepted");
-    } catch {
-      setFailed(true);
+    } catch (error) {
+      // (a refusal with a code the library knows says why; anything else is the general "could not be saved")
+      const shown = error instanceof Error ? localizeError(error, t, has) : undefined;
+      setFailure(shown && shown !== error ? shown.message : t("chat.terms.failed"));
     } finally {
       setBusy(false);
     }
@@ -152,9 +156,9 @@ export function TermsGate({
         >
           <InfoMarkdown allowedImageHosts={allowedImageHosts}>{body}</InfoMarkdown>
         </div>
-        {failed && (
+        {failure && (
           <p role="alert" className="mx-5 mb-2 rounded-lg border border-chat-danger bg-chat-danger-bg px-3 py-2 text-xs text-chat-danger">
-            {t("chat.terms.failed")}
+            {failure}
           </p>
         )}
         <div className="flex flex-shrink-0 flex-wrap justify-end gap-2 border-t border-chat-border-primary px-5 py-3">

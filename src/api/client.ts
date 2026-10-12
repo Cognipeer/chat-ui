@@ -73,6 +73,16 @@ export interface AgentServerClientOptions
 const isPlainRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === "object" && !Array.isArray(value);
 
+/**
+ * The pin a conversation carries: `pinned`, or `metadata.pinned` (the conversation itself, or
+ * `{ conversation }`). `undefined` when `value` is not a conversation.
+ */
+function readStoredPin(value: unknown): boolean | undefined {
+  const body = isPlainRecord(value) && isPlainRecord(value.conversation) ? value.conversation : value;
+  if (!isPlainRecord(body) || typeof body.id !== "string") return undefined;
+  return body.pinned === true || (isPlainRecord(body.metadata) && body.metadata.pinned === true);
+}
+
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
     if (signal?.aborted) return resolve();
@@ -330,12 +340,20 @@ export class AgentServerClient implements ChatTransport {
    * server stored, read from the conversation it answers with (`pinned`, or `metadata.pinned`;
    * absent means not pinned), or `undefined` when the answer is not a conversation. A caller that
    * shows the pin at once compares it with what it asked for.
+   *
+   * An unpin that is answered with a pinned conversation is not taken at its word: a store that
+   * merges metadata echoes the conversation as it was before the write. The conversation is read
+   * again and that answer decides. When it cannot be read, the unpin the server accepted stands
+   * (`undefined`: nothing contradicts it). A pin is taken as the server answers it.
    */
   async pinConversation(conversationId: string, pinned: boolean): Promise<boolean | undefined> {
-    const answer = (await this.updateConversation(conversationId, { pinned })) as unknown;
-    const body = isPlainRecord(answer) && isPlainRecord(answer.conversation) ? answer.conversation : answer;
-    if (!isPlainRecord(body) || typeof body.id !== "string") return undefined;
-    return body.pinned === true || (isPlainRecord(body.metadata) && body.metadata.pinned === true);
+    const stored = readStoredPin(await this.updateConversation(conversationId, { pinned }));
+    if (pinned || stored !== true) return stored;
+    try {
+      return readStoredPin((await this.getConversation(conversationId, { limit: 1 })).conversation);
+    } catch {
+      return undefined;
+    }
   }
 
   /**

@@ -4,6 +4,7 @@ import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import type { ConversationListItem, ChatConfig } from "../types";
 import { AgentServerClient, type ChatTransport } from "../api";
 import { useI18n } from "./useI18n";
+import { localizeError } from "../utils/errors";
 
 // Survives Strict Mode remount so we only ever fire one initial load per config
 const initialLoadDoneKeys = new Set<string>();
@@ -60,7 +61,12 @@ export interface UseChatHistoryReturn {
  * Hook for managing chat history
  */
 export function useChatHistory(options: UseChatHistoryOptions): UseChatHistoryReturn {
-  const { t } = useI18n();
+  const { t, has } = useI18n();
+  // A server error with a known code shows as a localized, friendly message (a refused rename or pin, a full bulk delete ...)
+  const friendly = (err: unknown, fallback: string): Error => localizeError(err instanceof Error ? err : new Error(fallback), t, has);
+  // (read through a ref by the callbacks that outlive a render, so they speak the language of the moment)
+  const friendlyRef = useRef(friendly);
+  friendlyRef.current = friendly;
   const {
     baseUrl,
     agentId,
@@ -111,7 +117,7 @@ export function useChatHistory(options: UseChatHistoryOptions): UseChatHistoryRe
       setHasMore(response.hasMore);
       setOffset(pageSize);
     } catch (err) {
-      setError(err instanceof Error ? err : new Error(t("chat.error.loadConversationsFailed")));
+      setError(friendlyRef.current(err, t("chat.error.loadConversationsFailed")));
     } finally {
       if (showLoading) setIsLoading(false);
     }
@@ -132,7 +138,7 @@ export function useChatHistory(options: UseChatHistoryOptions): UseChatHistoryRe
       setHasMore(response.hasMore);
       setOffset((prev) => prev + pageSize);
     } catch (err) {
-      setError(err instanceof Error ? err : new Error(t("chat.error.loadMoreFailed")));
+      setError(friendlyRef.current(err, t("chat.error.loadMoreFailed")));
     } finally {
       setIsLoading(false);
     }
@@ -149,7 +155,7 @@ export function useChatHistory(options: UseChatHistoryOptions): UseChatHistoryRe
       await clientRef.current.deleteConversation(id);
       setConversations((prev) => prev.filter((c) => c.id !== id));
     } catch (err) {
-      setError(err instanceof Error ? err : new Error(t("chat.error.deleteConversationFailed")));
+      setError(friendlyRef.current(err, t("chat.error.deleteConversationFailed")));
     }
   }, [t]);
 
@@ -191,7 +197,7 @@ export function useChatHistory(options: UseChatHistoryOptions): UseChatHistoryRe
         return true;
       } catch (err) {
         undo();
-        setError(err instanceof Error ? err : new Error(failure));
+        setError(friendlyRef.current(err, failure));
         return false;
       }
     },
@@ -252,7 +258,7 @@ export function useChatHistory(options: UseChatHistoryOptions): UseChatHistoryRe
           }
         }
       } catch (err) {
-        setError(err instanceof Error ? err : new Error(t("chat.error.deleteConversationFailed")));
+        setError(friendlyRef.current(err, t("chat.error.deleteConversationFailed")));
         return { deleted: [], failed: unique };
       }
       if (deleted.length > 0) {

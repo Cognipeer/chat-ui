@@ -99,6 +99,58 @@ describe("history", () => {
     expect(await silent.pinConversation("c1", true)).toBeUndefined();
   });
 
+  describe("unpinning against an answer that echoes the pin it just removed", () => {
+    // (the PATCH answer is the conversation as it was before the write; the GET that follows is how it is now)
+    const stale = { id: "c1", agentId: "a", metadata: { pinned: true, pinnedAt: "2026-10-01T00:00:00.000Z" } };
+    const sequence = (...answers: Array<Response | Error>) => {
+      const queue = [...answers];
+      return vi.fn(async () => {
+        const next = queue.shift();
+        if (!next) throw new Error("unexpected request");
+        if (next instanceof Error) throw next;
+        return next;
+      });
+    };
+    const methods = (mock: ReturnType<typeof vi.fn>) => calls(mock).map(([url, init]) => `${init.method} ${url.replace("http://x/api", "")}`);
+
+    it("trusts the conversation as it is now when it is not pinned", async () => {
+      const fetchMock = sequence(json(stale), json({ conversation: { id: "c1", agentId: "a", metadata: {} }, messages: [] }));
+      const client = new AgentServerClient({ baseUrl: "http://x/api", fetch: as(fetchMock) });
+      expect(await client.pinConversation("c1", false)).toBe(false);
+      expect(methods(fetchMock)).toEqual(["PATCH /conversations/c1", "GET /conversations/c1?limit=1"]);
+    });
+
+    it("still says pinned when the conversation as it is now is pinned", async () => {
+      const fetchMock = sequence(json(stale), json({ conversation: { ...stale, pinned: true }, messages: [] }));
+      const client = new AgentServerClient({ baseUrl: "http://x/api", fetch: as(fetchMock) });
+      expect(await client.pinConversation("c1", false)).toBe(true);
+    });
+
+    it("lets the unpin the server accepted stand when the conversation cannot be read again", async () => {
+      const refused = sequence(json(stale), json({ error: { code: "NOT_FOUND", message: "gone" } }, 404));
+      expect(await new AgentServerClient({ baseUrl: "http://x/api", fetch: as(refused) }).pinConversation("c1", false)).toBeUndefined();
+      const offline = sequence(json(stale), new TypeError("Failed to fetch"));
+      expect(await new AgentServerClient({ baseUrl: "http://x/api", fetch: as(offline) }).pinConversation("c1", false)).toBeUndefined();
+    });
+
+    it("asks for nothing more when the answer already says unpinned, or when pinning", async () => {
+      const unpinned = sequence(json({ id: "c1", agentId: "a", metadata: {} }));
+      expect(await new AgentServerClient({ baseUrl: "http://x/api", fetch: as(unpinned) }).pinConversation("c1", false)).toBe(false);
+      expect(unpinned).toHaveBeenCalledTimes(1);
+      // a pin that the answer does not show is taken as it is: only an unpin has an echo to doubt
+      const ignored = sequence(json({ id: "c1", agentId: "a", metadata: {} }));
+      expect(await new AgentServerClient({ baseUrl: "http://x/api", fetch: as(ignored) }).pinConversation("c1", true)).toBe(false);
+      expect(ignored).toHaveBeenCalledTimes(1);
+    });
+
+    it("passes a refusal of the unpin itself on", async () => {
+      const fetchMock = sequence(json({ error: { code: "action_disabled", message: "Pinning is off" } }, 403));
+      const client = new AgentServerClient({ baseUrl: "http://x/api", fetch: as(fetchMock) });
+      await expect(client.pinConversation("c1", false)).rejects.toMatchObject({ status: 403, code: "action_disabled" });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("lists a pinned conversation with its pinned flag", async () => {
     const fetchMock = vi.fn(async () =>
       json({

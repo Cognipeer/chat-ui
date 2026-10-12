@@ -3,8 +3,9 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { ChatI18nProvider } from "../providers";
 import { useChatHistory } from "./useChatHistory";
-import type { ChatTransport } from "../api";
+import { AgentServerClient, type ChatTransport } from "../api";
 import type { ConversationListItem } from "../types";
+import tr from "../locales/tr.json";
 
 const wrapper = ({ children }: { children: ReactNode }) => <ChatI18nProvider locale="en">{children}</ChatI18nProvider>;
 const now = new Date();
@@ -138,6 +139,70 @@ describe("pinning against a server that does not do it", () => {
       expect(await result.current.pinConversation("c", true)).toBe(true);
     });
     expect(result.current.conversations.find((c) => c.id === "c")?.pinned).toBe(true);
+  });
+});
+
+describe("unpinning through the client when the answer echoes the pin that was removed", () => {
+  const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+
+  it("keeps the row unpinned, without an error, when the conversation as it is now is not pinned", async () => {
+    const answers = [
+      json({ id: "c", agentId: "agent", metadata: { pinned: true } }), // PATCH { pinned: true }: stored
+      json({ id: "c", agentId: "agent", metadata: { pinned: true } }), // PATCH { pinned: false }: the echo of the old row
+      json({ conversation: { id: "c", agentId: "agent", metadata: {} }, messages: [] }), // GET: how it is now
+    ];
+    const fetchMock = vi.fn(async () => answers.shift() ?? new Response("{}", { status: 500 }));
+    const client = new AgentServerClient({ baseUrl: "http://x/api", fetch: fetchMock as unknown as typeof fetch });
+    const { result } = await load(makeTransport({ pinConversation: (id, pinned) => client.pinConversation(id, pinned) }));
+    await act(async () => {
+      expect(await result.current.pinConversation("c", true)).toBe(true);
+    });
+    await act(async () => {
+      expect(await result.current.pinConversation("c", false)).toBe(true);
+    });
+    expect(result.current.conversations.find((c) => c.id === "c")?.pinned).toBe(false);
+    expect(result.current.error).toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe("a refusal in the person's language", () => {
+  const refusal = (code: string, message: string) => Object.assign(new Error(message), { code, status: 403 });
+  const inLocale = (locale: "en" | "tr") =>
+    ({ children }: { children: ReactNode }) => <ChatI18nProvider locale={locale}>{children}</ChatI18nProvider>;
+
+  it("shows the friendly message of a refused rename or pin, and keeps the server's wording beside it", async () => {
+    const renameConversation = vi.fn(async () => {
+      throw refusal("action_disabled", "Renaming a conversation is switched off for this agent");
+    });
+    const pinConversation = vi.fn(async () => {
+      throw refusal("rate_limited", "Slow down");
+    });
+    const transport = makeTransport({ renameConversation, pinConversation });
+    const hook = renderHook(() => useChatHistory({ transport, autoLoad: false }), { wrapper: inLocale("tr") });
+    await act(async () => {
+      await hook.result.current.load();
+    });
+    await act(async () => {
+      expect(await hook.result.current.renameConversation("b", "New")).toBe(false);
+    });
+    expect(hook.result.current.error?.message).toBe(tr["chat.error.code.action_disabled"]);
+    expect((hook.result.current.error as { serverMessage?: string }).serverMessage).toBe("Renaming a conversation is switched off for this agent");
+    await act(async () => {
+      expect(await hook.result.current.pinConversation("c", true)).toBe(false);
+    });
+    expect(hook.result.current.error?.message).toBe(tr["chat.error.code.rate_limited"]);
+  });
+
+  it("leaves an error without a known code as it came", async () => {
+    const renameConversation = vi.fn(async () => {
+      throw refusal("SOMETHING_NEW", "Plain words");
+    });
+    const { result } = await load(makeTransport({ renameConversation }));
+    await act(async () => {
+      await result.current.renameConversation("b", "New");
+    });
+    expect(result.current.error?.message).toBe("Plain words");
   });
 });
 

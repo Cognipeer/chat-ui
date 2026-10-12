@@ -463,6 +463,14 @@ describe("TermsGate", () => {
     expect(await screen.findByText("chat")).toBeTruthy();
   });
 
+  it("says why when the refusal carries a code the library knows", async () => {
+    const changed = Object.assign(new Error("The terms changed. Reload the page to read the new version."), { code: "terms_changed", status: 409 });
+    const onAccept = vi.fn().mockRejectedValueOnce(changed);
+    render(<TermsGate required {...terms} onAccept={onAccept}><p>chat</p></TermsGate>);
+    fireEvent.click(screen.getByRole("button", { name: "Accept and continue" }));
+    expect((await screen.findByRole("alert")).textContent).toBe("The terms have changed. Reload the page to read the new version.");
+  });
+
   it("shows a friendly screen after declining, with a way back to the terms", () => {
     const onDecline = vi.fn();
     render(<TermsGate required {...terms} onAccept={vi.fn()} onDecline={onDecline}><p>chat</p></TermsGate>);
