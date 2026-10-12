@@ -10,6 +10,7 @@ The `Chat` component includes a history sidebar that shows:
 - Create new conversation button
 - Delete conversation option
 - Conversation titles and dates
+- A status badge on conversations that are working, waiting for you or stopped on their usage limit
 
 ## Enable/Disable History
 
@@ -36,6 +37,12 @@ import { ChatMinimal } from "@cognipeer/chat-ui";
   agentId="assistant"
 />
 ```
+
+## Status badges and keyboard
+
+With agent-server 0.3.0 or later each conversation in the list carries `runtime`, and the sidebar marks the ones that need a look: **Working** (a turn is running, perhaps in another window), **Waiting for you** (an approval or a question is open) and **Limit reached** (the conversation's usage limit is used up). The open conversation shows what the page itself knows, and the list is fetched again when a turn ends, so a badge does not outlive the state it reports. Turn them off with `showStatus={false}`.
+
+Every row is a button: Tab, Enter and Space open it, the arrow keys, Home and End move between rows, and the delete button is visible as soon as the row has keyboard focus. See [ChatHistory](/components/chat-history) and [Running turns, Stop and reattach](/guide/runs).
 
 ## History Callbacks
 

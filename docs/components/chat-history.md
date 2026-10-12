@@ -1,6 +1,6 @@
 # ChatHistory Component
 
-Displays conversation history sidebar.
+The conversation history sidebar. `Chat` renders it for you (`showHistory`); use it directly in a custom layout.
 
 ## Import
 
@@ -11,186 +11,117 @@ import { ChatHistory } from "@cognipeer/chat-ui";
 ## Usage
 
 ```tsx
+const history = useChatHistory({ baseUrl: "/api/agents" });
+
 <ChatHistory
-  conversations={conversations}
-  currentConversationId={currentId}
-  onSelect={handleSelect}
-  onDelete={handleDelete}
-  onNew={handleNew}
+  conversations={history.conversations}
+  selectedId={chat.conversation?.id}
+  isLoading={history.isLoading}
+  hasMore={history.hasMore}
+  onSelect={(item) => chat.loadConversation(item.id)}
+  onDelete={history.deleteConversation}
+  onNewChat={chat.clearMessages}
+  onLoadMore={history.loadMore}
 />
 ```
 
 ## Props
 
-| Prop | Type | Description |
-|------|------|-------------|
-| `conversations` | `Conversation[]` | List of conversations |
-| `currentConversationId` | `string` | Currently active conversation |
-| `isLoading` | `boolean` | Loading state |
-| `hasMore` | `boolean` | More items to load |
-| `onSelect` | `(conv: Conversation) => void` | Selection callback |
-| `onDelete` | `(id: string) => void` | Delete callback |
-| `onNew` | `() => void` | New conversation callback |
-| `onLoadMore` | `() => void` | Load more callback |
-| `renderItem` | `Function` | Custom item renderer |
-| `className` | `string` | Container class name |
+| Prop | Type | Default | Description |
+|------|------|---------|-------------|
+| `conversations` | `ConversationListItem[]` | required | The list |
+| `selectedId` | `string` | - | The open conversation |
+| `onSelect` | `(item: ConversationListItem) => void` | required | A row was opened |
+| `onDelete` | `(id: string) => void` | - | Shows a delete button on each row |
+| `onNewChat` | `() => void` | - | Shows the "New Chat" button |
+| `isLoading`, `hasMore`, `onLoadMore` | | | Paging; a "Load more" button shows while `hasMore` |
+| `enableSearch` | `boolean` | `false` | A search box over the titles |
+| `showAgentName` | `boolean` | `false` | The agent's name next to the time |
+| `showStatus` | `boolean` | `true` | A badge on rows that are working, waiting for you or stopped on their usage limit |
+| `selectedStatus` | `RuntimeStatus` | - | What the open conversation is doing, as this page knows it; replaces the badge of the selected row |
+| `isOpen`, `onClose` | | `true` | The sidebar as an overlay on small screens (a backdrop, Escape closes it) |
+| `header`, `footer` | `ReactNode` | | Replace the header or add a footer |
+| `className` | `string` | - | Container class name |
 
-## Conversation Structure
+## Status badges
+
+Each `ConversationListItem` may carry `runtime` (agent-server 0.3.0+). The badge:
+
+| `runtime.status` | Badge |
+| --- | --- |
+| `running` | Working |
+| `requires_action` | Waiting for you |
+| `budget_paused`, or `budget` spent (`spentUsd >= budget.maxCostUsd`) | Limit reached |
+| `idle`, absent | none |
+
+`Chat` passes `selectedStatus` for the open conversation, because it knows before the list does, and fetches the list again when a turn ends. In your own layout refresh the list when the status may have changed (`useChatHistory().refresh()`).
+
+## Keyboard
+
+Every row is a real `<button>`, in a labelled list:
+
+- **Tab**, **Enter**, **Space** - reach and open a conversation (`aria-current` marks the open one);
+- **Arrow Up / Down**, **Home**, **End** - move between rows;
+- **Escape** - closes the sidebar where it is an overlay;
+- the **delete** button is a button of its own (named after the conversation: "Delete conversation: Quarterly report"), hidden until the row is hovered or has keyboard focus, and it does not open the row.
+
+## Conversation structure
 
 ```typescript
-interface Conversation {
+interface ConversationListItem {
   id: string;
   title?: string;
-  createdAt: string;
-  updatedAt: string;
+  agentName?: string;
+  agentId: string;
+  runtime?: ConversationRuntime;     // { status, stopReason?, lastEventSeq?, ... }
+  budget?: ConversationBudget | null;
+  spentUsd?: number;
+  createdAt: Date;
+  updatedAt: Date;
 }
 ```
 
 ## Examples
 
-### Basic
+### With search
 
 ```tsx
 <ChatHistory
   conversations={conversations}
-  currentConversationId={currentConv?.id}
-  onSelect={(conv) => loadConversation(conv.id)}
-  onDelete={(id) => deleteConversation(id)}
-  onNew={() => createConversation()}
-/>
-```
-
-### With Load More
-
-```tsx
-<ChatHistory
-  conversations={conversations}
-  hasMore={hasMoreConversations}
-  onLoadMore={loadMoreConversations}
+  enableSearch
   onSelect={handleSelect}
   onDelete={handleDelete}
-  onNew={handleNew}
+  onNewChat={handleNew}
 />
 ```
 
-### Custom Item Rendering
+### Without badges
 
 ```tsx
-<ChatHistory
-  conversations={conversations}
-  renderItem={({ conversation, isActive, onSelect, onDelete }) => (
-    <div
-      className={`item ${isActive ? "active" : ""}`}
-      onClick={onSelect}
-    >
-      <span className="title">
-        {conversation.title || "Untitled"}
-      </span>
-      <span className="date">
-        {formatDate(conversation.updatedAt)}
-      </span>
-      <button onClick={(e) => { e.stopPropagation(); onDelete(); }}>
-        🗑️
-      </button>
-    </div>
-  )}
-/>
+<ChatHistory conversations={conversations} showStatus={false} onSelect={handleSelect} />
 ```
 
-### With Search
-
-```tsx
-function SearchableHistory() {
-  const [search, setSearch] = useState("");
-  const filtered = conversations.filter(c =>
-    c.title?.toLowerCase().includes(search.toLowerCase())
-  );
-
-  return (
-    <div>
-      <input
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        placeholder="Search..."
-      />
-      <ChatHistory
-        conversations={filtered}
-        onSelect={handleSelect}
-        onDelete={handleDelete}
-        onNew={handleNew}
-      />
-    </div>
-  );
-}
-```
-
-### Collapsible Sidebar
+### Collapsible sidebar
 
 ```tsx
 function CollapsibleHistory() {
-  const [collapsed, setCollapsed] = useState(false);
-
+  const [open, setOpen] = useState(false);
   return (
-    <div className={collapsed ? "w-16" : "w-64"}>
-      <button onClick={() => setCollapsed(!collapsed)}>
-        {collapsed ? "→" : "←"}
-      </button>
-      
-      {!collapsed && (
-        <ChatHistory
-          conversations={conversations}
-          onSelect={handleSelect}
-          onDelete={handleDelete}
-          onNew={handleNew}
-        />
-      )}
-    </div>
+    <>
+      <button onClick={() => setOpen(true)}>Menu</button>
+      <ChatHistory conversations={conversations} isOpen={open} onClose={() => setOpen(false)} onSelect={handleSelect} />
+    </>
   );
 }
 ```
 
 ## Styling
 
-```css
-.chat-history {
-  width: 260px;
-  height: 100%;
-  background: var(--chat-bg-secondary);
-  border-right: 1px solid var(--chat-border-primary);
-  display: flex;
-  flex-direction: column;
-}
-
-.chat-history-header {
-  padding: 16px;
-  border-bottom: 1px solid var(--chat-border-secondary);
-}
-
-.chat-history-list {
-  flex: 1;
-  overflow-y: auto;
-}
-
-.chat-history-item {
-  padding: 12px 16px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.chat-history-item:hover {
-  background: var(--chat-bg-hover);
-}
-
-.chat-history-item.active {
-  background: var(--chat-bg-tertiary);
-  border-left: 3px solid var(--chat-accent-primary);
-}
-```
+The sidebar uses the theme variables: `--chat-bg-secondary` (background), `--chat-bg-hover` (the open row), `--chat-bg-tertiary` (hover), `--chat-border-primary`, and the status colours for the badges (`--chat-info`, `--chat-warning`, `--chat-danger` with their `-bg` tints). See [Theming](/guide/theming).
 
 ## Related
 
 - [useChatHistory Hook](/api/use-chat-history)
 - [Chat](/components/chat)
 - [History Guide](/guide/history)
+- [Running turns, Stop and reattach](/guide/runs)

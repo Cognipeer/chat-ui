@@ -116,8 +116,10 @@ interface ActionButtonProps {
 function ActionButton({ onClick, title, active = false, children }: ActionButtonProps) {
   return (
     <button
+      type="button"
       onClick={onClick}
       title={title}
+      aria-label={title}
       className={cn(
         "p-1.5 rounded transition-colors",
         active

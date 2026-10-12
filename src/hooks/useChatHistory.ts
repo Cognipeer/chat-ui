@@ -4,6 +4,7 @@ import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import type { ConversationListItem, ChatConfig } from "../types";
 import { AgentServerClient, type ChatTransport } from "../api";
 import { useI18n } from "./useI18n";
+import { localizeError } from "../utils/errors";
 
 // Survives Strict Mode remount so we only ever fire one initial load per config
 const initialLoadDoneKeys = new Set<string>();
@@ -38,13 +39,34 @@ export interface UseChatHistoryReturn {
   deleteConversation: (id: string) => Promise<void>;
   /** Update a conversation in the list (e.g. title change). Local-only, no API call. */
   updateConversation: (id: string, data: Partial<ConversationListItem>) => void;
+  /** The transport can rename a conversation */
+  canRename: boolean;
+  /** The transport can pin a conversation */
+  canPin: boolean;
+  /**
+   * Change a conversation's title. The list shows the new title at once and takes it back when the
+   * server refuses (`error` says why). Resolves `false` for an empty title, an unchanged one or a refusal.
+   */
+  renameConversation: (id: string, title: string) => Promise<boolean>;
+  /** Pin or unpin a conversation; same optimistic handling as `renameConversation`. */
+  pinConversation: (id: string, pinned: boolean) => Promise<boolean>;
+  /**
+   * Delete several conversations (the transport's bulk route, or one by one). Resolves with the ids
+   * that are gone and those that are not; the list drops the first.
+   */
+  deleteConversations: (ids: string[]) => Promise<{ deleted: string[]; failed: string[] }>;
 }
 
 /**
  * Hook for managing chat history
  */
 export function useChatHistory(options: UseChatHistoryOptions): UseChatHistoryReturn {
-  const { t } = useI18n();
+  const { t, has } = useI18n();
+  // A server error with a known code shows as a localized, friendly message (a refused rename or pin, a full bulk delete ...)
+  const friendly = (err: unknown, fallback: string): Error => localizeError(err instanceof Error ? err : new Error(fallback), t, has);
+  // (read through a ref by the callbacks that outlive a render, so they speak the language of the moment)
+  const friendlyRef = useRef(friendly);
+  friendlyRef.current = friendly;
   const {
     baseUrl,
     agentId,
@@ -58,6 +80,8 @@ export function useChatHistory(options: UseChatHistoryOptions): UseChatHistoryRe
   } = options;
 
   const [conversations, setConversations] = useState<ConversationListItem[]>([]);
+  const conversationsRef = useRef<ConversationListItem[]>([]);
+  conversationsRef.current = conversations;
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
   const [hasMore, setHasMore] = useState(false);
@@ -93,7 +117,7 @@ export function useChatHistory(options: UseChatHistoryOptions): UseChatHistoryRe
       setHasMore(response.hasMore);
       setOffset(pageSize);
     } catch (err) {
-      setError(err instanceof Error ? err : new Error(t("chat.error.loadConversationsFailed")));
+      setError(friendlyRef.current(err, t("chat.error.loadConversationsFailed")));
     } finally {
       if (showLoading) setIsLoading(false);
     }
@@ -114,7 +138,7 @@ export function useChatHistory(options: UseChatHistoryOptions): UseChatHistoryRe
       setHasMore(response.hasMore);
       setOffset((prev) => prev + pageSize);
     } catch (err) {
-      setError(err instanceof Error ? err : new Error(t("chat.error.loadMoreFailed")));
+      setError(friendlyRef.current(err, t("chat.error.loadMoreFailed")));
     } finally {
       setIsLoading(false);
     }
@@ -131,7 +155,7 @@ export function useChatHistory(options: UseChatHistoryOptions): UseChatHistoryRe
       await clientRef.current.deleteConversation(id);
       setConversations((prev) => prev.filter((c) => c.id !== id));
     } catch (err) {
-      setError(err instanceof Error ? err : new Error(t("chat.error.deleteConversationFailed")));
+      setError(friendlyRef.current(err, t("chat.error.deleteConversationFailed")));
     }
   }, [t]);
 
@@ -140,6 +164,112 @@ export function useChatHistory(options: UseChatHistoryOptions): UseChatHistoryRe
       prev.map((c) => (c.id === id ? { ...c, ...data } : c))
     );
   }, []);
+
+  const canRename = typeof clientRef.current?.renameConversation === "function";
+  const canPin = typeof clientRef.current?.pinConversation === "function";
+
+  /**
+   * Shows `patch` on a row, and puts the row back as it was if `commit` fails - or if the server's
+   * answer (what `commit` resolves with) is one `accepted` refuses: a server can answer 200 and still
+   * not have done what was asked.
+   */
+  const optimistically = useCallback(
+    async <R>(
+      id: string,
+      patch: Partial<ConversationListItem>,
+      commit: () => Promise<R>,
+      failure: string,
+      accepted?: (answer: R) => boolean
+    ): Promise<boolean> => {
+      // the row as it is now, read before the list changes
+      const before = conversationsRef.current.find((c) => c.id === id);
+      const undo = () => {
+        if (before) setConversations((prev) => prev.map((c) => (c.id === id ? before : c)));
+      };
+      setConversations((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)));
+      try {
+        const answer = await commit();
+        if (accepted && !accepted(answer)) {
+          undo();
+          setError(new Error(failure));
+          return false;
+        }
+        return true;
+      } catch (err) {
+        undo();
+        setError(friendlyRef.current(err, failure));
+        return false;
+      }
+    },
+    []
+  );
+
+  const renameConversation = useCallback(
+    async (id: string, title: string): Promise<boolean> => {
+      const client = clientRef.current;
+      const next = title.trim();
+      if (!client?.renameConversation || !next) return false;
+      const current = conversationsRef.current.find((c) => c.id === id);
+      if (current && (current.title ?? "") === next) return false;
+      setError(null);
+      return optimistically(id, { title: next }, () => client.renameConversation!(id, next), t("chat.error.renameFailed"));
+    },
+    [optimistically, t]
+  );
+
+  const pinConversation = useCallback(
+    async (id: string, pinned: boolean): Promise<boolean> => {
+      const client = clientRef.current;
+      if (!client?.pinConversation) return false;
+      setError(null);
+      return optimistically(
+        id,
+        { pinned, metadata: { ...conversationsRef.current.find((c) => c.id === id)?.metadata, pinned } },
+        () => client.pinConversation!(id, pinned),
+        t("chat.error.pinFailed"),
+        // the pin the server stored, when it says, has to be the one that was asked for
+        (stored) => typeof stored !== "boolean" || stored === pinned
+      );
+    },
+    [optimistically, t]
+  );
+
+  const deleteConversations = useCallback(
+    async (ids: string[]): Promise<{ deleted: string[]; failed: string[] }> => {
+      const client = clientRef.current;
+      const unique = Array.from(new Set(ids));
+      if (!client || unique.length === 0) return { deleted: [], failed: unique };
+      setError(null);
+      let deleted: string[] = [];
+      let failed: string[] = [];
+      try {
+        if (client.deleteConversations) {
+          const result = await client.deleteConversations(unique);
+          deleted = result.deleted;
+          failed = result.failed.map((f) => f.id);
+        } else {
+          for (const id of unique) {
+            try {
+              await client.deleteConversation(id);
+              deleted.push(id);
+            } catch {
+              failed.push(id);
+            }
+          }
+        }
+      } catch (err) {
+        setError(friendlyRef.current(err, t("chat.error.deleteConversationFailed")));
+        return { deleted: [], failed: unique };
+      }
+      if (deleted.length > 0) {
+        const gone = new Set(deleted);
+        setConversations((prev) => prev.filter((c) => !gone.has(c.id)));
+      }
+      if (failed.length > 0) setError(new Error(t("chat.error.deleteSomeFailed", { count: failed.length })));
+      return { deleted, failed };
+    },
+    [t]
+  );
 
   const prevKeyRef = useRef(getLoadKey(baseUrl, agentId));
 
@@ -165,5 +295,10 @@ export function useChatHistory(options: UseChatHistoryOptions): UseChatHistoryRe
     refresh,
     deleteConversation,
     updateConversation,
+    canRename,
+    canPin,
+    renameConversation,
+    pinConversation,
+    deleteConversations,
   };
 }

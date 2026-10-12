@@ -1,6 +1,9 @@
 /** @type {import('tailwindcss').Config} */
 module.exports = {
   content: ["./src/**/*.{js,ts,jsx,tsx}"],
+  // The scanner reads every bracketed word with a colon in the sources as an arbitrary property, a
+  // regex character class included. Naming such lookalikes here keeps them out of styles.css.
+  blocklist: ["[-:T]"],
   darkMode: "class",
   theme: {
     extend: {
@@ -26,6 +29,10 @@ module.exports = {
             primary: "var(--chat-accent-primary)",
             secondary: "var(--chat-accent-secondary)",
           },
+          success: { DEFAULT: "var(--chat-success)", bg: "var(--chat-success-bg)" },
+          danger: { DEFAULT: "var(--chat-danger)", bg: "var(--chat-danger-bg)" },
+          warning: { DEFAULT: "var(--chat-warning)", bg: "var(--chat-warning-bg)" },
+          info: { DEFAULT: "var(--chat-info)", bg: "var(--chat-info-bg)" },
         },
       },
       animation: {

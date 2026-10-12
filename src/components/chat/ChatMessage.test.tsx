@@ -1,0 +1,207 @@
+import { afterEach, describe, expect, it } from "vitest";
+import { cleanup, fireEvent, render as rtlRender, screen } from "@testing-library/react";
+import type { ReactElement } from "react";
+import { ChatI18nProvider } from "../../providers";
+import { ChatMessage } from "./ChatMessage";
+import type { FileAttachment, Message } from "../../types";
+
+afterEach(cleanup);
+
+const render = (ui: ReactElement) => rtlRender(<ChatI18nProvider locale="en">{ui}</ChatI18nProvider>);
+const now = new Date();
+
+const message = (partial: Partial<Message>): Message => ({
+  id: "m",
+  conversationId: "c",
+  role: "assistant",
+  content: "",
+  createdAt: now,
+  updatedAt: now,
+  ...partial,
+});
+
+const file = (partial: Partial<FileAttachment>): FileAttachment => ({
+  id: "f1",
+  name: "report.pdf",
+  mimeType: "application/pdf",
+  size: 2048,
+  ...partial,
+});
+
+describe("images in message content", () => {
+  it("renders image_url, input_image and image parts, each opening full size", () => {
+    render(
+      <ChatMessage
+        message={message({
+          content: [
+            { type: "text", text: "Here you go" },
+            { type: "image_url", image_url: { url: "https://cdn.test/a.png" } },
+            { type: "input_image", image_url: "https://cdn.test/b.png" },
+            { type: "image", source: { type: "base64", media_type: "image/png", data: "iVBORw0KGgo=" } },
+          ],
+        })}
+      />
+    );
+    const images = screen.getAllByRole("img");
+    expect(images.map((img) => img.getAttribute("src"))).toEqual([
+      "https://cdn.test/a.png",
+      "https://cdn.test/b.png",
+      "data:image/png;base64,iVBORw0KGgo=",
+    ]);
+    expect(images[0].getAttribute("alt")).toBe("Image 1");
+    expect(images[0].getAttribute("loading")).toBe("lazy");
+    const link = images[0].closest("a") as HTMLAnchorElement;
+    expect(link.getAttribute("href")).toBe("https://cdn.test/a.png");
+    expect(link.getAttribute("target")).toBe("_blank");
+    expect(link.getAttribute("rel")).toContain("noopener");
+    expect(screen.getByText("Here you go")).toBeTruthy();
+  });
+
+  it("never renders an unsafe image URL", () => {
+    render(
+      <ChatMessage
+        message={message({
+          content: [
+            { type: "image_url", image_url: { url: "javascript:alert(1)" } },
+            { type: "image_url", image_url: { url: "data:image/svg+xml;base64,PHN2Zz4=" } },
+            { type: "image", source: { type: "base64", media_type: "image/svg+xml", data: "PHN2Zz4=" } },
+          ],
+        })}
+      />
+    );
+    expect(screen.queryAllByRole("img")).toEqual([]);
+  });
+
+  it("keeps the text parts, one per line, in a content array", () => {
+    render(<ChatMessage message={message({ content: [{ type: "text", text: "first" }, { type: "text", text: "second" }] })} />);
+    expect(document.querySelector(".chat-markdown")?.textContent).toContain("first");
+    expect(document.querySelector(".chat-markdown")?.textContent).toContain("second");
+  });
+
+  it("lets the host draw the image", () => {
+    render(
+      <ChatMessage
+        message={message({ content: [{ type: "image_url", image_url: { url: "https://cdn.test/a.png" } }] })}
+        renderImage={({ src, alt }) => <span data-testid="custom">{alt}|{src}</span>}
+      />
+    );
+    expect(screen.getByTestId("custom").textContent).toBe("Image 1|https://cdn.test/a.png");
+    expect(screen.queryAllByRole("img")).toEqual([]);
+  });
+});
+
+describe("file attachments", () => {
+  it("shows an image attachment with a server URL as a thumbnail with its name and size", () => {
+    render(<ChatMessage message={message({ role: "user", content: "look", files: [file({ name: "cat.png", mimeType: "image/png", url: "/api/files/f1/content" })] })} />);
+    const img = screen.getByRole("img", { name: "cat.png" });
+    expect(img.getAttribute("src")).toBe("/api/files/f1/content");
+    expect(screen.getByText("cat.png · 2 KB")).toBeTruthy();
+  });
+
+  it("prefers the local preview of a file that was just sent", () => {
+    render(
+      <ChatMessage
+        message={message({ role: "user", content: "look", files: [file({ name: "cat.png", mimeType: "image/png", url: "/api/files/f1/content", previewUrl: "blob:http://localhost:3000/p" })] })}
+      />
+    );
+    expect(screen.getByRole("img", { name: "cat.png" }).getAttribute("src")).toBe("blob:http://localhost:3000/p");
+  });
+
+  it("shows an image without any URL as a chip, not a broken picture", () => {
+    render(<ChatMessage message={message({ role: "user", content: "look", files: [file({ name: "cat.png", mimeType: "image/png" })] })} />);
+    expect(screen.queryAllByRole("img")).toEqual([]);
+    expect(screen.getByText("cat")).toBeTruthy();
+    expect(screen.getByText(".png")).toBeTruthy();
+    expect(screen.getByText("2 KB")).toBeTruthy();
+  });
+
+  it("shows other files as a chip with size and a download link when there is a URL", () => {
+    render(<ChatMessage message={message({ files: [file({ url: "https://files.test/report.pdf" })] })} />);
+    expect(screen.getByText("2 KB")).toBeTruthy();
+    const link = screen.getByRole("link", { name: "Download" });
+    expect(link.getAttribute("href")).toBe("https://files.test/report.pdf");
+  });
+
+  it("offers no download link for an unsafe URL", () => {
+    render(<ChatMessage message={message({ files: [file({ url: "javascript:alert(1)" })] })} />);
+    expect(screen.queryByRole("link", { name: "Download" })).toBeNull();
+  });
+});
+
+describe("tool calls the turn paused on", () => {
+  const ask = message({
+    content: "",
+    status: "requires_action",
+    pendingActions: [{ id: "q1", type: "user_question", questions: [{ question: "Which environment?" }] }],
+    metadata: { toolCallDetails: [{ id: "t1", name: "search", args: {} }, { id: "t2", name: "ask_user_question", args: {} }] },
+  });
+
+  it("shows a waiting mark, not the tick of a finished call, while the question is open", () => {
+    render(<ChatMessage message={ask} />);
+    const mark = screen.getByRole("img", { name: "Waiting for your answer" });
+    expect(mark.getAttribute("data-chat-tool-status")).toBe("waiting");
+    // the latest call is the question: it is the prominent one
+    expect(screen.getByText("Ask User Question")).toBeTruthy();
+  });
+
+  it("an approval's own call waits too, wherever it sits among the older steps", () => {
+    const approval = message({
+      content: "",
+      status: "requires_action",
+      pendingActions: [{ id: "a1", type: "tool_approval", toolName: "deploy", toolCallId: "t1" }],
+      metadata: { toolCallDetails: [{ id: "t1", name: "deploy", args: {} }, { id: "t2", name: "search", args: {} }] },
+    });
+    render(<ChatMessage message={approval} />);
+    // the older step is behind "previous steps": open it
+    fireEvent.click(screen.getByRole("button", { name: /1 previous step/ }));
+    expect(screen.getAllByRole("img", { name: "Waiting for your answer" })).toHaveLength(1);
+  });
+
+  it("goes back to the tick once the card has an outcome", () => {
+    render(<ChatMessage message={{ ...ask, actionStates: { q1: { status: "resolved", resolution: { type: "user_question", answers: { "Which environment?": "staging" } } } } }} />);
+    expect(screen.queryByRole("img", { name: "Waiting for your answer" })).toBeNull();
+  });
+
+  it("a card restored with no stored call (a reload) still shows its row, waiting", () => {
+    // a conversation loaded again has the cards, not the calls that led to them
+    const question = message({
+      content: "",
+      status: "requires_action",
+      pendingActions: [{ id: "q1", type: "user_question", questions: [{ question: "Which environment?" }] }],
+    });
+    const { unmount } = render(<ChatMessage message={question} />);
+    expect(screen.getByRole("img", { name: "Waiting for your answer" }).getAttribute("data-chat-tool-status")).toBe("waiting");
+    expect(screen.getByText("Ask User Question")).toBeTruthy();
+    unmount();
+
+    const approval = message({
+      content: "",
+      status: "requires_action",
+      pendingActions: [{ id: "a1", type: "tool_approval", toolName: "deploy_service", toolCallId: "call_1", args: { env: "prod" } }],
+    });
+    render(<ChatMessage message={approval} />);
+    expect(screen.getByRole("img", { name: "Waiting for your answer" })).toBeTruthy();
+    expect(screen.getByText("Deploy Service")).toBeTruthy();
+  });
+
+  it("the row of a restored card goes away once the card has an outcome, and a streamed call is not shown twice", () => {
+    const restored = message({
+      content: "",
+      status: "requires_action",
+      pendingActions: [{ id: "q1", type: "user_question", questions: [{ question: "Which environment?" }] }],
+      actionStates: { q1: { status: "resolved" } },
+    });
+    const { unmount } = render(<ChatMessage message={restored} />);
+    expect(screen.queryByRole("img", { name: "Waiting for your answer" })).toBeNull();
+    expect(screen.queryByText("Ask User Question")).toBeNull();
+    unmount();
+
+    render(<ChatMessage message={ask} />);
+    expect(screen.getAllByText("Ask User Question")).toHaveLength(1);
+  });
+
+  it("calls of a message that paused on nothing keep their tick", () => {
+    render(<ChatMessage message={message({ content: "done", metadata: { toolCallDetails: [{ id: "t1", name: "search", args: {} }] } })} />);
+    expect(screen.queryByRole("img", { name: "Waiting for your answer" })).toBeNull();
+  });
+});

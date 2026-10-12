@@ -1,7 +1,10 @@
-import type { AgentInfo, FileAttachment } from "../../types";
+import type { AgentInfo, FileAttachment, PendingAction } from "../../types";
 import { buildHeaders, errorFromResponse, httpFetch, readSSE, type HttpOptions } from "../http";
-import { StatelessTransport, type RunInput, type RunResult, type StatelessTransportOptions } from "./base";
+import { StatelessTransport, type ResolveInput, type RunInput, type RunResult, type StatelessTransportOptions } from "./base";
 import { makeId } from "./files";
+import { resultFromResponse } from "./responses";
+import { pendingActionsFromWire, resolutionToWire } from "../../utils/wire";
+import { normalizeStopReason } from "../../utils/runtime";
 
 export interface A2ATransportOptions extends Omit<StatelessTransportOptions, "agents">, HttpOptions {
   /** Base URL of the A2A server; the agent card is read from `<baseUrl>/.well-known/agent-card.json` */
@@ -14,6 +17,13 @@ export interface A2ATransportOptions extends Omit<StatelessTransportOptions, "ag
   agentId?: string;
   /** JSON-RPC method names. Defaults are the A2A 0.3 names. */
   methods?: { send: string; stream: string };
+  /**
+   * Where the answer to an approval or a question goes, for a server that stops a task with
+   * `input-required` and lists the open actions in `metadata.pendingActions` (the Console client
+   * API: `POST <client API>/agents/sessions/<contextId>/actions/<actionId>`). Without it the
+   * cards are shown but read-only: A2A itself has no way to answer them.
+   */
+  actionUrl?: (target: { contextId: string; taskId?: string; actionId: string; baseUrl: string }) => string;
 }
 
 const INTERRUPTED = new Set(["input-required", "auth-required"]);
@@ -127,7 +137,20 @@ export class A2ATransport extends StatelessTransport {
     let shownText = "";
     let newContextId = contextId;
     let openTaskId: string | undefined;
+    let pendingActions: PendingAction[] = [];
+    let stopReason: RunResult["stopReason"];
+    let stopDetail: string | undefined;
     const files: FileAttachment[] = [];
+
+    // The Console reports why a task stopped, and what an `input-required` one waits on, in `metadata`
+    const readMetadata = (metadata: any) => {
+      if (!metadata || typeof metadata !== "object") return;
+      const actions = pendingActionsFromWire(metadata.pendingActions);
+      if (actions.length > 0) pendingActions = actions;
+      const reason = normalizeStopReason(metadata.stopReason);
+      if (reason) stopReason = reason;
+      if (typeof metadata.stopDetail === "string" && metadata.stopDetail) stopDetail = metadata.stopDetail;
+    };
 
     const artifactText = () => Array.from(artifacts.values()).join("\n\n");
     const show = (full: string) => {
@@ -169,6 +192,7 @@ export class A2ATransport extends StatelessTransport {
           break;
         }
         case "task": {
+          readMetadata(result.metadata);
           for (const a of result.artifacts ?? []) {
             artifacts.set(a.artifactId ?? makeId(), partsText(a.parts));
             files.push(...partsFiles(a.parts));
@@ -186,6 +210,7 @@ export class A2ATransport extends StatelessTransport {
           break;
         }
         case "status-update":
+          readMetadata(result.metadata);
           applyStatus(result.taskId, result.status);
           break;
       }
@@ -214,7 +239,41 @@ export class A2ATransport extends StatelessTransport {
     return {
       content: artifactText() || messageText || statusText,
       files: files.length ? files : undefined,
+      ...(pendingActions.length > 0 ? { pendingActions } : {}),
+      ...(stopReason && stopReason !== "requires_action" ? { stopReason } : {}),
+      ...(stopDetail ? { stopDetail } : {}),
       state: { contextId: newContextId, taskId: openTaskId },
     };
+  }
+
+  protected canResolve(): boolean {
+    return Boolean(this.options.actionUrl);
+  }
+
+  /** Answers an approval / question through `actionUrl`; the task then carries on (or stops again). */
+  protected async resolve(input: ResolveInput): Promise<RunResult> {
+    const { options } = this;
+    const contextId = (input.conversation.state?.contextId as string | undefined) ?? input.conversation.id;
+    const taskId = input.conversation.state?.taskId as string | undefined;
+    const url = options.actionUrl?.({
+      contextId,
+      taskId,
+      actionId: input.action.id,
+      baseUrl: options.baseUrl.replace(/\/$/, ""),
+    });
+    if (!url) throw Object.assign(new Error("This conversation cannot take answers here."), { code: "not_supported", status: 404 });
+
+    const response = await httpFetch(options, url, {
+      method: "POST",
+      headers: await buildHeaders(options),
+      body: JSON.stringify(resolutionToWire(input.resolution)),
+      signal: input.signal,
+    });
+    if (!response.ok) throw await errorFromResponse(response);
+
+    const result = resultFromResponse(await response.json(), "", { serverState: false });
+    if (input.stream && result.content) input.emit.setText(result.content);
+    // The open task was answered: the next message starts a new one in the same context
+    return { ...result, state: { contextId, taskId: result.pendingActions?.length ? taskId : undefined } };
   }
 }

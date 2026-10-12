@@ -68,11 +68,15 @@ While streaming:
 1. **Typing indicator** - Shows while waiting for response
 2. **Incremental text** - Text appears as it's received
 3. **Tool calls** - Displayed inline as they occur
-4. **Stop button** - Allows canceling the stream
+4. **Stop button** - Stops the turn (on agent-server 0.3.0+ the run itself, see [Running turns](/guide/runs))
+
+## A stream is not the run
+
+On `@cognipeer/agent-server` 0.3.0 or later a streamed request is only a *subscriber* of the run that executes the turn. If the connection drops, the page does not report a failure: the turn goes on without it, so the page looks at the conversation again and follows what is still running (`GET /conversations/:id/events/stream`) or shows what finished. Every `stream.*` frame carries `seq`, the position in the conversation's event log, and `stream.done` carries `stopReason` (`end_turn`, `cancelled`, `limit`, `budget_reached`, ...), `runId` and - for a conversation with a usage limit - `budget` and `spentUsd`. A stopped answer gets a notice, see [Running turns](/guide/runs#why-an-answer-ended).
 
 ## Stop Streaming
 
-Users can stop the stream using the stop button, or programmatically:
+Users can stop the stream using the stop button, or programmatically. With a transport that can cancel (`AgentServerClient`) `stop()` stops the run on the server, closes the stream and keeps the text received so far as an answer marked stopped; otherwise it only closes the connection:
 
 ```tsx
 import { useChat } from "@cognipeer/chat-ui";

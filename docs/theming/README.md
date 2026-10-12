@@ -28,6 +28,8 @@ Use `themeColors` to align with your brand:
 />
 ```
 
+Status colours (`success`, `danger`, `warning`, `info`, each with a `...Bg` tint) colour the error banner and how approvals and questions ended (approved, denied, expired). `themeColors` accepts every colour key; see [Guide: Theming](/guide/theming#available-color-properties).
+
 ## Guidance
 
 - Start from presets, then override only necessary tokens.

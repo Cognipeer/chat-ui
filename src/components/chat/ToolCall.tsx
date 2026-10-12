@@ -25,11 +25,14 @@ function CompactToolCallItem({
   reasoning,
   displayName,
   isExecuting,
+  isWaiting,
 }: {
   toolName: string;
   reasoning?: string;
   displayName?: string;
   isExecuting?: boolean;
+  /** The call is paused on an approval or a question: it has not finished */
+  isWaiting?: boolean;
 }) {
   const label = reasoning || displayName || formatToolName(toolName);
   const actionName = formatToolName(toolName);
@@ -40,6 +43,8 @@ function CompactToolCallItem({
       <div className="flex-shrink-0 mt-0.5">
         {isExecuting ? (
           <LoadingIcon className="w-3 h-3 text-chat-accent-primary animate-spin" />
+        ) : isWaiting ? (
+          <WaitingMark className="w-3 h-3 text-chat-warning" />
         ) : (
           <CheckCircleIcon className="w-3 h-3 text-chat-text-tertiary" />
         )}
@@ -74,6 +79,11 @@ export interface ToolCallsProps {
   durationSeconds?: number;
   /** Whether the group should default to expanded */
   defaultExpanded?: boolean;
+  /**
+   * Ids of the calls that are paused on an approval or a question (see `waitingToolCallIds`). They
+   * show a "waiting" mark instead of the tick of a finished call.
+   */
+  waitingIds?: ReadonlySet<string>;
 }
 
 export function ToolCalls({
@@ -82,6 +92,7 @@ export function ToolCalls({
   isExecuting = false,
   durationSeconds,
   defaultExpanded = false,
+  waitingIds,
 }: ToolCallsProps) {
   const { t } = useI18n();
   const [isExpanded, setIsExpanded] = useState(defaultExpanded);
@@ -117,6 +128,7 @@ export function ToolCalls({
   const latestActionName = formatToolName(latestCall.name);
   const latestHasReasoning = !!(latestCall.reasoning || latestCall.displayName);
   const latestIsRunning = isExecuting;
+  const latestIsWaiting = !isExecuting && Boolean(waitingIds?.has(latestCall.id));
 
   return (
     <div className={cn("", className)}>
@@ -125,6 +137,8 @@ export function ToolCalls({
         <div className="flex-shrink-0 mt-0.5">
           {latestIsRunning ? (
             <LoadingIcon className="w-3.5 h-3.5 text-chat-accent-primary animate-spin" />
+          ) : latestIsWaiting ? (
+            <WaitingMark className="w-3.5 h-3.5 text-chat-warning" />
           ) : (
             <CheckCircleIcon className="w-3.5 h-3.5 text-chat-accent-primary" />
           )}
@@ -169,6 +183,7 @@ export function ToolCalls({
                   reasoning={call.reasoning}
                   displayName={call.displayName}
                   isExecuting={isExecuting}
+                  isWaiting={!isExecuting && Boolean(waitingIds?.has(call.id))}
                 />
               ))}
             </div>
@@ -202,6 +217,29 @@ export function ToolCall({
 }
 
 // ---- Icons ----
+
+/** A clock: the call is not finished, it waits for the person (an approval or an answer). */
+function WaitingMark({ className }: { className?: string }) {
+  const { t } = useI18n();
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      role="img"
+      aria-label={t("chat.toolCall.waiting")}
+      data-chat-tool-status="waiting"
+      className={className}
+    >
+      <circle cx="12" cy="12" r="10" />
+      <polyline points="12 6 12 12 16 14" />
+    </svg>
+  );
+}
 
 function CheckCircleIcon({ className }: { className?: string }) {
   return (
