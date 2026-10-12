@@ -100,7 +100,7 @@ export function uploadMimeType(file: Pick<File, "type">): string {
  */
 export function isFileTypeAllowed(file: Pick<File, "type" | "name">, allowed: string[] | undefined): boolean {
   if (!allowed || allowed.length === 0) return true;
-  const byName = (entry: string) => file.name.endsWith(entry.replace("*", ""));
+  const byName = (entry: string) => file.name.endsWith(entry.replace(/\*/g, ""));
   if (!file.type) return allowed.some((entry) => entry.includes("/")) || allowed.some(byName);
   return allowed.some((entry) =>
     entry.endsWith("/*") ? file.type.startsWith(entry.slice(0, -1)) : file.type === entry || byName(entry)
