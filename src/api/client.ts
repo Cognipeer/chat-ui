@@ -515,7 +515,10 @@ export class AgentServerClient implements ChatTransport {
   ): Promise<SendMessageResponse | undefined> {
     return this.postTurn(
       `/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(messageId)}/regenerate`,
-      options.model ? { model: options.model } : {},
+      {
+        ...(options.model ? { model: options.model } : {}),
+        ...(options.reasoningEffort ? { reasoningEffort: options.reasoningEffort } : {}),
+      },
       options
     );
   }
@@ -536,6 +539,7 @@ export class AgentServerClient implements ChatTransport {
         content: input.content,
         ...(input.fileIds && input.fileIds.length > 0 ? { fileIds: input.fileIds } : {}),
         ...(input.model ? { model: input.model } : {}),
+        ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
       },
       options
     );
@@ -597,6 +601,7 @@ export class AgentServerClient implements ChatTransport {
 
   private async readStream(response: Response, callbacks: StreamCallbacks): Promise<void> {
     let fullText = "";
+    let fullThinking = "";
 
     await readSSE(response, ({ data: raw }) => {
       const data = raw.trim();
@@ -614,9 +619,11 @@ export class AgentServerClient implements ChatTransport {
             callbacks.onText?.(event.text, fullText);
             break;
           case "stream.thinking":
-            // Treat thinking as text for now
-            fullText += (event as any).thinking;
-            callbacks.onText?.((event as any).thinking, fullText);
+            // Reasoning stays apart from the answer text
+            if (typeof event.thinking === "string" && event.thinking) {
+              fullThinking += event.thinking;
+              callbacks.onThinking?.(event.thinking, fullThinking);
+            }
             break;
           case "stream.tool_call":
             callbacks.onToolCall?.(event);

@@ -118,6 +118,20 @@ export function getMessageTextContent(content: string | Array<{ type: string; te
 }
 
 /** The text of a message: its string content, or the text parts of a content array, one per line. */
+/**
+ * The reasoning ("thinking") text of a message: `message.reasoning`, else `metadata.reasoning` /
+ * `metadata.thinking` when it is a string. Empty when there is none.
+ */
+export function reasoningOf(message: Pick<Message, "reasoning" | "metadata">): string {
+  if (typeof message.reasoning === "string" && message.reasoning.trim()) return message.reasoning;
+  const meta = message.metadata;
+  for (const key of ["reasoning", "thinking"]) {
+    const v = meta?.[key];
+    if (typeof v === "string" && v.trim()) return v;
+  }
+  return "";
+}
+
 export function messageText(content: Message["content"]): string {
   if (typeof content === "string") return content;
   return content

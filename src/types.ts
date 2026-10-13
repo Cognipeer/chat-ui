@@ -61,6 +61,12 @@ export interface Message {
    * `message.feedback` or `message.metadata.feedback`; kept by this app as the person rates.
    */
   feedback?: MessageFeedback;
+  /**
+   * The model's reasoning ("thinking") for this answer, shown in a collapsible block above it.
+   * Streamed from `stream.thinking`; also read from `metadata.reasoning` / `metadata.thinking`
+   * when a stored message carries it.
+   */
+  reasoning?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -366,6 +372,8 @@ export interface AgentInfo {
   name: string;
   description?: string;
   version?: string;
+  /** `false` hides the model's reasoning (the "Thinking" block) for this agent. Absent or `true` shows it. */
+  showReasoning?: boolean;
   /**
    * Models the person can choose between per message. The `ModelPicker` shows only with two or
    * more. Absent when the agent offers no choice.
@@ -453,6 +461,9 @@ export interface StreamTextEvent extends StreamEventBase {
   text: string;
   isFinal?: boolean;
 }
+
+/** How much effort the model puts into reasoning (sent as `reasoningEffort`; the agent must support it) */
+export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high";
 
 export interface StreamThinkingEvent extends StreamEventBase {
   type: "stream.thinking";

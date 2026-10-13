@@ -358,5 +358,9 @@
   "chat.model.label": "Model",
   "chat.model.choose": "Choose a model",
   "chat.model.answeredWith": "Answered with {model}",
-  "chat.model.switched": "Switched to {model}"
+  "chat.model.switched": "Switched to {model}",
+  "chat.reasoning.title": "Thinking",
+  "chat.reasoning.thinking": "Thinking…",
+  "chat.reasoning.show": "Show reasoning",
+  "chat.reasoning.hide": "Hide reasoning"
 }
