@@ -358,5 +358,9 @@
   "chat.model.label": "Model",
   "chat.model.choose": "Model seçin",
   "chat.model.answeredWith": "{model} ile yanıtlandı",
-  "chat.model.switched": "{model} modeline geçildi"
+  "chat.model.switched": "{model} modeline geçildi",
+  "chat.reasoning.title": "Düşünce süreci",
+  "chat.reasoning.thinking": "Düşünüyor…",
+  "chat.reasoning.show": "Düşünce sürecini göster",
+  "chat.reasoning.hide": "Düşünce sürecini gizle"
 }

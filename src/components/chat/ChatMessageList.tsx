@@ -4,6 +4,7 @@ import React, { useRef, useEffect, useLayoutEffect, useMemo, useState } from "re
 import { cn, collectPendingActions, messageText, modelLabel, modelOfMessage, readFeedback } from "../../utils";
 import type { AgentModelOption, FeedbackInput, Message, MessageActionProps, StopNoticeRenderProps } from "../../types";
 import { ChatMessage, type ImageRenderProps, type ResolveFileUrl } from "./ChatMessage";
+import { ThinkingBlock } from "./ThinkingBlock";
 import { ToolCalls } from "./ToolCall";
 import { InterruptedNotice } from "./StopNotice";
 import type { ChatActionsConfig } from "./ActionCards";
@@ -33,6 +34,10 @@ export interface ChatMessageListProps {
   isStreaming?: boolean;
   /** Current streaming text */
   streamingText?: string;
+  /** Reasoning of the turn being streamed (`useChat().streamingReasoning`) */
+  streamingReasoning?: string;
+  /** Show the collapsible "Thinking" block (default true) */
+  showReasoning?: boolean;
   /** Current progress/status message */
   progressMessage?: string;
   /** Active tool calls during streaming */
@@ -149,6 +154,8 @@ export function ChatMessageList({
   messages,
   isStreaming = false,
   streamingText,
+  streamingReasoning,
+  showReasoning = true,
   progressMessage,
   activeToolCalls,
   className,
@@ -204,7 +211,7 @@ export function ChatMessageList({
     if (autoScroll && bottomRef.current) {
       bottomRef.current.scrollIntoView({ behavior: "smooth" });
     }
-  }, [messages, streamingText, activeToolCalls, autoScroll]);
+  }, [messages, streamingText, streamingReasoning, activeToolCalls, autoScroll]);
 
   /** The toolbar of one message: copy everywhere, the rest only where the action makes sense */
   const toolbarFor = (message: Message, index: number) => {
@@ -323,6 +330,7 @@ export function ChatMessageList({
             renderImage={renderImage}
             renderStopNotice={renderStopNotice}
             resolveFileUrl={resolveFileUrl}
+            showReasoning={showReasoning}
           />
           {showAnsweredWith && answerModels.get(message.id)?.label && (
             <p className={cn("-mt-4 mb-6 px-4 text-xs text-chat-text-tertiary", showAvatars && "pl-16")}>
@@ -356,6 +364,8 @@ export function ChatMessageList({
             }}
             isStreaming={true}
             streamingText={streamingText}
+            streamingReasoning={streamingReasoning}
+            showReasoning={showReasoning}
             aiLabel={aiLabel}
             renderAvatar={renderAvatar}
             showAvatar={showAvatars}
@@ -377,6 +387,9 @@ export function ChatMessageList({
               </div>
             )}
             <div className="flex-1 min-w-0 flex flex-col gap-3 py-1">
+              {showReasoning && streamingReasoning && (
+                <ThinkingBlock reasoning={streamingReasoning} streaming />
+              )}
               {/* Active tool calls during streaming */}
               {activeToolCalls && activeToolCalls.size > 0 && (
                 <ToolCalls

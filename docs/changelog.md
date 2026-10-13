@@ -2,6 +2,18 @@
 
 All notable changes to Chat UI will be documented here.
 
+## [0.6.0] - 2026-10-13
+
+### Added
+
+- Reasoning ("Thinking"). `stream.thinking` is no longer folded into the answer text: `StreamCallbacks.onThinking` carries it, `useChat` returns `streamingReasoning` and keeps it per message (`Message.reasoning`, also read from `metadata.reasoning` / `metadata.thinking`). A collapsible, accessible `ThinkingBlock` renders above the answer (open while reasoning streams, folded after; theme tokens; plain text; strings `chat.reasoning.*` in English and Turkish).
+- `Chat` / `ChatMessageList` prop `showReasoning` (default true); `AgentInfo.showReasoning === false` hides it for that agent.
+- Optional `reasoningEffort` (`ReasoningEffort`: `none` | `minimal` | `low` | `medium` | `high`) in send options, regenerate and edit; `Chat` prop `reasoningEffort`, `useChat` option `getReasoningEffort`. No picker UI yet.
+
+### Changed
+
+- Reasoning text no longer appears inside the answer bubble or in the stored answer text.
+
 ## [0.5.0] - 2026-10-12
 
 ### Added

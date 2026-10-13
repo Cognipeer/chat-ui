@@ -40,6 +40,7 @@ import type {
   StopNoticeRenderProps,
   ToolApprovalRenderProps,
   QuestionRenderProps,
+  ReasoningEffort,
 } from "../../types";
 import { ChatThemeProvider, ChatI18nProvider, type ChatMessages, type SupportedLocale } from "../../providers";
 import { AgentServerClient, type ChatTransport } from "../../api";
@@ -229,6 +230,13 @@ export interface ChatProps extends ChatConfig, ChatCallbacks {
    */
   showAnsweredWith?: boolean;
   /**
+   * Show the model's reasoning as a collapsible "Thinking" block above the answer (default true).
+   * An agent with `showReasoning: false` (`AgentInfo`) hides it whatever this says.
+   */
+  showReasoning?: boolean;
+  /** How much the model reasons for each message (agent-server 0.5.0+). Absent sends nothing; there is no picker yet. */
+  reasoningEffort?: ReasoningEffort;
+  /**
    * Language/locale. Without it, the locale of an enclosing `ChatI18nProvider` applies, or
    * else it is auto-detected from the `?lang` query param.
    */
@@ -357,6 +365,8 @@ function ChatContent({
   onClientToolCall,
   getMessageMetadata,
   showAnsweredWith = true,
+  showReasoning = true,
+  reasoningEffort,
 }: ChatContentProps) {
   const { t, has } = useI18n();
   const [historyOpen, setHistoryOpen] = useState(defaultHistoryOpen);
@@ -467,6 +477,8 @@ function ChatContent({
   const onMessageReceivedRef = useRef(onMessageReceived);
   onMessageReceivedRef.current = onMessageReceived;
   // (the choice hook needs the chat's conversation, the chat needs the choice: they meet through this ref)
+  const reasoningEffortRef = useRef(reasoningEffort);
+  reasoningEffortRef.current = reasoningEffort;
   const modelChoiceRef = useRef<ReturnType<typeof useModelChoice> | null>(null);
   const onConversationCreatedRef = useRef(onConversationCreated);
   onConversationCreatedRef.current = onConversationCreated;
@@ -542,6 +554,7 @@ function ChatContent({
     onClientToolCall,
     getMessageMetadata,
     getModel: () => modelChoiceRef.current?.getModel(),
+    getReasoningEffort: () => reasoningEffortRef.current,
   });
   const modelChoice = useModelChoice(selectedAgent?.models, chat.conversation?.id, chat.messages);
   modelChoiceRef.current = modelChoice;
@@ -1004,6 +1017,8 @@ function ChatContent({
               aiLabel={aiLabelText}
               models={modelChoice.models}
               showAnsweredWith={showAnsweredWith}
+              streamingReasoning={chat.streamingReasoning}
+              showReasoning={showReasoning && selectedAgent?.showReasoning !== false}
             />
           )}
 

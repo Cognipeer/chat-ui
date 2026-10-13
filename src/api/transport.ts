@@ -1,4 +1,5 @@
 import type {
+  ReasoningEffort,
   FileAttachment,
   Message,
   Conversation,
@@ -47,6 +48,8 @@ export interface SendMessageOptions {
   metadata?: Record<string, unknown>;
   /** The model to answer with: a key of `AgentInfo.models` */
   model?: string;
+  /** How much the model reasons for this message (agent-server 0.5.0+) */
+  reasoningEffort?: ReasoningEffort;
   stream?: boolean;
 }
 
@@ -74,6 +77,8 @@ export interface SendMessageResponse {
 export interface StreamCallbacks {
   onStart?: (event: StreamEvent) => void;
   onText?: (text: string, fullText: string) => void;
+  /** The model's reasoning ("thinking"), kept apart from the answer text */
+  onThinking?: (text: string, fullThinking: string) => void;
   onToolCall?: (event: StreamEvent) => void;
   onToolResult?: (event: StreamEvent) => void;
   onProgress?: (event: StreamEvent) => void;
@@ -92,6 +97,8 @@ export interface ResolveActionOptions {
   signal?: AbortSignal;
   /** The model to answer with (`regenerateMessage` only; a key of `AgentInfo.models`) */
   model?: string;
+  /** Reasoning effort for the run (`regenerateMessage` only) */
+  reasoningEffort?: ReasoningEffort;
 }
 
 /** Options of `ChatTransport.continueConversation` (same shape as answering an action). */
@@ -160,6 +167,8 @@ export interface EditMessageInput {
   fileIds?: string[];
   /** The model to answer with: a key of `AgentInfo.models` */
   model?: string;
+  /** Reasoning effort for the run */
+  reasoningEffort?: ReasoningEffort;
 }
 
 /** The answer to deleting several conversations at once. */

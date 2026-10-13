@@ -3,7 +3,7 @@
 import React from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { cn, formatFileSize, imagePartSource, isFileExpired, isImageType, isRasterImageType, safeFileHref, safeImageSrc, messageText, waitingToolCallIds, callsWithOpenActions, type ToolCallRow } from "../../utils";
+import { cn, formatFileSize, imagePartSource, isFileExpired, isImageType, isRasterImageType, safeFileHref, safeImageSrc, messageText, reasoningOf, waitingToolCallIds, callsWithOpenActions, type ToolCallRow } from "../../utils";
 import {
   insertCitationMarkers,
   parseCitationHref,
@@ -12,6 +12,7 @@ import {
 } from "../../utils/citations";
 import type { Message, MessageActionProps, FileAttachment, Citation, StopNoticeRenderProps } from "../../types";
 import { FileIcon, ImageIcon, InfoIcon, LoadingIcon } from "./Icons";
+import { ThinkingBlock } from "./ThinkingBlock";
 import { ToolCalls } from "./ToolCall";
 import { MessageActionCards, type ChatActionsConfig } from "./ActionCards";
 import { MessageToolbar, type MessageToolbarConfig } from "./MessageToolbar";
@@ -41,6 +42,10 @@ export interface ChatMessageProps {
   isStreaming?: boolean;
   /** Current streaming text (only used when isStreaming is true) */
   streamingText?: string;
+  /** Reasoning streamed so far (only used when isStreaming is true) */
+  streamingReasoning?: string;
+  /** Show the collapsible "Thinking" block above an answer that has reasoning (default true) */
+  showReasoning?: boolean;
   /** Custom class name */
   className?: string;
   /** Render custom message actions (like feedback buttons) */
@@ -82,6 +87,8 @@ export function ChatMessage({
   message,
   isStreaming = false,
   streamingText,
+  streamingReasoning,
+  showReasoning = true,
   className,
   renderActions,
   renderAvatar,
@@ -100,6 +107,7 @@ export function ChatMessage({
   const isUser = message.role === "user";
   const isAssistant = message.role === "assistant";
   const content = isStreaming && streamingText ? streamingText : messageText(message.content);
+  const reasoning = showReasoning && isAssistant ? (isStreaming ? streamingReasoning ?? "" : reasoningOf(message)) : "";
   const images = React.useMemo(() => getImages(message.content), [message.content]);
 
   // Offsets index the finished answer, so markers only go in once it is whole.
@@ -160,6 +168,8 @@ export function ChatMessage({
             }}
           />
         )}
+
+        {reasoning && <ThinkingBlock reasoning={reasoning} streaming={isStreaming} answering={content.trim().length > 0} className="mb-3" />}
 
         {/* Message content (a turn that only paused for an answer has none) */}
         {!(isUser && editing) && (renderedContent || isStreaming || !isAssistant || !message.pendingActions?.length) && (

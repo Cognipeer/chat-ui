@@ -299,6 +299,17 @@ When the agent advertises two or more `models` (`AgentInfo.models`, agent-server
 
 The picker is keyboard accessible (arrows, Home/End, Enter, Escape), follows the theme tokens and becomes a bottom sheet on narrow screens. A divider marks a change of model in the thread. Use it on its own: `<ModelPicker models={...} value={key} onChange={setKey} />`; with `useChat`, pass `getModel: () => key`. Answers report their model in `metadata.model` (also `metadata.agentModel`, `metadata.cognipeer.agent_model`).
 
+## Reasoning ("Thinking")
+
+When the server streams the model's reasoning (agent-server >= 0.5.0, `stream.thinking`), it is kept apart from the answer: each assistant message carries `reasoning`, shown in a collapsible, keyboard accessible "Thinking" block above the answer (open while the model is still reasoning, folded once the answer starts). Reasoning is plain text and follows the theme tokens; strings are `chat.reasoning.*` (English, Turkish). Stored messages that carry `metadata.reasoning` / `metadata.thinking` show it too.
+
+```tsx
+<Chat baseUrl="/api/agents" agentId="support" showReasoning={false} /> {/* hide the block (default true) */}
+<Chat baseUrl="/api/agents" agentId="support" reasoningEffort="high" /> {/* sent with each message; no picker yet */}
+```
+
+An agent with `AgentInfo.showReasoning === false` never shows the block. With `useChat`, `streamingReasoning` holds the reasoning of the running turn and `getReasoningEffort: () => "low"` sets the effort sent (`none` | `minimal` | `low` | `medium` | `high`, also `SendMessageOptions.reasoningEffort`). Use the block on its own: `<ThinkingBlock reasoning={text} />`. A custom `StreamCallbacks` gets `onThinking(text, fullThinking)`.
+
 ## Using Hooks Directly
 
 For more control, use the hooks directly. A custom layout shows approval and question cards through `actions`, and the composer follows `composerState` (one value for a waiting card, a turn running elsewhere, a used-up usage limit, a read-only chat):

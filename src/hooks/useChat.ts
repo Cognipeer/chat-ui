@@ -50,6 +50,7 @@ import type {
   FeedbackInput,
   MessageFeedback,
   PendingAction,
+  ReasoningEffort,
   ActionResolution,
   ActionState,
   StreamEvent,
@@ -107,6 +108,8 @@ export interface UseChatOptions extends ChatConfig, ChatCallbacks {
    * `undefined` to let the agent use its own.
    */
   getModel?: () => string | undefined;
+  /** The reasoning effort to send with a message; called per message. `undefined` sends nothing. */
+  getReasoningEffort?: () => ReasoningEffort | undefined;
 }
 
 export interface UseChatReturn {
@@ -128,6 +131,8 @@ export interface UseChatReturn {
   isFollowing: boolean;
   /** Current streaming text */
   streamingText: string;
+  /** The model's reasoning for the turn being streamed (kept apart from `streamingText`) */
+  streamingReasoning: string;
   /** Current progress message (from stream.progress events) */
   progressMessage: string;
   /** Current error */
@@ -372,6 +377,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     onClientToolCall,
     getMessageMetadata,
     getModel,
+    getReasoningEffort,
     onMessageSent,
     onMessageReceived,
     onStreamText,
@@ -393,6 +399,12 @@ export function useChat(options: UseChatOptions): UseChatReturn {
   const [isFollowing, setIsFollowing] = useState(false);
   const [isLoadingConversation, setIsLoadingConversation] = useState(false);
   const [streamingText, setStreamingText] = useState("");
+  const [streamingReasoning, setStreamingReasoning] = useState("");
+  const streamingReasoningRef = useRef("");
+  const clearStreamingReasoning = useCallback(() => {
+    streamingReasoningRef.current = "";
+    setStreamingReasoning("");
+  }, []);
   const [error, setError] = useState<Error | null>(null);
   const [pendingFiles, setPendingFiles] = useState<FileAttachment[]>([]);
   const [isUploadingMessage, setIsUploadingMessage] = useState(false);
@@ -475,6 +487,15 @@ export function useChat(options: UseChatOptions): UseChatReturn {
   getMessageMetadataRef.current = getMessageMetadata;
   const getModelRef = useRef(getModel);
   getModelRef.current = getModel;
+  const getReasoningEffortRef = useRef(getReasoningEffort);
+  getReasoningEffortRef.current = getReasoningEffort;
+  const readReasoningEffort = useCallback((): ReasoningEffort | undefined => {
+    try {
+      return getReasoningEffortRef.current?.() || undefined;
+    } catch {
+      return undefined;
+    }
+  }, []);
   /** The model key the person picked for the next turn, if any */
   const readModel = useCallback((): string | undefined => {
     try {
@@ -539,6 +560,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     stopFollowing();
     streamingTextRef.current = "";
     setStreamingText("");
+    clearStreamingReasoning();
     activeToolCallsRef.current = new Map();
     toolCallStartTimeRef.current = null;
     setActiveToolCalls(new Map());
@@ -818,6 +840,13 @@ export function useChat(options: UseChatOptions): UseChatReturn {
               });
               onStreamText?.(text, fullText);
             },
+            onThinking: (_text, fullThinking) => {
+              if (isStale()) return;
+              streamingReasoningRef.current = fullThinking;
+              flushSync(() => {
+                setStreamingReasoning(fullThinking);
+              });
+            },
             onProgress: (event) => {
               if (isStale()) return;
               if (event.type === "stream.progress") {
@@ -880,6 +909,8 @@ export function useChat(options: UseChatOptions): UseChatReturn {
                   onBackgroundStreamCompleted?.(event.conversationId);
                   return;
                 }
+                // The reasoning streamed for this turn, kept with the answer
+                const streamedReasoning = streamingReasoningRef.current;
                 // Snapshot tool calls before clearing
                 const currentToolCalls = activeToolCallsRef.current;
                 const toolCallsForMessage = currentToolCalls.size > 0
@@ -921,6 +952,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
                   citationMarks: event.citationMarks,
                   files: event.files,
                   toolCalls: toolCallsForMessage,
+                  ...(streamedReasoning ? { reasoning: streamedReasoning } : {}),
                   ...(paused && freshActions.length > 0
                     ? { pendingActions: freshActions, status: "requires_action" as const }
                     : event.status && event.status !== "completed" && event.status !== "requires_action"
@@ -949,6 +981,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
                 // Clear streaming first, then add message
                 streamingTextRef.current = "";
                 setStreamingText("");
+                clearStreamingReasoning();
                 activeToolCallsRef.current = new Map();
                 toolCallStartTimeRef.current = null;
                 setActiveToolCalls(new Map());
@@ -1089,6 +1122,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     streamActionsRef.current = [];
     streamingTextRef.current = "";
     setStreamingText("");
+    clearStreamingReasoning();
     activeToolCallsRef.current = new Map();
     setActiveToolCalls(new Map());
     setProgressMessage("");
@@ -1203,6 +1237,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     }
     streamingTextRef.current = "";
     setStreamingText("");
+    clearStreamingReasoning();
     activeToolCallsRef.current = new Map();
     setActiveToolCalls(new Map());
     setProgressMessage("");
@@ -1450,6 +1485,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     })();
 
     const model = readModel();
+    const reasoningEffort = readReasoningEffort();
 
     setError(null);
     setIsStreaming(true);
@@ -1606,6 +1642,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       if (streaming) {
         // Streaming mode
         setStreamingText("");
+        clearStreamingReasoning();
         streamingTextRef.current = "";
         setActiveToolCalls(new Map());
         setProgressMessage("");
@@ -1623,6 +1660,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
             fileIds: uploadedIds.length + reused.length > 0 ? [...uploadedIds, ...reused.map((f) => f.id)] : undefined,
             ...(messageMetadata ? { metadata: messageMetadata } : {}),
             ...(model ? { model } : {}),
+            ...(reasoningEffort ? { reasoningEffort } : {}),
           },
           (() => {
             const base = createStreamCallbacksRef.current(isStale);
@@ -1643,6 +1681,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
           fileIds: uploadedIds.length + reused.length > 0 ? [...uploadedIds, ...reused.map((f) => f.id)] : undefined,
           ...(messageMetadata ? { metadata: messageMetadata } : {}),
           ...(model ? { model } : {}),
+          ...(reasoningEffort ? { reasoningEffort } : {}),
           stream: false,
         });
 
@@ -1747,6 +1786,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     onConversationTitleGenerated,
     onBackgroundStreamCompleted,
     readModel,
+    readReasoningEffort,
   ]);
 
   const resolveAction = useCallback(async (actionId: string, resolution: ActionResolution): Promise<boolean> => {
@@ -1769,6 +1809,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     setIsStreaming(true);
     streamingTextRef.current = "";
     setStreamingText("");
+    clearStreamingReasoning();
     setActiveToolCalls(new Map());
     activeToolCallsRef.current = new Map();
     toolCallStartTimeRef.current = null;
@@ -1854,6 +1895,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     setIsStreaming(true);
     streamingTextRef.current = "";
     setStreamingText("");
+    clearStreamingReasoning();
     setActiveToolCalls(new Map());
     activeToolCallsRef.current = new Map();
     toolCallStartTimeRef.current = null;
@@ -1997,6 +2039,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       setIsStreaming(true);
       streamingTextRef.current = "";
       setStreamingText("");
+      clearStreamingReasoning();
       setActiveToolCalls(new Map());
       activeToolCallsRef.current = new Map();
       toolCallStartTimeRef.current = null;
@@ -2077,11 +2120,12 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     return rerunTurn(
       (client, conversationId, opts) => {
         const model = readModel();
-        return client.regenerateMessage!(conversationId, target, model ? { ...opts, model } : opts);
+        const effort = readReasoningEffort();
+        return client.regenerateMessage!(conversationId, target, { ...opts, ...(model ? { model } : {}), ...(effort ? { reasoningEffort: effort } : {}) });
       },
       (prev) => prev.slice(0, -1)
     );
-  }, [rerunTurn, readModel]);
+  }, [rerunTurn, readModel, readReasoningEffort]);
 
   /** The server's id of a message this page numbered itself (found by position among the person's messages). */
   const serverIdOf = useCallback(
@@ -2130,7 +2174,8 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       return rerunTurn(
         (client, conversationId, opts) => {
           const model = readModel();
-          return client.editMessage!(conversationId, id, { content: text, ...(fileIds.length > 0 ? { fileIds } : {}), ...(model ? { model } : {}) }, opts);
+          const effort = readReasoningEffort();
+          return client.editMessage!(conversationId, id, { content: text, ...(fileIds.length > 0 ? { fileIds } : {}), ...(model ? { model } : {}), ...(effort ? { reasoningEffort: effort } : {}) }, opts);
         },
         (prev) => {
           const at = prev.findIndex((m) => m.id === id);
@@ -2348,6 +2393,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         setIsStreaming(false);
         streamingTextRef.current = "";
         setStreamingText("");
+        clearStreamingReasoning();
         activeToolCallsRef.current = new Map();
         setActiveToolCalls(new Map());
       }
@@ -2376,6 +2422,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         conversationId: conv?.id || "",
         role: "assistant",
         content: partial,
+        ...(streamingReasoningRef.current ? { reasoning: streamingReasoningRef.current } : {}),
         status: "cancelled",
         stopReason: "cancelled",
         // `localOnly`: this page numbered it itself, so there is no stored answer to rate or run again yet
@@ -2396,6 +2443,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     }
     streamingTextRef.current = "";
     setStreamingText("");
+    clearStreamingReasoning();
     activeToolCallsRef.current = new Map();
     toolCallStartTimeRef.current = null;
     setActiveToolCalls(new Map());
@@ -2495,6 +2543,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     isLoadingConversation,
     isFollowing,
     streamingText,
+    streamingReasoning,
     progressMessage,
     error,
     pendingFiles,
