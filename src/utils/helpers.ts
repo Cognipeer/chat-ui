@@ -117,7 +117,6 @@ export function getMessageTextContent(content: string | Array<{ type: string; te
     .join("");
 }
 
-/** The text of a message: its string content, or the text parts of a content array, one per line. */
 /**
  * The reasoning ("thinking") text of a message: `message.reasoning`, else `metadata.reasoning` /
  * `metadata.thinking` when it is a string. Empty when there is none.
@@ -132,6 +131,7 @@ export function reasoningOf(message: Pick<Message, "reasoning" | "metadata">): s
   return "";
 }
 
+/** The text of a message: its string content, or the text parts of a content array, one per line. */
 export function messageText(content: Message["content"]): string {
   if (typeof content === "string") return content;
   return content
