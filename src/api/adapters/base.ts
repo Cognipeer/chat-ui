@@ -139,6 +139,24 @@ export abstract class StatelessTransport implements ChatTransport {
   private readonly answerAction: NonNullable<ChatTransport["resolveAction"]> = (conversationId, actionId, resolution, options) =>
     this.runResolve(conversationId, actionId, resolution, options);
 
+  /**
+   * Stop the turn that runs for this conversation on the backend (not just this page's connection).
+   * Implement it in a subclass whose backend has a stop route; resolve `true` when a run was told to
+   * stop. Without it, Stop only closes this page's connection.
+   */
+  protected cancelRun?(conversation: Conversation): Promise<boolean>;
+
+  private readonly stopRun: NonNullable<ChatTransport["cancel"]> = async (conversationId) => {
+    const thread = await this.store.get(conversationId);
+    const cancelled = thread && this.cancelRun ? await this.cancelRun(thread.conversation) : false;
+    return { cancelled };
+  };
+
+  /** Present only for backends that can stop a run. */
+  get cancel(): ChatTransport["cancel"] {
+    return typeof this.cancelRun === "function" ? this.stopRun : undefined;
+  }
+
   /** Present only for backends that take answers: the chat shows read-only cards otherwise. */
   get resolveAction(): ChatTransport["resolveAction"] {
     return this.canResolve() ? this.answerAction : undefined;

@@ -236,6 +236,25 @@ export class ResponsesTransport extends StatelessTransport {
     return `${baseUrl}/agents/sessions/${encodeURIComponent(sessionId)}/actions/${encodeURIComponent(actionId)}`;
   }
 
+  /**
+   * Stops the turn the conversation runs on the server: `POST <path>/<response id>/cancel`, the id being
+   * the last response of the chain. A first turn has no id yet (the answer carries it), so it can only
+   * be stopped by closing the connection.
+   */
+  protected async cancelRun(conversation: { state?: Record<string, unknown> }): Promise<boolean> {
+    const id = conversation.state?.previousResponseId as string | undefined;
+    if (!id || this.options.serverState === false) return false;
+    const { options } = this;
+    const response = await httpFetch(
+      options,
+      `${options.baseUrl.replace(/\/$/, "")}${options.path ?? "/responses"}/${encodeURIComponent(id)}/cancel`,
+      { method: "POST", headers: await buildHeaders(options) }
+    );
+    if (!response.ok) throw await errorFromResponse(response);
+    const body = (await response.json().catch(() => ({}))) as { cancelled?: boolean };
+    return body.cancelled === true;
+  }
+
   protected canResolve(): boolean {
     return this.options.resolveActions !== false;
   }
