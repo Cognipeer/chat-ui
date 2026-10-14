@@ -195,6 +195,11 @@ export class ResponsesTransport extends StatelessTransport {
           return;
         }
         switch (e.type ?? event) {
+          case "response.created":
+          case "response.in_progress":
+            // the id Stop needs to reach this very response
+            if (typeof e.response?.id === "string") input.track({ responseId: e.response.id });
+            break;
           case "response.output_text.delta":
             streamed += e.delta ?? "";
             input.emit.text(e.delta ?? "");
@@ -234,6 +239,29 @@ export class ResponsesTransport extends StatelessTransport {
     const baseUrl = this.options.baseUrl.replace(/\/$/, "");
     if (this.options.actionUrl) return this.options.actionUrl({ sessionId, actionId, baseUrl });
     return `${baseUrl}/agents/sessions/${encodeURIComponent(sessionId)}/actions/${encodeURIComponent(actionId)}`;
+  }
+
+  /**
+   * Stops the turn the conversation runs on the server: `POST <path>/<response id>/cancel`. The id is
+   * the one the running response announced in its first stream event (`response.created`), so even a
+   * first turn can be stopped; without a running turn of this page it is the last response of the chain.
+   */
+  protected async cancelRun(
+    conversation: { state?: Record<string, unknown> },
+    context: { live?: Record<string, unknown> } = {}
+  ): Promise<boolean> {
+    if (this.options.serverState === false) return false;
+    const id = (context.live?.responseId ?? conversation.state?.previousResponseId) as string | undefined;
+    if (!id) return false;
+    const { options } = this;
+    const response = await httpFetch(
+      options,
+      `${options.baseUrl.replace(/\/$/, "")}${options.path ?? "/responses"}/${encodeURIComponent(id)}/cancel`,
+      { method: "POST", headers: await buildHeaders(options) }
+    );
+    if (!response.ok) throw await errorFromResponse(response);
+    const body = (await response.json().catch(() => ({}))) as { cancelled?: boolean };
+    return body.cancelled === true;
   }
 
   protected canResolve(): boolean {

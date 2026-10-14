@@ -22,7 +22,7 @@
 | --- | :-: | :-: | :-: | :-: | :-: |
 | Approvals and questions (`resolveAction`) | yes | agents that pause | no | Console client API | with `actionUrl` |
 | Reattach to a running turn (`followEvents`) | yes | | | | |
-| Stop on the server (`cancel`) | yes | | | | |
+| Stop on the server (`cancel`) | yes | | no (abort only) | `POST .../responses/<id>/cancel` | `tasks/cancel` |
 | Usage limit (`updateBudget`, `continueConversation`) | yes | | | | |
 | Stop reason on an answer | yes | cancelled | | limit, cancelled | limit |
 | Files stored ahead (`uploadFile`, raw body, progress) | yes | | | | |
@@ -58,6 +58,8 @@ const transport = new ChatCompletionsTransport({
 
 Tool calls the model requests are shown but never executed by the transport.
 
+Stop only closes the request: Chat Completions has no route to end a run on the server, so the provider may finish generating (and bill) after the page stopped listening.
+
 ## Responses API
 
 ```ts
@@ -71,6 +73,8 @@ const transport = new ResponsesTransport({
 ```
 
 Turns are chained with `previous_response_id`; set `serverState: false` to resend the history instead. `url_citation` and `file_citation` annotations become citations and inline markers. Built-in tool items (web search, MCP, function calls) show as tool calls.
+
+Stop ends the run on the server with `POST <path>/<response id>/cancel`. The id is taken from the first stream event (`response.created`), so the first turn of a conversation can be stopped too. It needs `serverState` (the default); with `store: false` there is nothing to cancel.
 
 A response with `status: "incomplete"` or a `stop_reason` of `limit` / `cancelled` / `budget_reached` is stored with its stop reason, so a notice shows under the answer.
 
@@ -100,6 +104,8 @@ const transport = new A2ATransport({
 ```
 
 Uses `message/stream` (SSE) and `message/send`. `contextId` is kept per conversation, and a task left in `input-required` / `auth-required` is continued by the next message. Override `methods` for servers that use other method names.
+
+Stop sends JSON-RPC `tasks/cancel` (rename it with `methods.cancel`). The task id is the one the stream's events name; for a server that answers a turn in one piece (the Console's `message/send`) it is derived as `task_<contextId>_<index of the answer>`. A first turn has no context yet, so Stop can only close the connection there. A server that reports "not running" / "not found" is treated as nothing to stop.
 
 `metadata.stopReason` / `stopDetail` of a task become the stop reason of the answer.
 

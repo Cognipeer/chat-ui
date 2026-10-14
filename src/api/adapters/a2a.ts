@@ -16,7 +16,7 @@ export interface A2ATransportOptions extends Omit<StatelessTransportOptions, "ag
   /** Id shown for this agent. Defaults to `defaultAgentId`. */
   agentId?: string;
   /** JSON-RPC method names. Defaults are the A2A 0.3 names. */
-  methods?: { send: string; stream: string };
+  methods?: { send: string; stream: string; cancel?: string };
   /**
    * Where the answer to an approval or a question goes, for a server that stops a task with
    * `input-required` and lists the open actions in `metadata.pendingActions` (the Console client
@@ -85,17 +85,17 @@ export class A2ATransport extends StatelessTransport {
     }
   }
 
+  private async rpcUrl(): Promise<string> {
+    if (this.options.rpcUrl) return this.options.rpcUrl;
+    const card = await this.loadCard().catch(() => undefined);
+    return card?.url ?? this.root();
+  }
+
   protected async run(input: RunInput): Promise<RunResult> {
     const { options } = this;
     const methods = options.methods ?? { send: "message/send", stream: "message/stream" };
 
-    let rpcUrl: string;
-    if (options.rpcUrl) {
-      rpcUrl = options.rpcUrl;
-    } else {
-      const card = await this.loadCard().catch(() => undefined);
-      rpcUrl = card?.url ?? this.root();
-    }
+    const rpcUrl = await this.rpcUrl();
 
     const contextId = input.conversation.state?.contextId as string | undefined;
     const taskId = input.conversation.state?.taskId as string | undefined;
@@ -182,6 +182,14 @@ export class A2ATransport extends StatelessTransport {
     const handle = (result: any) => {
       if (!result) return;
       if (result.contextId) newContextId = result.contextId;
+      // what Stop needs to reach this task; a task's own event names it `id`, the others `taskId`
+      const runningTask = result.kind === "task" ? result.id : result.taskId;
+      if (result.contextId || runningTask) {
+        input.track({
+          ...(result.contextId ? { contextId: result.contextId } : {}),
+          ...(typeof runningTask === "string" && runningTask ? { taskId: runningTask } : {}),
+        });
+      }
       switch (result.kind) {
         case "message": {
           if (result.role === "user") return;
@@ -244,6 +252,41 @@ export class A2ATransport extends StatelessTransport {
       ...(stopDetail ? { stopDetail } : {}),
       state: { contextId: newContextId, taskId: openTaskId },
     };
+  }
+
+  /**
+   * Stops the running task with JSON-RPC `tasks/cancel`. The task id is the one the server's events
+   * named; a server that answers a whole turn at once (the Console's `message/send`) names it only in
+   * the answer, so the id is derived the way the Console numbers it: `task_<contextId>_<index of the
+   * answer in the conversation>`. A first turn has no context yet, so there is nothing to stop but the
+   * connection.
+   */
+  protected async cancelRun(
+    conversation: { state?: Record<string, unknown> },
+    context: { live?: Record<string, unknown>; messages: unknown[] }
+  ): Promise<boolean> {
+    const { options } = this;
+    const state = conversation.state ?? {};
+    const contextId = (context.live?.contextId ?? state.contextId) as string | undefined;
+    let id = context.live?.taskId as string | undefined;
+    if (!id && context.live && contextId) id = `task_${contextId}_${context.messages.length}`;
+    id ??= state.taskId as string | undefined;
+    if (!id) return false;
+
+    const method = options.methods?.cancel ?? "tasks/cancel";
+    const response = await httpFetch(options, await this.rpcUrl(), {
+      method: "POST",
+      headers: await buildHeaders(options, { Accept: "application/json" }),
+      body: JSON.stringify({ jsonrpc: "2.0", id: makeId(), method, params: { id } }),
+    });
+    if (!response.ok) throw await errorFromResponse(response);
+    const rpc = (await response.json().catch(() => ({}))) as { error?: { code?: number; message?: string }; result?: { status?: { state?: string } } };
+    if (rpc.error) {
+      // "not cancelable" / "task not found": the turn is not running, which is no failure of Stop
+      if (rpc.error.code === -32002 || rpc.error.code === -32001 || rpc.error.code === -32004) return false;
+      throw new Error(rpc.error.message ?? "A2A cancel failed");
+    }
+    return rpc.result?.status?.state === "canceled";
   }
 
   protected canResolve(): boolean {
