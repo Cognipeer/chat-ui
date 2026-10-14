@@ -2,6 +2,7 @@ import type { Citation, CitationMark } from "../../types";
 import { buildHeaders, errorFromResponse, httpFetch, readSSE, type HttpOptions } from "../http";
 import { StatelessTransport, type ResolveInput, type RunInput, type RunResult, type StatelessTransportOptions } from "./base";
 import { textOf, userContentWithFiles } from "./files";
+import { AuthedFileUrls, outputFilesFromWire } from "./outputFiles";
 import { pendingActionsFromWire, resolutionToWire, stopFromResponse } from "../../utils/wire";
 
 export interface ResponsesTransportOptions extends StatelessTransportOptions, HttpOptions {
@@ -90,7 +91,11 @@ function readResponse(response: any) {
  * Console client API response that waits on a person (`status: "requires_action"`) - its open
  * approvals / questions, and why a stopped response stopped.
  */
-export function resultFromResponse(completed: any, streamed = "", options: { serverState?: boolean } = {}): RunResult {
+export function resultFromResponse(
+  completed: any,
+  streamed = "",
+  options: { serverState?: boolean; baseUrl?: string } & HttpOptions = {}
+): RunResult {
   const parsed = readResponse(completed);
   const usage = completed?.usage
     ? {
@@ -110,8 +115,14 @@ export function resultFromResponse(completed: any, streamed = "", options: { ser
   // Citation offsets point into the final text, so prefer it over the
   // streamed deltas when the response object is available.
   const content = completed ? parsed.text : streamed;
+
+  // Files the agent wrote for the user (Console `output_files`), or the `file_path` annotations that name them
+  const files = options.baseUrl
+    ? outputFilesFromWire(completed?.output_files ?? filesFromAnnotations(completed, sessionIdOf(completed)), options.baseUrl, options)
+    : [];
   return {
     content,
+    ...(files.length > 0 ? { files } : {}),
     citations: parsed.citations.length ? parsed.citations : undefined,
     citationMarks: parsed.marks.length ? parsed.marks : undefined,
     usage,
@@ -126,10 +137,37 @@ export function resultFromResponse(completed: any, streamed = "", options: { ser
   };
 }
 
+/** A Console response id is `resp_<session id>`. */
+function sessionIdOf(response: any): string | undefined {
+  return typeof response?.id === "string" && response.id.startsWith("resp_") ? response.id.slice(5) : undefined;
+}
+
+/** `file_path` annotations as `output_files`-shaped entries, for a response that carries only the annotations. */
+function filesFromAnnotations(response: any, sessionId: string | undefined) {
+  if (!sessionId) return [];
+  const seen = new Set<string>();
+  const out: Array<{ id: string; name: string; download_url: string }> = [];
+  for (const item of response?.output ?? []) {
+    for (const part of item?.content ?? []) {
+      for (const a of part?.annotations ?? []) {
+        if (a?.type !== "file_path" || typeof a.file_id !== "string" || seen.has(a.file_id)) continue;
+        seen.add(a.file_id);
+        out.push({
+          id: a.file_id,
+          name: a.filename ?? a.file_id,
+          download_url: `/sessions/${encodeURIComponent(sessionId)}/files/${encodeURIComponent(a.file_id)}/content`,
+        });
+      }
+    }
+  }
+  return out;
+}
+
 /** `POST /responses` — the OpenAI Responses API. */
 export class ResponsesTransport extends StatelessTransport {
   constructor(private readonly options: ResponsesTransportOptions) {
     super(options);
+    this.fileUrls = new AuthedFileUrls(options);
   }
 
   protected async run(input: RunInput): Promise<RunResult> {

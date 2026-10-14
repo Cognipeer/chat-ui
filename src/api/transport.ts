@@ -313,7 +313,7 @@ export interface ChatTransport {
    * A URL the browser can show or download a stored file from. Needed when the file route wants
    * credentials an `<img src>` cannot send (the client fetches the bytes and hands back a blob URL).
    */
-  getFileUrl?(file: Pick<FileAttachment, "id" | "name" | "mimeType">, options?: { disposition?: "inline" | "attachment" }): Promise<string>;
+  getFileUrl?(file: Pick<FileAttachment, "id" | "name" | "mimeType" | "storageKey">, options?: { disposition?: "inline" | "attachment" }): Promise<string>;
 
   /**
    * Follow a conversation's event log: replay what happened after `options.after`, then deliver
