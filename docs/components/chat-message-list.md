@@ -98,7 +98,7 @@ const messages = [
 
 ## Auto-Scroll Behavior
 
-With `autoScroll` the list scrolls to the bottom when the messages, the streaming text or the tool calls change.
+With `autoScroll` the list scrolls itself to the bottom when the messages, the streaming text or the tool calls change. Only the list scrolls: the page around it, and any other scrollable ancestor, stays where it is.
 
 ## Accessibility
 

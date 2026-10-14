@@ -2,6 +2,12 @@
 
 All notable changes to Chat UI will be documented here.
 
+## [0.7.1] - 2026-10-14
+
+### Fixed
+
+- The page no longer jumps when an answer arrives. The message list followed the newest message with `scrollIntoView`, which also scrolls every scrollable ancestor, the document included, so a host page even slightly taller than the window slid up on each answer and left blank space below the composer. The list now scrolls only itself (`scrollTo` on the message container, `scrollTop` where `scrollTo` is missing). Keeping the reader in place when older messages load is unchanged.
+
 ## [0.7.0] - 2026-10-14
 
 ### Added
