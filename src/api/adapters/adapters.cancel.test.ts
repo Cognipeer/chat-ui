@@ -26,6 +26,8 @@ const text = (id: string, t: string) => ({
   output: [{ id: "m", type: "message", role: "assistant", content: [{ type: "output_text", text: t }] }],
 });
 
+const last = <T,>(a: T[]): T => a[a.length - 1];
+
 describe("ResponsesTransport.cancel", () => {
   const BASE = "https://api.example.com/v1";
 
@@ -57,7 +59,7 @@ describe("ResponsesTransport.cancel", () => {
   it("stops the first turn, whose id only the first stream event carries", async () => {
     const { result, calls } = await stopMidStream(0);
     expect(result).toEqual({ cancelled: true });
-    expect(calls.at(-1)).toEqual({ url: `${BASE}/responses/resp_live/cancel`, method: "POST" });
+    expect(calls[calls.length - 1]).toEqual({ url: `${BASE}/responses/resp_live/cancel`, method: "POST" });
   });
 
   it("stops a later turn by its own response, not the previous one", async () => {
@@ -96,7 +98,7 @@ describe("A2ATransport.cancel", () => {
     expect(await transport.cancel!(c.id)).toEqual({ cancelled: true });
     stream.finish();
     await running.catch(() => undefined);
-    expect(rpcBodies(fetchMock).at(-1)).toMatchObject({ method: "tasks/cancel", params: { id: "task_ctx-1_3" } });
+    expect(last(rpcBodies(fetchMock))).toMatchObject({ method: "tasks/cancel", params: { id: "task_ctx-1_3" } });
   });
 
   it("derives the Console's task id from the context when the answer comes in one piece", async () => {
@@ -117,7 +119,7 @@ describe("A2ATransport.cancel", () => {
     const running = transport.sendMessage(c.id, { message: "go" });
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     expect(await transport.cancel!(c.id)).toEqual({ cancelled: true });
-    expect(rpcBodies(fetchMock).at(-1)).toMatchObject({ method: "tasks/cancel", params: { id: "task_ctx-9_3" } });
+    expect(last(rpcBodies(fetchMock))).toMatchObject({ method: "tasks/cancel", params: { id: "task_ctx-9_3" } });
     release(json({ jsonrpc: "2.0", result: { kind: "task", id: "task_ctx-9_3", contextId: "ctx-9", status: { state: "canceled" } } }));
     await running.catch(() => undefined);
   });
