@@ -7,6 +7,7 @@ import type {
   ConversationEvent,
   ConversationListItem,
   ConversationRuntime,
+  ConversationSearchMode,
   MessagesPage,
   AgentInfo,
   StreamEvent,
@@ -19,6 +20,13 @@ import type {
   MessageFeedback,
   ExportFormat,
 } from "../types";
+
+/** The answer to `ChatTransport.searchConversations`. */
+export type ConversationSearchResult = PaginatedResponse<ConversationListItem> & {
+  conversations: ConversationListItem[];
+  /** What the server searched: `full` (titles and messages) or `title` */
+  searchMode?: ConversationSearchMode;
+};
 
 /** What `ChatTransport.getConversation` can be asked for besides the conversation. */
 export interface GetConversationOptions {
@@ -220,6 +228,22 @@ export interface ChatTransport {
     title?: string;
     metadata?: Record<string, unknown>;
   }): Promise<Conversation>;
+
+  /**
+   * Search the whole history on the server (`GET /conversations?q=`): titles and message text, newest
+   * first, each hit with where it matched (`searchMatch`). Optional: without it the history filters
+   * the titles it has loaded.
+   */
+  searchConversations?(
+    q: string,
+    options?: { agentId?: string; userId?: string; limit?: number; offset?: number; signal?: AbortSignal }
+  ): Promise<ConversationSearchResult>;
+
+  /**
+   * What `searchConversations` covers on this server: `full`, `title`, or `false` (it cannot
+   * search). Optional: a transport that has `searchConversations` is taken to search.
+   */
+  getSearchMode?(): Promise<ConversationSearchMode | false>;
 
   /**
    * A conversation with its messages: the newest page when the server pages its history

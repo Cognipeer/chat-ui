@@ -347,9 +347,24 @@ export interface ConversationListItem {
   /** Pinned conversations are listed first (`metadata.pinned` on the server) */
   pinned?: boolean;
   metadata?: Record<string, unknown>;
+  /** Only in a search response: where the conversation matched the search text */
+  searchMatch?: ConversationSearchMatch;
   createdAt: Date;
   updatedAt: Date;
 }
+
+/** Where a conversation matched a search (`GET /conversations?q=`, agent-server >= 0.7.0). */
+export interface ConversationSearchMatch {
+  field: "title" | "message";
+  /** The message that matched (`field: "message"`) */
+  messageId?: string;
+  role?: "user" | "assistant";
+  /** Plain text, at most 160 characters around the first match; `…` marks a cut end */
+  snippet: string;
+}
+
+/** What the server searches: titles and message text (`full`), or titles only (`title`). */
+export type ConversationSearchMode = "full" | "title";
 
 // ============================================================================
 // Agent Types

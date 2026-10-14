@@ -110,7 +110,11 @@ export interface ChatProps extends ChatConfig, ChatCallbacks {
   autoScroll?: boolean;
   /** Auto-focus the chat input on mount and after actions (new chat, conversation select) */
   autoFocusInput?: boolean;
-  /** Enable search input in chat history sidebar */
+  /**
+   * Search box in the history sidebar. Searches the whole history on the server (titles and message
+   * text, agent-server >= 0.7.0, or a transport with `searchConversations`) and opens a hit at its
+   * message; otherwise filters the loaded titles.
+   */
   enableMessageSearch?: boolean;
   /** Show citations section under assistant messages */
   enableCitations?: boolean;
@@ -628,14 +632,20 @@ function ChatContent({
     getHeaders,
     fetch: customFetch,
     autoLoad: showHistory,
+    detectSearch: showHistory && enableMessageSearch,
   });
 
   // Keep historyRef in sync so the wrapped callbacks can refresh
   historyRef.current = history;
 
+  // The message a search hit points at, scrolled to once the conversation is shown
+  const [jumpTo, setJumpTo] = useState<{ conversationId: string; messageId: string } | null>(null);
+
   const handleConversationSelect = useCallback(
     (conversation: ConversationListItem) => {
       followConversationAgent(conversation.agentId);
+      const match = conversation.searchMatch;
+      setJumpTo(match?.field === "message" && match.messageId ? { conversationId: conversation.id, messageId: match.messageId } : null);
       chat.loadConversation(conversation.id);
       onConversationSelected?.(conversation);
       setHistoryOpen(false);
@@ -934,6 +944,7 @@ function ChatContent({
             header={renderHistoryHeader?.()}
             footer={renderHistoryFooter?.()}
             enableSearch={enableMessageSearch}
+            searchConversations={history.searchConversations}
             showAgentName={showAgentName ?? false}
             showStatus={showStatus}
             selectedStatus={selectedStatus}
@@ -1019,6 +1030,8 @@ function ChatContent({
               showAnsweredWith={showAnsweredWith}
               streamingReasoning={chat.streamingReasoning}
               showReasoning={showReasoning && selectedAgent?.showReasoning !== false}
+              focusMessageId={jumpTo && jumpTo.conversationId === chat.conversation?.id ? jumpTo.messageId : undefined}
+              onFocusHandled={() => setJumpTo(null)}
             />
           )}
 

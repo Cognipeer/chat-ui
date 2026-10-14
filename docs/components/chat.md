@@ -51,7 +51,7 @@ import { Chat } from "@cognipeer/chat-ui";
 | `inputPlaceholder` | `string` | localized | Composer placeholder |
 | `autoScroll` | `boolean` | `true` | Scroll to new messages |
 | `autoFocusInput` | `boolean` | `false` | Focus the composer on mount and after new chat / selection |
-| `enableMessageSearch` | `boolean` | `false` | Search box in the history |
+| `enableMessageSearch` | `boolean` | `false` | Search box in the history. With agent-server >= 0.7.0 (or a transport with `searchConversations`) it searches titles and message text on the server and opens a hit at its message; otherwise it filters the loaded titles |
 | `showStatus` | `boolean` | `true` | A badge on history rows that are working, waiting for you or stopped on their usage limit |
 | `enableCitations` | `boolean` | `true` | Sources under answers |
 | `readOnly` | `boolean` | `false` | A transcript: the composer is closed with a notice |

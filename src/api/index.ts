@@ -12,6 +12,7 @@ export type {
   GetConversationOptions,
   UploadFileParams,
   PaginatedResponse,
+  ConversationSearchResult,
   EditMessageInput,
   BulkDeleteResult,
   ExportRequest,

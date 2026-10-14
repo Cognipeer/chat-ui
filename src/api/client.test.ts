@@ -95,3 +95,38 @@ describe("AgentServerClient stream errors", () => {
     expect(errors[0].code).toBeUndefined();
   });
 });
+
+describe("AgentServerClient search", () => {
+  const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+
+  it("searchConversations sends q (trimmed) with the filters and the abort signal", async () => {
+    const fetchMock = vi.fn(async () =>
+      json({ conversations: [{ id: "c1", agentId: "a", searchMatch: { field: "message", messageId: "m1", snippet: "…x…" } }], total: 1, limit: 50, offset: 0, hasMore: false, searchMode: "full" })
+    );
+    const client = new AgentServerClient({ baseUrl: "http://x", fetch: fetchMock as unknown as typeof fetch });
+    const controller = new AbortController();
+    const page = await client.searchConversations("  a&b=c  ", { agentId: "a", limit: 50, signal: controller.signal });
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("http://x/conversations?q=a%26b%3Dc&agentId=a&limit=50");
+    expect(init.signal).toBe(controller.signal);
+    expect(page.searchMode).toBe("full");
+    expect(page.conversations[0].searchMatch?.messageId).toBe("m1");
+  });
+
+  it("getSearchMode reads features.conversationSearch once", async () => {
+    const fetchMock = vi.fn(async () => json({ agents: [], features: { conversationSearch: "title" } }));
+    const client = new AgentServerClient({ baseUrl: "http://x", fetch: fetchMock as unknown as typeof fetch });
+    expect(await client.getSearchMode()).toBe("title");
+    expect(await client.getSearchMode()).toBe("title");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("getSearchMode is false for an older server, and is asked again after a failure", async () => {
+    const old = new AgentServerClient({ baseUrl: "http://x", fetch: (async () => json({ agents: [] })) as unknown as typeof fetch });
+    expect(await old.getSearchMode()).toBe(false);
+    const fetchMock = vi.fn().mockRejectedValueOnce(new Error("down")).mockResolvedValueOnce(json({ agents: [], features: { conversationSearch: "full" } }));
+    const flaky = new AgentServerClient({ baseUrl: "http://x", fetch: fetchMock as unknown as typeof fetch });
+    expect(await flaky.getSearchMode()).toBe(false);
+    expect(await flaky.getSearchMode()).toBe("full");
+  });
+});

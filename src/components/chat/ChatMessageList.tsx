@@ -58,6 +58,10 @@ export interface ChatMessageListProps {
   emptyState?: React.ReactNode;
   /** Show citations section under assistant messages */
   enableCitations?: boolean;
+  /** Scroll this message into view (inside the list only) and mark it for a moment */
+  focusMessageId?: string;
+  /** Called once `focusMessageId` was handled (found, or not in the list) */
+  onFocusHandled?: () => void;
   /** How approval / question cards behave */
   actions?: ChatActionsConfig;
   /** Replace how an image in a message is drawn */
@@ -147,6 +151,8 @@ function useNewCards(messages: Message[]): { focusIds: ReadonlySet<string>; anno
   };
 }
 
+const FOCUS_MARK = ["ring-2", "ring-inset", "ring-chat-accent-primary"];
+
 /**
  * List of chat messages with auto-scroll
  */
@@ -180,6 +186,8 @@ export function ChatMessageList({
   aiLabel,
   models,
   showAnsweredWith = true,
+  focusMessageId,
+  onFocusHandled,
 }: ChatMessageListProps) {
   const { t } = useI18n();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -217,6 +225,34 @@ export function ChatMessageList({
       }
     }
   }, [messages, streamingText, streamingReasoning, activeToolCalls, autoScroll]);
+
+  // Jump to the message a search hit pointed at: the list is scrolled, never the page
+  const handledFocus = useRef(onFocusHandled);
+  handledFocus.current = onFocusHandled;
+  const marked = useRef<{ el: HTMLElement; timer: ReturnType<typeof setTimeout> } | null>(null);
+  const unmark = () => {
+    if (!marked.current) return;
+    clearTimeout(marked.current.timer);
+    marked.current.el.classList.remove(...FOCUS_MARK);
+    marked.current = null;
+  };
+  useEffect(() => unmark, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!focusMessageId || !container) return;
+    const target = Array.from(container.querySelectorAll<HTMLElement>("[data-chat-message-id]")).find(
+      (el) => el.getAttribute("data-chat-message-id") === focusMessageId
+    );
+    if (target) {
+      const top = container.scrollTop + target.getBoundingClientRect().top - container.getBoundingClientRect().top - 16;
+      if (typeof container.scrollTo === "function") container.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
+      else container.scrollTop = Math.max(0, top);
+      unmark();
+      target.classList.add(...FOCUS_MARK);
+      marked.current = { el: target, timer: setTimeout(unmark, 2000) };
+    }
+    handledFocus.current?.();
+  }, [focusMessageId, messages]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /** The toolbar of one message: copy everywhere, the rest only where the action makes sense */
   const toolbarFor = (message: Message, index: number) => {

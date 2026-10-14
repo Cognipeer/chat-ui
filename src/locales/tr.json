@@ -362,5 +362,8 @@
   "chat.reasoning.title": "Düşünce süreci",
   "chat.reasoning.thinking": "Düşünüyor…",
   "chat.reasoning.show": "Düşünce sürecini göster",
-  "chat.reasoning.hide": "Düşünce sürecini gizle"
+  "chat.reasoning.hide": "Düşünce sürecini gizle",
+  "chat.history.searching": "Aranıyor…",
+  "chat.history.searchFailed": "Arama başarısız oldu. Tekrar deneyin.",
+  "chat.history.searchTitlesOnly": "Yalnızca başlıklarda aranıyor"
 }
