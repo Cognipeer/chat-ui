@@ -2,6 +2,12 @@
 
 All notable changes to Chat UI will be documented here.
 
+## [0.6.1] - 2026-10-14
+
+### Changed
+
+- Release build of the 0.6.0 reasoning features (Thinking block, `showReasoning`, `reasoningEffort`) for use with `@cognipeer/agent-server` 0.6.0. No API changes.
+
 ## [0.6.0] - 2026-10-13
 
 ### Added
