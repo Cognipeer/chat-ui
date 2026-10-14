@@ -183,7 +183,6 @@ export function ChatMessageList({
 }: ChatMessageListProps) {
   const { t } = useI18n();
   const containerRef = useRef<HTMLDivElement>(null);
-  const bottomRef = useRef<HTMLDivElement>(null);
   // What the list looked like at the last render, and where it was scrolled when older messages were asked for
   const shown = useRef<{ first?: string; last?: string; count: number }>({ count: 0 });
   const anchor = useRef<{ top: number; height: number } | null>(null);
@@ -208,8 +207,14 @@ export function ChatMessageList({
       anchor.current = null;
       return;
     }
-    if (autoScroll && bottomRef.current) {
-      bottomRef.current.scrollIntoView({ behavior: "smooth" });
+    if (autoScroll && container) {
+      // Scroll the message list itself. `scrollIntoView` would also scroll every scrollable ancestor,
+      // the page included, so a host page a little taller than the window would jump on every answer.
+      if (typeof container.scrollTo === "function") {
+        container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
+      } else {
+        container.scrollTop = container.scrollHeight;
+      }
     }
   }, [messages, streamingText, streamingReasoning, activeToolCalls, autoScroll]);
 
@@ -411,8 +416,6 @@ export function ChatMessageList({
             </div>
           </div>
         )}
-
-        <div ref={bottomRef} />
       </div>
     </div>
   );

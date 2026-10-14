@@ -163,6 +163,8 @@ describe("ChatMessageList: older messages", () => {
     const scrollIntoView = Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>;
     const view = rtlRender(wrap(<ChatMessageList messages={history} hasEarlier onLoadEarlier={() => {}} />));
     const log = screen.getByRole("log") as HTMLElement;
+    const scrollTo = vi.fn();
+    log.scrollTo = scrollTo as unknown as typeof log.scrollTo;
     let height = 1000;
     Object.defineProperty(log, "scrollHeight", { configurable: true, get: () => height });
     log.scrollTop = 40;
@@ -172,10 +174,84 @@ describe("ChatMessageList: older messages", () => {
     height = 1900; // the older page made the list 900px taller
     view.rerender(wrap(<ChatMessageList messages={[msg("u1", { role: "user", content: "old" }), msg("m1", { content: "older" }), ...history]} hasEarlier onLoadEarlier={() => {}} />));
     expect(log.scrollTop).toBe(940);
+    expect(scrollTo).not.toHaveBeenCalled();
     expect(scrollIntoView).not.toHaveBeenCalled();
 
     // a new message at the end scrolls down as before
     view.rerender(wrap(<ChatMessageList messages={[msg("u1", { role: "user", content: "old" }), msg("m1", { content: "older" }), ...history, msg("m10", { content: "latest" })]} onLoadEarlier={() => {}} />));
-    expect(scrollIntoView).toHaveBeenCalled();
+    expect(scrollTo).toHaveBeenCalledWith({ top: 1900, behavior: "smooth" });
+    expect(scrollIntoView).not.toHaveBeenCalled();
+  });
+});
+
+describe("ChatMessageList: following the newest message", () => {
+  const first = [msg("u1", { role: "user", content: "hi" })];
+  const withAnswer = [...first, msg("m1", { content: "an answer" })];
+  const tall = (log: HTMLElement, height: number) => Object.defineProperty(log, "scrollHeight", { configurable: true, get: () => height });
+
+  it("scrolls the message list to its end when an answer arrives", () => {
+    const view = rtlRender(wrap(<ChatMessageList messages={first} />));
+    const log = screen.getByRole("log") as HTMLElement;
+    const scrollTo = vi.fn();
+    log.scrollTo = scrollTo as unknown as typeof log.scrollTo;
+    tall(log, 1200);
+
+    view.rerender(wrap(<ChatMessageList messages={withAnswer} />));
+    expect(scrollTo).toHaveBeenCalledWith({ top: 1200, behavior: "smooth" });
+  });
+
+  it("sets scrollTop directly where the element cannot scrollTo", () => {
+    const view = rtlRender(wrap(<ChatMessageList messages={first} />));
+    const log = screen.getByRole("log") as HTMLElement;
+    expect(typeof (log as { scrollTo?: unknown }).scrollTo).not.toBe("function");
+    tall(log, 800);
+
+    view.rerender(wrap(<ChatMessageList messages={withAnswer} />));
+    expect(log.scrollTop).toBe(800);
+  });
+
+  it("never scrolls the page or any ancestor of the list, only the list", () => {
+    const scrollIntoView = Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>;
+    const windowScroll = vi.spyOn(window, "scrollTo").mockImplementation(() => {});
+    const windowScrollBy = vi.spyOn(window, "scrollBy").mockImplementation(() => {});
+    scrollIntoView.mockClear();
+
+    // a host page that is itself scrollable, with the list inside it
+    const page = document.createElement("div");
+    page.style.overflowY = "auto";
+    document.body.appendChild(page);
+    const view = rtlRender(wrap(<ChatMessageList messages={first} />), { container: page });
+    const log = screen.getByRole("log") as HTMLElement;
+    log.scrollTo = vi.fn() as unknown as typeof log.scrollTo;
+    tall(log, 1500);
+    page.scrollTop = 0;
+
+    view.rerender(wrap(<ChatMessageList messages={withAnswer} />));
+    view.rerender(wrap(<ChatMessageList messages={withAnswer} isStreaming streamingText="Typing" />));
+    view.rerender(wrap(<ChatMessageList messages={withAnswer} isStreaming streamingText="Typing more words" />));
+    view.rerender(wrap(<ChatMessageList messages={[...withAnswer, msg("m2", { content: "next" })]} />));
+
+    expect(scrollIntoView).not.toHaveBeenCalled();
+    expect(windowScroll).not.toHaveBeenCalled();
+    expect(windowScrollBy).not.toHaveBeenCalled();
+    expect(page.scrollTop).toBe(0);
+    expect(document.scrollingElement?.scrollTop ?? 0).toBe(0);
+
+    windowScroll.mockRestore();
+    windowScrollBy.mockRestore();
+    page.remove();
+  });
+
+  it("stays put when autoScroll is off", () => {
+    const view = rtlRender(wrap(<ChatMessageList messages={first} autoScroll={false} />));
+    const log = screen.getByRole("log") as HTMLElement;
+    const scrollTo = vi.fn();
+    log.scrollTo = scrollTo as unknown as typeof log.scrollTo;
+    tall(log, 1200);
+    log.scrollTop = 10;
+
+    view.rerender(wrap(<ChatMessageList messages={withAnswer} autoScroll={false} />));
+    expect(scrollTo).not.toHaveBeenCalled();
+    expect(log.scrollTop).toBe(10);
   });
 });
