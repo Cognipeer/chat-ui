@@ -45,6 +45,11 @@ export interface RunInput {
   stream: boolean;
   signal?: AbortSignal;
   emit: RunEmit;
+  /**
+   * Tell the transport what the backend has said about the running turn (its response id, task id,
+   * context id) as soon as it is known, so `cancelRun` can reach the turn while it is still running.
+   */
+  track(live: Record<string, unknown>): void;
 }
 
 export interface RunResult {
@@ -143,14 +148,36 @@ export abstract class StatelessTransport implements ChatTransport {
    * Stop the turn that runs for this conversation on the backend (not just this page's connection).
    * Implement it in a subclass whose backend has a stop route; resolve `true` when a run was told to
    * stop. Without it, Stop only closes this page's connection.
+   *
+   * `live` is what the running turn reported through `RunInput.track` (undefined when no turn of this
+   * page is running); `messages` is the thread, including the message being answered.
    */
-  protected cancelRun?(conversation: Conversation): Promise<boolean>;
+  protected cancelRun?(conversation: Conversation, context: { live?: Record<string, unknown>; messages: Message[] }): Promise<boolean>;
+
+  /** What the turns running right now reported, by conversation id. */
+  private readonly inflight = new Map<string, Record<string, unknown>>();
 
   private readonly stopRun: NonNullable<ChatTransport["cancel"]> = async (conversationId) => {
+    // Read before anything is awaited: Stop closes the connection right after, which ends the turn
+    const live = this.inflight.get(conversationId);
+    const snapshot = live ? { ...live } : undefined;
     const thread = await this.store.get(conversationId);
-    const cancelled = thread && this.cancelRun ? await this.cancelRun(thread.conversation) : false;
+    const cancelled = thread && this.cancelRun
+      ? await this.cancelRun(thread.conversation, { live: snapshot, messages: thread.messages })
+      : false;
     return { cancelled };
   };
+
+  /** Runs `work` with a `track` that fills `inflight` for the conversation, and forgets it afterwards. */
+  private async tracked<T>(conversationId: string, work: (track: RunInput["track"]) => Promise<T>): Promise<T> {
+    const live: Record<string, unknown> = {};
+    this.inflight.set(conversationId, live);
+    try {
+      return await work((state) => Object.assign(live, state));
+    } finally {
+      if (this.inflight.get(conversationId) === live) this.inflight.delete(conversationId);
+    }
+  }
 
   /** Present only for backends that can stop a run. */
   get cancel(): ChatTransport["cancel"] {
@@ -418,16 +445,19 @@ export abstract class StatelessTransport implements ChatTransport {
       run.event({ type: "stream.start", conversationId, messageId: assistantId })
     );
 
-    const result = await this.run({
-      conversation,
-      history,
-      text: options.message,
-      files: options.files,
-      metadata: options.metadata,
-      stream,
-      signal,
-      emit: run.emit,
-    });
+    const result = await this.tracked(conversationId, (track) =>
+      this.run({
+        conversation,
+        history,
+        text: options.message,
+        files: options.files,
+        metadata: options.metadata,
+        stream,
+        signal,
+        emit: run.emit,
+        track,
+      })
+    );
 
     const assistantMessage = this.assistantFrom(conversationId, assistantId, result, run);
 

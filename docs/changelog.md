@@ -2,6 +2,19 @@
 
 All notable changes to Chat UI will be documented here.
 
+## [0.7.0] - 2026-10-14
+
+### Added
+
+- Stop reaches the server on the Responses and A2A transports, not only the page's connection. `StatelessTransport` gains an optional `cancelRun` hook (and `RunInput.track`, which a transport uses to report the id of the turn that is running); `ChatTransport.cancel` is present only when the subclass implements it.
+- `ResponsesTransport`: `POST <path>/<response id>/cancel`. The id is read from the first stream event (`response.created`), so the first turn of a conversation can be stopped as well as later ones.
+- `A2ATransport`: JSON-RPC `tasks/cancel` (method name overridable with `methods.cancel`), with the task id named by the stream's events or, for the Console's one-piece `message/send`, derived as `task_<contextId>_<n>`. "Not running" answers are treated as nothing to stop.
+
+### Notes
+
+- `ChatCompletionsTransport` stays abort-only: the API has no way to end a run on the server. Documented in the transports guide.
+- Subclasses that call `run()` themselves (tests, custom transports) must now pass `track`.
+
 ## [0.6.1] - 2026-10-14
 
 ### Changed

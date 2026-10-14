@@ -195,6 +195,11 @@ export class ResponsesTransport extends StatelessTransport {
           return;
         }
         switch (e.type ?? event) {
+          case "response.created":
+          case "response.in_progress":
+            // the id Stop needs to reach this very response
+            if (typeof e.response?.id === "string") input.track({ responseId: e.response.id });
+            break;
           case "response.output_text.delta":
             streamed += e.delta ?? "";
             input.emit.text(e.delta ?? "");
@@ -237,13 +242,17 @@ export class ResponsesTransport extends StatelessTransport {
   }
 
   /**
-   * Stops the turn the conversation runs on the server: `POST <path>/<response id>/cancel`, the id being
-   * the last response of the chain. A first turn has no id yet (the answer carries it), so it can only
-   * be stopped by closing the connection.
+   * Stops the turn the conversation runs on the server: `POST <path>/<response id>/cancel`. The id is
+   * the one the running response announced in its first stream event (`response.created`), so even a
+   * first turn can be stopped; without a running turn of this page it is the last response of the chain.
    */
-  protected async cancelRun(conversation: { state?: Record<string, unknown> }): Promise<boolean> {
-    const id = conversation.state?.previousResponseId as string | undefined;
-    if (!id || this.options.serverState === false) return false;
+  protected async cancelRun(
+    conversation: { state?: Record<string, unknown> },
+    context: { live?: Record<string, unknown> } = {}
+  ): Promise<boolean> {
+    if (this.options.serverState === false) return false;
+    const id = (context.live?.responseId ?? conversation.state?.previousResponseId) as string | undefined;
+    if (!id) return false;
     const { options } = this;
     const response = await httpFetch(
       options,
