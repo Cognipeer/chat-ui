@@ -4,6 +4,7 @@ import type {
   ConversationBudget,
   ConversationEvent,
   ConversationListItem,
+  ConversationSearchMode,
   MessagesPage,
   AgentInfo,
   FileAttachment,
@@ -20,6 +21,7 @@ import type {
   CancelResult,
   ChatTransport,
   ContinueOptions,
+  ConversationSearchResult,
   EditMessageInput,
   ExportRequest,
   ExportResult,
@@ -165,12 +167,14 @@ export class AgentServerClient implements ChatTransport {
   private async request<T>(
     method: string,
     path: string,
-    body?: unknown
+    body?: unknown,
+    signal?: AbortSignal
   ): Promise<T> {
     const response = await httpFetch(this.http, `${this.baseUrl}${path}`, {
       method,
       headers: await buildHeaders(this.http),
       body: body ? JSON.stringify(body) : undefined,
+      signal,
     });
 
     if (!response.ok) {
@@ -188,6 +192,8 @@ export class AgentServerClient implements ChatTransport {
   // ============================================================================
   // Agents
   // ============================================================================
+
+  private searchModeRead?: Promise<ConversationSearchMode | false>;
 
   async getAgents(): Promise<AgentInfo[]> {
     const response = await this.request<{ agents: AgentInfo[] }>("GET", "/agents");
@@ -219,7 +225,11 @@ export class AgentServerClient implements ChatTransport {
       "GET",
       `/conversations${query ? `?${query}` : ""}`
     );
-    // The status badges read `runtime`: keep only what is well-formed
+    return this.normalizeList(page);
+  }
+
+  /** The status badges read `runtime`: keep only what is well-formed */
+  private normalizeList<P extends { conversations: ConversationListItem[] }>(page: P): P {
     return {
       ...page,
       conversations: (page.conversations ?? []).map((item) => {
@@ -231,6 +241,45 @@ export class AgentServerClient implements ChatTransport {
         return runtime ? { ...normalized, runtime } : normalized;
       }),
     };
+  }
+
+  /**
+   * Search the history on the server (agent-server >= 0.7.0): titles and message text, newest first.
+   * `q` shorter than 2 characters is not searched (a plain list comes back). Pass `signal` to cancel.
+   */
+  async searchConversations(
+    q: string,
+    options: { agentId?: string; userId?: string; limit?: number; offset?: number; signal?: AbortSignal } = {}
+  ): Promise<ConversationSearchResult> {
+    const searchParams = new URLSearchParams();
+    searchParams.set("q", q.trim());
+    if (options.agentId) searchParams.set("agentId", options.agentId);
+    if (options.userId) searchParams.set("userId", options.userId);
+    if (options.limit) searchParams.set("limit", options.limit.toString());
+    if (options.offset) searchParams.set("offset", options.offset.toString());
+    const page = await this.request<ConversationSearchResult>(
+      "GET",
+      `/conversations?${searchParams.toString()}`,
+      undefined,
+      options.signal
+    );
+    return this.normalizeList(page);
+  }
+
+  /** What the server's search covers (`features.conversationSearch` of `GET /agents`), read once. */
+  getSearchMode(): Promise<ConversationSearchMode | false> {
+    this.searchModeRead ??= this.request<{ features?: { conversationSearch?: unknown } }>("GET", "/agents").then(
+      (response) => {
+        const mode = response?.features?.conversationSearch;
+        return mode === "full" || mode === "title" ? mode : false;
+      },
+      () => {
+        // not read: ask again next time
+        this.searchModeRead = undefined;
+        return false as const;
+      }
+    );
+    return this.searchModeRead;
   }
 
   async createConversation(params: {

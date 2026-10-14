@@ -2,6 +2,20 @@
 
 All notable changes to Chat UI will be documented here.
 
+## [0.8.0] - 2026-10-14
+
+### Added
+
+- Search in the conversation history. With `enableMessageSearch` the sidebar box searches the whole history on the server (agent-server >= 0.7.0: titles and message text) instead of only the loaded titles. It waits 250 ms after the last key, cancels the request still in flight, needs 2+ characters, and shows loading, empty and failed states. Hits show the title and a snippet with the matched text marked (built from text nodes, never as markup). Escape clears the box.
+- Opening a hit that matched a message scrolls that message into view inside the message list (never the page) and marks it for two seconds.
+- `AgentServerClient.searchConversations(q, { agentId, userId, limit, offset, signal })` and `getSearchMode()` (reads `features.conversationSearch` of `GET /agents`: `full`, `title` or `false`). `ChatTransport` gains the optional `searchConversations` and `getSearchMode`; without them the box keeps filtering the loaded titles.
+- `ChatHistory` prop `searchConversations`; `ChatMessageList` props `focusMessageId` / `onFocusHandled`; `useChatHistory` options `detectSearch` / `searchLimit` and results `searchConversations` / `searchMode`; types `ConversationSearchMatch`, `ConversationSearchMode`, `ConversationListItem.searchMatch`.
+- English and Turkish strings `chat.history.searching`, `searchFailed`, `searchTitlesOnly`.
+
+### Notes
+
+- Includes the 0.7.1 fix (the message list scrolls only itself).
+
 ## [0.7.1] - 2026-10-14
 
 ### Fixed

@@ -2,7 +2,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { cn, formatRelativeTime, isBudgetExhausted, isPinned, pinnedFirst } from "../../utils";
-import type { ConversationListItem, RuntimeStatus } from "../../types";
+import type { ConversationListItem, ConversationSearchMode, RuntimeStatus } from "../../types";
 import { ChatIcon, TrashIcon, PlusIcon, SearchIcon, XIcon, PencilIcon, PinIcon, ListCheckIcon } from "./Icons";
 import { useI18n } from "../../hooks";
 import { FOCUS_RING, PRIMARY_BUTTON, SECONDARY_BUTTON } from "./styles";
@@ -52,6 +52,15 @@ export interface ChatHistoryProps {
   /** Enable search input for filtering conversation history */
   enableSearch?: boolean;
   /**
+   * Search the whole history on the server. With it (and 2+ characters typed) the box waits 250 ms
+   * after the last key, cancels the request still in flight (`signal`) and lists the hits with
+   * the matched text highlighted. Without it the box filters the titles that are loaded.
+   */
+  searchConversations?: (
+    q: string,
+    signal: AbortSignal
+  ) => Promise<{ conversations: ConversationListItem[]; searchMode?: ConversationSearchMode }>;
+  /**
    * Show agent name below the conversation title.
    * Defaults to true when not specified.
    */
@@ -66,6 +75,33 @@ export interface ChatHistoryProps {
    * the list the server sent). Replaces the badge of the selected row.
    */
   selectedStatus?: RuntimeStatus;
+}
+
+const SEARCH_MIN_CHARS = 2;
+const SEARCH_DEBOUNCE_MS = 250;
+
+/**
+ * `text` with every occurrence of `query` marked (case-insensitive). Built from text nodes, so
+ * whatever the text holds - markup included - is shown as text.
+ */
+function Highlighted({ text, query }: { text: string; query?: string }) {
+  const needle = query?.trim().toLowerCase();
+  const lower = text.toLowerCase();
+  // (a character whose lower case is longer or shorter would shift the positions: show it plain)
+  if (!needle || lower.length !== text.length || !lower.includes(needle)) return <>{text}</>;
+  const parts: React.ReactNode[] = [];
+  let from = 0;
+  for (let at = lower.indexOf(needle); at !== -1; at = lower.indexOf(needle, from)) {
+    if (at > from) parts.push(text.slice(from, at));
+    parts.push(
+      <mark key={at} className="rounded-sm bg-chat-accent-primary/25 px-0.5 text-inherit">
+        {text.slice(at, at + needle.length)}
+      </mark>
+    );
+    from = at + needle.length;
+  }
+  if (from < text.length) parts.push(text.slice(from));
+  return <>{parts}</>;
 }
 
 type BadgeKind = "running" | "waiting" | "budgetPaused";
@@ -108,6 +144,7 @@ export function ChatHistory({
   header,
   footer,
   enableSearch = false,
+  searchConversations,
   showAgentName = false,
   showStatus = true,
   selectedStatus,
@@ -119,6 +156,10 @@ export function ChatHistory({
 }: ChatHistoryProps) {
   const { t } = useI18n();
   const [searchQuery, setSearchQuery] = useState("");
+  // Server search: the hits for `query`, whether a request is out, and whether the last one failed
+  const [remote, setRemote] = useState<{ query: string; items: ConversationListItem[]; mode?: ConversationSearchMode } | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [searchFailed, setSearchFailed] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
   // Select mode (bulk delete)
   const [selecting, setSelecting] = useState(false);
@@ -184,7 +225,46 @@ export function ChatHistory({
   };
 
   const normalizedQuery = searchQuery.trim().toLowerCase();
+  const serverSearch = Boolean(enableSearch && searchConversations) && normalizedQuery.length >= SEARCH_MIN_CHARS;
+  const searchRef = useRef(searchConversations);
+  searchRef.current = searchConversations;
+  const trimmedQuery = searchQuery.trim();
+
+  useEffect(() => {
+    if (!serverSearch) {
+      setRemote(null);
+      setSearching(false);
+      setSearchFailed(false);
+      return;
+    }
+    // (the old hits stay on screen until the new ones arrive)
+    setSearching(true);
+    setSearchFailed(false);
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      searchRef.current!(trimmedQuery, controller.signal).then(
+        (result) => {
+          if (controller.signal.aborted) return;
+          setRemote({ query: trimmedQuery, items: result.conversations, mode: result.searchMode });
+          setSearching(false);
+        },
+        () => {
+          if (controller.signal.aborted) return;
+          setSearchFailed(true);
+          setSearching(false);
+        }
+      );
+    }, SEARCH_DEBOUNCE_MS);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [serverSearch, trimmedQuery]);
+
+  const showRemote = serverSearch && remote !== null && !searchFailed;
   const filteredConversations = useMemo(() => {
+    // search hits are the server's order (newest first); pinned ones are not lifted
+    if (showRemote) return remote!.items;
     const matching = !normalizedQuery
       ? conversations
       : conversations.filter((conversation) => {
@@ -193,7 +273,7 @@ export function ChatHistory({
         });
     // pinned conversations are listed first (the order inside each group is the server's)
     return onPin || matching.some(isPinned) ? pinnedFirst(matching) : matching;
-  }, [conversations, normalizedQuery, onPin]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [conversations, normalizedQuery, onPin, showRemote, remote]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <>
@@ -241,6 +321,15 @@ export function ChatHistory({
                 type="text"
                 value={searchQuery}
                 onChange={(event) => setSearchQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  // Escape clears the search first; the sidebar closes only on the next one
+                  if (event.key === "Escape" && searchQuery) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setSearchQuery("");
+                  }
+                }}
+                aria-label={t("chat.history.searchPlaceholder")}
                 placeholder={t("chat.history.searchPlaceholder")}
                 className="w-full bg-chat-bg-tertiary border border-chat-border-primary rounded-lg pl-9 pr-9 py-2 text-sm text-chat-text-primary placeholder:text-chat-text-tertiary focus:outline-none focus:border-chat-accent-primary"
               />
@@ -255,6 +344,16 @@ export function ChatHistory({
                 </button>
               )}
             </div>
+          </div>
+        )}
+
+        {serverSearch && (searching || searchFailed || (showRemote && remote!.mode === "title")) && (
+          <div
+            role="status"
+            aria-live="polite"
+            className={cn("flex-shrink-0 px-4 py-1.5 text-xs", searchFailed ? "text-chat-danger" : "text-chat-text-tertiary")}
+          >
+            {searchFailed ? t("chat.history.searchFailed") : searching ? t("chat.history.searching") : t("chat.history.searchTitlesOnly")}
           </div>
         )}
 
@@ -320,7 +419,7 @@ export function ChatHistory({
 
         {/* Conversation list */}
         <div className="flex-1 overflow-y-auto chat-scrollbar">
-          {filteredConversations.length === 0 && !isLoading ? (
+          {filteredConversations.length === 0 && !isLoading && !(serverSearch && searching) ? (
             <div className="p-4 text-center text-chat-text-tertiary text-sm">
               {normalizedQuery ? t("chat.history.noMatchingConversations") : t("chat.history.noConversations")}
             </div>
@@ -343,6 +442,7 @@ export function ChatHistory({
                     onRenameStart={() => setRenamingId(conversation.id)}
                     onRenameEnd={() => setRenamingId((current) => (current === conversation.id ? null : current))}
                     showAgentName={showAgentName}
+                    highlight={showRemote ? remote!.query : undefined}
                     badge={
                       showStatus
                         ? badgeFor(
@@ -356,7 +456,7 @@ export function ChatHistory({
               </ul>
 
               {/* Load more button */}
-              {hasMore && !isLoading && (
+              {hasMore && !isLoading && !showRemote && (
                 <button
                   onClick={onLoadMore}
                   className="w-full py-2 text-sm text-chat-accent-primary hover:underline"
@@ -366,7 +466,7 @@ export function ChatHistory({
               )}
 
               {/* Loading indicator */}
-              {isLoading && (
+              {(isLoading || (serverSearch && searching && !remote)) && (
                 <div className="py-4 text-center">
                   <LoadingDots />
                 </div>
@@ -418,6 +518,8 @@ interface ConversationItemProps {
   onRenameEnd?: () => void;
   showAgentName?: boolean;
   badge?: BadgeKind;
+  /** The search text to mark in the title and the snippet */
+  highlight?: string;
 }
 
 function ConversationItem({
@@ -435,6 +537,7 @@ function ConversationItem({
   onRenameEnd,
   showAgentName = false,
   badge,
+  highlight,
 }: ConversationItemProps) {
   const { t } = useI18n();
   const title = conversation.title || t("chat.history.newChat");
@@ -452,7 +555,14 @@ function ConversationItem({
         <ChatIcon className="w-4 h-4 text-chat-text-tertiary flex-shrink-0" />
       )}
       <span className="flex-1 min-w-0">
-        <span className="block text-sm text-chat-text-primary truncate">{title}</span>
+        <span className="block text-sm text-chat-text-primary truncate">
+          <Highlighted text={title} query={highlight} />
+        </span>
+        {highlight && conversation.searchMatch?.field === "message" && conversation.searchMatch.snippet && (
+          <span data-chat-snippet className="block text-xs text-chat-text-secondary line-clamp-2 break-words">
+            <Highlighted text={conversation.searchMatch.snippet} query={highlight} />
+          </span>
+        )}
         <span className="flex items-center gap-1 min-w-0 text-xs text-chat-text-tertiary">
           {conversation.agentName && showAgentName && (
             <>

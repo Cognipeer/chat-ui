@@ -36,6 +36,7 @@ const history = useChatHistory({ baseUrl: "/api/agents" });
 | `onNewChat` | `() => void` | - | Shows the "New Chat" button |
 | `isLoading`, `hasMore`, `onLoadMore` | | | Paging; a "Load more" button shows while `hasMore` |
 | `enableSearch` | `boolean` | `false` | A search box over the titles |
+| `searchConversations` | `(q, signal) => Promise<{ conversations, searchMode? }>` | - | Search on the server (debounced 250 ms, 2+ characters, the previous request is aborted); hits show a snippet with the match marked. Without it the box filters the loaded titles |
 | `showAgentName` | `boolean` | `false` | The agent's name next to the time |
 | `showStatus` | `boolean` | `true` | A badge on rows that are working, waiting for you or stopped on their usage limit |
 | `selectedStatus` | `RuntimeStatus` | - | What the open conversation is doing, as this page knows it; replaces the badge of the selected row |

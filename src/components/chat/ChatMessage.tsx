@@ -132,6 +132,7 @@ export function ChatMessage({
 
   return (
     <div
+      data-chat-message-id={message.id}
       className={cn(
         "group flex gap-4 px-4 py-6 animate-fade-in",
         isUser ? "bg-transparent" : "bg-chat-bg-secondary",

@@ -148,6 +148,8 @@ export type {
   FileAttachment,
   Conversation,
   ConversationListItem,
+  ConversationSearchMatch,
+  ConversationSearchMode,
   AgentInfo,
   AgentModelOption,
   ReasoningEffort,

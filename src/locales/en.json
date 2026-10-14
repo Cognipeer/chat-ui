@@ -362,5 +362,8 @@
   "chat.reasoning.title": "Thinking",
   "chat.reasoning.thinking": "Thinking…",
   "chat.reasoning.show": "Show reasoning",
-  "chat.reasoning.hide": "Hide reasoning"
+  "chat.reasoning.hide": "Hide reasoning",
+  "chat.history.searching": "Searching…",
+  "chat.history.searchFailed": "Search failed. Try again.",
+  "chat.history.searchTitlesOnly": "Searching titles only"
 }

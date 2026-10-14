@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
-import type { ConversationListItem, ChatConfig } from "../types";
+import type { ConversationListItem, ConversationSearchMode, ChatConfig } from "../types";
 import { AgentServerClient, type ChatTransport } from "../api";
 import { useI18n } from "./useI18n";
 import { localizeError } from "../utils/errors";
@@ -18,6 +18,10 @@ export interface UseChatHistoryOptions extends Pick<ChatConfig, "baseUrl" | "age
   autoLoad?: boolean;
   /** Items per page */
   pageSize?: number;
+  /** Look up what the server's conversation search covers (a request to the server; off by default) */
+  detectSearch?: boolean;
+  /** Most hits a search returns (default 50) */
+  searchLimit?: number;
 }
 
 export interface UseChatHistoryReturn {
@@ -39,6 +43,15 @@ export interface UseChatHistoryReturn {
   deleteConversation: (id: string) => Promise<void>;
   /** Update a conversation in the list (e.g. title change). Local-only, no API call. */
   updateConversation: (id: string, data: Partial<ConversationListItem>) => void;
+  /**
+   * Search the whole history on the server. Present only when the server searches (`detectSearch`
+   * on, and the transport reports `full` or `title`); then `searchMode` says which.
+   */
+  searchConversations?: (
+    q: string,
+    signal: AbortSignal
+  ) => Promise<{ conversations: ConversationListItem[]; searchMode?: ConversationSearchMode }>;
+  searchMode: ConversationSearchMode | false | undefined;
   /** The transport can rename a conversation */
   canRename: boolean;
   /** The transport can pin a conversation */
@@ -77,6 +90,8 @@ export function useChatHistory(options: UseChatHistoryOptions): UseChatHistoryRe
     transport,
     autoLoad = true,
     pageSize = 20,
+    detectSearch = false,
+    searchLimit = 50,
   } = options;
 
   const [conversations, setConversations] = useState<ConversationListItem[]>([]);
@@ -164,6 +179,38 @@ export function useChatHistory(options: UseChatHistoryOptions): UseChatHistoryRe
       prev.map((c) => (c.id === id ? { ...c, ...data } : c))
     );
   }, []);
+
+  // What the server's search covers: asked once the history is meant to be searchable
+  const [searchMode, setSearchMode] = useState<ConversationSearchMode | false | undefined>(undefined);
+  useEffect(() => {
+    const client = clientRef.current;
+    if (!detectSearch || !client?.searchConversations) {
+      setSearchMode(undefined);
+      return;
+    }
+    if (!client.getSearchMode) {
+      setSearchMode("full");
+      return;
+    }
+    let live = true;
+    client.getSearchMode().then(
+      (mode) => live && setSearchMode(mode),
+      () => live && setSearchMode(false)
+    );
+    return () => {
+      live = false;
+    };
+  }, [detectSearch, transport, baseUrl, authorization, headers, getHeaders, customFetch]);
+
+  const searchConversations = useCallback(
+    async (q: string, signal: AbortSignal) => {
+      const client = clientRef.current;
+      if (!client?.searchConversations) throw new Error("search not supported");
+      const page = await client.searchConversations(q, { agentId: agentId || undefined, limit: searchLimit, signal });
+      return { conversations: page.conversations, searchMode: page.searchMode };
+    },
+    [agentId, searchLimit]
+  );
 
   const canRename = typeof clientRef.current?.renameConversation === "function";
   const canPin = typeof clientRef.current?.pinConversation === "function";
@@ -295,6 +342,8 @@ export function useChatHistory(options: UseChatHistoryOptions): UseChatHistoryRe
     refresh,
     deleteConversation,
     updateConversation,
+    searchConversations: searchMode ? searchConversations : undefined,
+    searchMode,
     canRename,
     canPin,
     renameConversation,
