@@ -278,6 +278,11 @@
   font-size: 0.875em;
 }
 
+/* The notice under the composer keeps the lines it was written in */
+.chat-appearance-modern [data-chat-legal] > span {
+  white-space: pre-line;
+}
+
 /* A host page's focus outline on every textarea would draw a second frame inside the composer's own */
 .chat-appearance-modern [data-chat-composer-input]:focus,
 .chat-appearance-modern [data-chat-composer-input]:focus-visible {
