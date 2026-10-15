@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { ChatI18nProvider } from "../../providers";
 import { ChatMessageList } from "./ChatMessageList";
-import { ChatHistory } from "./ChatHistory";
+import { ChatHistory, initialsOf } from "./ChatHistory";
 import { ChatEmptyState } from "./ChatEmptyState";
 import { ChatAppearanceProvider, type ChatAppearance } from "./appearance";
 import { buildTurnBlocks, formatDuration } from "./TurnActivity";
@@ -172,6 +172,17 @@ describe("ChatHistory modern", () => {
     );
     expect(screen.queryByText("Test portal")).toBeNull();
     expect(screen.queryByRole("heading", { name: "Today" })).toBeNull();
+  });
+});
+
+describe("initialsOf", () => {
+  it("takes the first letters of a name, the part before the @ of an email, and stays fast on a run of @", () => {
+    expect(initialsOf("Local Admin")).toBe("LA");
+    expect(initialsOf("ayse.yilmaz@x.com")).toBe("AY");
+    expect(initialsOf("@@@")).toBe("?");
+    const started = Date.now();
+    expect(initialsOf("@".repeat(200_000))).toBe("?");
+    expect(Date.now() - started).toBeLessThan(200);
   });
 });
 

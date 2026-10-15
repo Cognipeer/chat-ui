@@ -646,8 +646,10 @@ export function ChatHistory({
 }
 
 /** Initials for an avatar: "Local Admin" -> "LA", "ayse@x.com" -> "A". */
-function initialsOf(name: string): string {
-  const words = name.replace(/@.*$/, "").split(/[\s._-]+/).filter(Boolean);
+export function initialsOf(name: string): string {
+  // (the part before an "@" cut with indexOf: a regular expression for it backtracks on a long run of "@")
+  const at = name.indexOf("@");
+  const words = (at >= 0 ? name.slice(0, at) : name).split(/[\s._-]+/).filter(Boolean);
   const letters = words.slice(0, 2).map((w) => Array.from(w)[0] ?? "");
   return letters.join("").toLocaleUpperCase() || "?";
 }
