@@ -1037,6 +1037,14 @@ export function useChat(options: UseChatOptions): UseChatReturn {
                 onMessageReceived?.(assistantMessage);
               }
             },
+            onTitle: (event) => {
+              if (event.type !== "stream.title" || !event.title) return;
+              // A conversation left in the meantime still gets its title in the list
+              if (!isStale()) {
+                setConversation((prev) => (prev && prev.id === event.conversationId ? { ...prev, title: event.title } : prev));
+              }
+              onConversationTitleGenerated?.(event.conversationId, event.title);
+            },
             onActionRequired: (event: StreamEvent) => {
               if (isStale()) return;
               if (event.type !== "stream.action_required") return;
@@ -1519,6 +1527,8 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     const attachedRaw = attached.map((f) => [f.id, rawFilesRef.current.get(f.id)] as const);
     let optimisticId: string | undefined;
     let activeConversationId = conversation?.id;
+    // The done frame ended the turn; the stream may stay open after it for the title
+    let turnEnded = false;
 
     try {
       // Create conversation if needed
@@ -1668,7 +1678,15 @@ export function useChat(options: UseChatOptions): UseChatReturn {
               ...base,
               onStart: (e) => { messageAccepted = true; applyCancel(); base.onStart?.(e); },
               onText: (text, full) => { messageAccepted = true; applyCancel(); base.onText?.(text, full); },
-              onDone: (e) => { messageAccepted = true; applyCancel(); base.onDone?.(e); },
+              onDone: (e) => {
+                messageAccepted = true;
+                applyCancel();
+                base.onDone?.(e);
+                // The turn is over for this page: a new one may start while the title is still on its way
+                turnEnded = true;
+                if (turnSessionRef.current === capturedSession) turnSessionRef.current = null;
+                if (abortControllerRef.current === abortController) abortControllerRef.current = null;
+              },
             };
           })(),
           abortController.signal
@@ -1755,10 +1773,13 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       // Once the server started answering, the message is spent even if the stream broke later
       return messageAccepted;
     } finally {
-      if (turnSessionRef.current === capturedSession) turnSessionRef.current = null;
-      if (!isStale()) {
-        setIsStreaming(false);
-        abortControllerRef.current = null;
+      // (a turn that ended with its done frame was wound down there; a later turn may be running by now)
+      if (!turnEnded) {
+        if (turnSessionRef.current === capturedSession) turnSessionRef.current = null;
+        if (!isStale()) {
+          setIsStreaming(false);
+          abortControllerRef.current = null;
+        }
       }
     }
   }, [

@@ -76,6 +76,31 @@ describe("AgentServerClient.sendMessageStream", () => {
   });
 });
 
+describe("AgentServerClient title frame", () => {
+  it("asks for the title as its own frame only when the caller takes it, and hands the frame over", async () => {
+    const fetchMock = vi.fn(async () =>
+      sse([
+        { type: "stream.done", conversationId: "c1", messageId: "m1", content: "ok", timestamp: 1 },
+        { type: "stream.title", conversationId: "c1", title: "Trip to Lisbon", timestamp: 2 },
+      ])
+    );
+    const client = new AgentServerClient({ baseUrl: "http://x", fetch: fetchMock as unknown as typeof fetch });
+    const seen: string[] = [];
+    await client.sendMessageStream("c1", { message: "go" }, {
+      onDone: (e) => seen.push(e.type),
+      onTitle: (e) => seen.push(e.type === "stream.title" ? `title:${e.title}` : e.type),
+    });
+    expect(seen).toEqual(["stream.done", "title:Trip to Lisbon"]);
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({ message: "go", stream: true, titleFrame: true });
+
+    // a caller without onTitle keeps the title in the done event
+    await client.sendMessageStream("c1", { message: "go" }, { onDone: () => undefined });
+    const [, plain] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
+    expect(JSON.parse(plain.body as string)).toEqual({ message: "go", stream: true });
+  });
+});
+
 describe("AgentServerClient stream errors", () => {
   it("passes the code of a stream.error event on, so the UI can show a friendly message", async () => {
     const fetchMock = vi.fn(async () => sse([{ type: "stream.error", error: "Conversation is busy", code: "CONVERSATION_BUSY", timestamp: 1 }]));

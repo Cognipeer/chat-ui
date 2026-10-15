@@ -584,6 +584,13 @@ export interface StreamDoneEvent extends StreamEventBase {
   warnings?: TurnWarning[];
 }
 
+/** The conversation's generated title, after `stream.done` (when the client asked for it as a frame of its own) */
+export interface StreamTitleEvent extends StreamEventBase {
+  type: "stream.title";
+  conversationId: string;
+  title: string;
+}
+
 export type StreamEvent =
   | StreamStartEvent
   | StreamTextEvent
@@ -594,7 +601,8 @@ export type StreamEvent =
   | StreamErrorEvent
   | StreamActionRequiredEvent
   | StreamActionResolvedEvent
-  | StreamDoneEvent;
+  | StreamDoneEvent
+  | StreamTitleEvent;
 
 // ============================================================================
 // Portal experience types
