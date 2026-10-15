@@ -2,6 +2,12 @@
 
 All notable changes to Chat UI will be documented here.
 
+## [Unreleased]
+
+### Added
+
+- Files a Console agent wrote for the user (its sandbox `/outputs/`) show as download chips under the assistant message, on the Responses (`output_files` or `file_path` annotations), Chat Completions (`output_files`, or `files` on the closing stream chunk) and A2A (file artifacts) transports. With credentials configured (`authorization`, `headers`, `getHeaders`, `fetch`) the file is fetched with them through `getFileUrl`; without, the chip is a plain link. Nothing changes for responses that carry no files. The stateless transports gain `getFileUrl` and `dispose`.
+
 ## [0.8.0] - 2026-10-14
 
 ### Added

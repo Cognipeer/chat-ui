@@ -22,6 +22,7 @@ import type {
 } from "../transport";
 import { MemoryThreadStore, type ThreadStore } from "../threadStore";
 import { makeId, type InlineFile } from "./files";
+import type { AuthedFileUrls } from "./outputFiles";
 import { isActionPending, stateForResolution } from "../../utils/actions";
 
 /** What a backend adapter reports while a turn is running. */
@@ -126,6 +127,23 @@ export abstract class StatelessTransport implements ChatTransport {
     this.store = options.store ?? new MemoryThreadStore();
     const id = options.defaultAgentId ?? "default";
     this.agents = options.agents ?? [{ id, name: id }];
+  }
+
+  /** Set by a subclass whose files need its credentials to be fetched (see `outputFiles.ts`). */
+  protected fileUrls?: AuthedFileUrls;
+
+  /** A URL to save a file the agent produced from: its bytes fetched with the transport's credentials. */
+  async getFileUrl(
+    file: Pick<FileAttachment, "id" | "name" | "mimeType" | "storageKey">,
+    options?: { disposition?: "inline" | "attachment" }
+  ): Promise<string> {
+    if (!file.storageKey || !this.fileUrls) throw new Error("No address for this file");
+    return this.fileUrls.get(file.storageKey, options?.disposition);
+  }
+
+  /** Releases the blob URLs `getFileUrl` made. */
+  dispose(): void {
+    this.fileUrls?.dispose();
   }
 
   protected abstract run(input: RunInput): Promise<RunResult>;

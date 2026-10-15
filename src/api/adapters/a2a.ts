@@ -2,6 +2,7 @@ import type { AgentInfo, FileAttachment, PendingAction } from "../../types";
 import { buildHeaders, errorFromResponse, httpFetch, readSSE, type HttpOptions } from "../http";
 import { StatelessTransport, type ResolveInput, type RunInput, type RunResult, type StatelessTransportOptions } from "./base";
 import { makeId } from "./files";
+import { AuthedFileUrls, needsCredentials } from "./outputFiles";
 import { resultFromResponse } from "./responses";
 import { pendingActionsFromWire, resolutionToWire } from "../../utils/wire";
 import { normalizeStopReason } from "../../utils/runtime";
@@ -35,16 +36,37 @@ function partsText(parts: any[] | undefined): string {
     .join("");
 }
 
-function partsFiles(parts: any[] | undefined): FileAttachment[] {
+function partsFiles(
+  parts: any[] | undefined,
+  /** The artifact's `metadata` (the Console puts `fileId` and `size` there) */
+  metadata?: any,
+  /** With credentials configured, a file on the A2A server's own origin is fetched with them (`getFileUrl`) */
+  server?: { baseUrl: string; http: HttpOptions }
+): FileAttachment[] {
   const out: FileAttachment[] = [];
   for (const p of parts ?? []) {
     if (p.kind !== "file" || !p.file) continue;
     const mimeType = p.file.mimeType ?? "application/octet-stream";
-    const url = p.file.uri ?? (p.file.bytes ? `data:${mimeType};base64,${p.file.bytes}` : undefined);
+    const uri: string | undefined = p.file.uri;
+    const url = uri ?? (p.file.bytes ? `data:${mimeType};base64,${p.file.bytes}` : undefined);
     if (!url) continue;
-    out.push({ id: makeId(), name: p.file.name ?? "file", mimeType, size: 0, url });
+    const size = typeof metadata?.size === "number" ? metadata.size : 0;
+    const id = typeof metadata?.fileId === "string" ? metadata.fileId : makeId();
+    if (uri && server && needsCredentials(server.http) && sameOrigin(uri, server.baseUrl)) {
+      out.push({ id, name: p.file.name ?? "file", mimeType, size, storageKey: uri });
+    } else {
+      out.push({ id, name: p.file.name ?? "file", mimeType, size, url });
+    }
   }
   return out;
+}
+
+function sameOrigin(a: string, b: string): boolean {
+  try {
+    return new URL(a).origin === new URL(b).origin;
+  } catch {
+    return false;
+  }
 }
 
 /** A2A (Agent2Agent) over JSON-RPC: `message/send` and `message/stream`. */
@@ -53,6 +75,7 @@ export class A2ATransport extends StatelessTransport {
 
   constructor(private readonly options: A2ATransportOptions) {
     super({ ...options, agents: undefined });
+    this.fileUrls = new AuthedFileUrls(options);
   }
 
   private root() {
@@ -141,6 +164,7 @@ export class A2ATransport extends StatelessTransport {
     let stopReason: RunResult["stopReason"];
     let stopDetail: string | undefined;
     const files: FileAttachment[] = [];
+    const server = { baseUrl: this.root(), http: this.options };
 
     // The Console reports why a task stopped, and what an `input-required` one waits on, in `metadata`
     const readMetadata = (metadata: any) => {
@@ -203,7 +227,7 @@ export class A2ATransport extends StatelessTransport {
           readMetadata(result.metadata);
           for (const a of result.artifacts ?? []) {
             artifacts.set(a.artifactId ?? makeId(), partsText(a.parts));
-            files.push(...partsFiles(a.parts));
+            files.push(...partsFiles(a.parts, a.metadata, server));
           }
           if (artifacts.size) show(artifactText());
           applyStatus(result.id, result.status);
@@ -213,7 +237,7 @@ export class A2ATransport extends StatelessTransport {
           const id = result.artifact?.artifactId ?? "default";
           const text = partsText(result.artifact?.parts);
           artifacts.set(id, result.append ? (artifacts.get(id) ?? "") + text : text);
-          files.push(...partsFiles(result.artifact?.parts));
+          files.push(...partsFiles(result.artifact?.parts, result.artifact?.metadata, server));
           show(artifactText());
           break;
         }

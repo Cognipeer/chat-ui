@@ -2,6 +2,7 @@ import type { ContentPart } from "../../types";
 import { buildHeaders, errorFromResponse, httpFetch, readSSE, type HttpOptions } from "../http";
 import { StatelessTransport, type RunInput, type RunResult, type StatelessTransportOptions } from "./base";
 import { textOf, userContentWithFiles } from "./files";
+import { AuthedFileUrls, outputFilesFromWire } from "./outputFiles";
 
 export interface ChatCompletionsTransportOptions extends StatelessTransportOptions, HttpOptions {
   /** API root, e.g. `https://api.openai.com/v1` */
@@ -26,6 +27,7 @@ interface PartialToolCall {
 export class ChatCompletionsTransport extends StatelessTransport {
   constructor(private readonly options: ChatCompletionsTransportOptions) {
     super(options);
+    this.fileUrls = new AuthedFileUrls(options);
   }
 
   protected async run(input: RunInput): Promise<RunResult> {
@@ -67,6 +69,8 @@ export class ChatCompletionsTransport extends StatelessTransport {
     const toolCalls = new Map<number, PartialToolCall>();
     let usage: RunResult["usage"];
     let content = "";
+    // Files a Console agent produced: `files` on the closing chunk, `output_files` on the body
+    let wireFiles: unknown;
 
     const readUsage = (u: any) => {
       if (!u) return;
@@ -94,6 +98,7 @@ export class ChatCompletionsTransport extends StatelessTransport {
         }
         if (chunk.error) throw new Error(chunk.error.message ?? "Stream error");
         readUsage(chunk.usage);
+        if (Array.isArray(chunk.files)) wireFiles = chunk.files;
 
         const delta = chunk.choices?.[0]?.delta;
         if (!delta) return;
@@ -114,6 +119,7 @@ export class ChatCompletionsTransport extends StatelessTransport {
       const message = json.choices?.[0]?.message;
       content = typeof message?.content === "string" ? message.content : "";
       readUsage(json.usage);
+      wireFiles = json.output_files;
       (message?.tool_calls ?? []).forEach((tc: any, i: number) =>
         toolCalls.set(i, {
           id: tc.id ?? `call_${i}`,
@@ -135,6 +141,7 @@ export class ChatCompletionsTransport extends StatelessTransport {
       input.emit.toolCall(tc.id || `call_${index}`, tc.name, args);
     });
 
-    return { content, usage };
+    const files = outputFilesFromWire(wireFiles, this.options.baseUrl, this.options);
+    return { content, usage, ...(files.length > 0 ? { files } : {}) };
   }
 }
