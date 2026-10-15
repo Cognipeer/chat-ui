@@ -264,7 +264,7 @@ function CheckCircleIcon({ className }: { className?: string }) {
 /**
  * Format tool name for display
  */
-function formatToolName(name: string | undefined): string {
+export function formatToolName(name: string | undefined): string {
   if (!name) return "Unknown Tool"; // Fallback - normally shouldn't happen
   return name
     .replace(/_/g, " ")

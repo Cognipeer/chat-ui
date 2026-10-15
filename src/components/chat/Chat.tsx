@@ -23,6 +23,8 @@ import type {
   ConversationStarter,
   AgentInfo,
   ChatConfig,
+  ChatAccount,
+  ChatBrand,
   ChatCallbacks,
   ChatController,
   ChatTheme,
@@ -60,10 +62,22 @@ import type { ChatInputHandle } from "./ChatInput";
 import { ChatHistory } from "./ChatHistory";
 import { BudgetBanner, type BudgetBannerProps } from "./BudgetBanner";
 import { MenuIcon, ChevronDownIcon } from "./Icons";
+import { AgentBadge, ChatAppearanceProvider, type ChatAppearance } from "./appearance";
 
 export interface ChatProps extends ChatConfig, ChatCallbacks {
   /** Custom class name for the container */
   className?: string;
+  /**
+   * How the chat is drawn (default `classic`, the look it always had). `modern`: the person's messages as
+   * bubbles, answers as plain text without avatars or bands, every turn's steps (reasoning, tool calls,
+   * answered approvals) folded into one "worked for ..." line, a slim header, a sidebar grouped by date with
+   * the agents on top, agent cards on the empty chat, a rounded composer and the system UI font.
+   */
+  appearance?: ChatAppearance;
+  /** `appearance="modern"`: the name (and logo) at the top of the sidebar */
+  brand?: ChatBrand;
+  /** `appearance="modern"`: who is signed in, at the foot of the sidebar, with a menu (sign out) */
+  account?: ChatAccount;
   /** Show chat history sidebar */
   showHistory?: boolean;
   /** Default sidebar open state (mobile) */
@@ -312,6 +326,9 @@ function ChatContent({
   onAgentChange,
   // UI options
   className,
+  appearance = "classic",
+  brand,
+  account,
   showHistory = true,
   defaultHistoryOpen = false,
   conversationId,
@@ -672,6 +689,15 @@ function ChatContent({
     }
   }, [chat, autoFocusInput]);
 
+  // An agent picked in the (modern) sidebar: a new chat with it
+  const handleAgentPick = useCallback(
+    (agentId: string) => {
+      handleNewChat();
+      handleAgentChange(agentId);
+    },
+    [handleNewChat, handleAgentChange]
+  );
+
   const handleDeleteConversation = useCallback(
     async (id: string) => {
       await history.deleteConversation(id);
@@ -900,8 +926,21 @@ function ChatContent({
   const hasStarters = experience.starters.length > 0;
   const customEmpty = renderEmptyState?.();
   // A host that draws its own empty state and offers no starters keeps exactly what it drew
-  const emptyState =
-    hasStarters || (!renderEmptyState && experience.welcome) ? (
+  const modern = appearance === "modern";
+  const emptyState = modern ? (
+    // Modern: the agents as cards when there is a choice, then the chosen agent's welcome and starters
+    <ChatEmptyState
+      custom={customEmpty}
+      welcome={experience.welcome}
+      allowedImageHosts={welcomeImageHosts}
+      starters={experience.starters}
+      onPick={pickStarter}
+      disabled={composerState !== "open" && composerState !== "answer"}
+      agents={showAgentSelector && !externalAgentId ? agents : undefined}
+      selectedAgentId={effectiveAgentId}
+      onAgentChange={handleAgentChange}
+    />
+  ) : hasStarters || (!renderEmptyState && experience.welcome) ? (
       <ChatEmptyState
         custom={customEmpty}
         welcome={experience.welcome}
@@ -915,6 +954,7 @@ function ChatContent({
     );
 
   return (
+    <ChatAppearanceProvider value={appearance}>
     <ChatThemeProvider
       defaultMode={theme}
       theme={{
@@ -925,6 +965,7 @@ function ChatContent({
       <div
         className={cn(
           "chat-container flex h-full bg-chat-bg-primary text-chat-text-primary",
+          modern && "chat-appearance-modern",
           className
         )}
       >
@@ -956,6 +997,10 @@ function ChatContent({
                 ? history.error.message
                 : undefined
             }
+            brand={brand}
+            account={account}
+            agents={externalAgentId ? undefined : agents}
+            onAgentPick={handleAgentPick}
           />
         )}
 
@@ -975,6 +1020,14 @@ function ChatContent({
               onAgentChange: handleAgentChange,
               actions: headerActions,
             })
+          ) : modern ? (
+            <ModernHeader
+              showMenuButton={showHistory}
+              onMenuClick={() => setHistoryOpen(true)}
+              agent={selectedAgent ?? (agents.length === 1 ? agents[0] : undefined)}
+              title={chat.conversation?.title || t("chat.history.newChat")}
+              actions={headerActions}
+            />
           ) : (
             <DefaultHeader
               showMenuButton={showHistory}
@@ -1101,6 +1154,54 @@ function ChatContent({
         </div>
       </div>
     </ChatThemeProvider>
+    </ChatAppearanceProvider>
+  );
+}
+
+/**
+ * The modern header: a slim bar with the agent of the chat on the left and the header buttons on the
+ * right. The agent is chosen on the empty chat (cards) or in the sidebar, so the bar only names it.
+ */
+function ModernHeader({
+  showMenuButton,
+  onMenuClick,
+  agent,
+  title,
+  actions,
+}: {
+  showMenuButton: boolean;
+  onMenuClick: () => void;
+  agent?: AgentInfo;
+  title: string;
+  actions?: React.ReactNode;
+}) {
+  const { t } = useI18n();
+  return (
+    <div className="flex h-[52px] flex-shrink-0 items-center gap-2 px-3">
+      {showMenuButton && (
+        <button
+          type="button"
+          onClick={onMenuClick}
+          className="rounded-lg p-2 hover:bg-chat-bg-hover md:hidden"
+          aria-label={t("chat.header.menu")}
+        >
+          <MenuIcon className="h-5 w-5" />
+        </button>
+      )}
+      <div className="flex min-w-0 flex-1 items-center gap-2 px-1">
+        {agent ? (
+          <>
+            <AgentBadge id={agent.id} name={agent.name} size={22} />
+            <h1 className="m-0 truncate text-[15px] font-medium" title={agent.description || undefined}>
+              {agent.name}
+            </h1>
+          </>
+        ) : (
+          <h1 className="m-0 truncate text-[15px] font-medium">{title}</h1>
+        )}
+      </div>
+      {actions && <div className="flex flex-shrink-0 items-center gap-1">{actions}</div>}
+    </div>
   );
 }
 

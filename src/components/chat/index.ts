@@ -28,3 +28,5 @@ export { MessageEditor, type MessageEditorProps } from "./MessageEditor";
 export { ExportMenu, type ExportMenuProps } from "./ExportMenu";
 export { NotificationsMenu, type NotificationsMenuProps } from "./NotificationsMenu";
 export type { ListToolbarConfig } from "./ChatMessageList";
+export { ChatAppearanceProvider, useAppearance, AgentBadge, type ChatAppearance } from "./appearance";
+export { TurnActivity, buildTurnBlocks, activityItems, type TurnActivityProps, type ActivityItem, type TurnBlock } from "./TurnActivity";

@@ -189,6 +189,104 @@
 }
 
 /*
+ * appearance="modern". The chat brings its own type: the system UI font (a host page's display face is not
+ * inherited; set --chat-font-family to use another), 15px text, calmer spacing and smaller headings.
+ */
+.chat-appearance-modern {
+  font-family: var(
+    --chat-font-family,
+    ui-sans-serif,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    Roboto,
+    "Helvetica Neue",
+    Arial,
+    "Noto Sans",
+    sans-serif
+  );
+  font-size: var(--chat-font-size, 15px);
+  line-height: 1.6;
+}
+
+.chat-appearance-modern .chat-markdown {
+  line-height: 1.65;
+}
+
+.chat-appearance-modern .chat-markdown p {
+  margin-bottom: 0.8em;
+}
+
+.chat-appearance-modern .chat-markdown h1,
+.chat-appearance-modern .chat-markdown h2,
+.chat-appearance-modern .chat-markdown h3,
+.chat-appearance-modern .chat-markdown h4,
+.chat-appearance-modern .chat-markdown h5,
+.chat-appearance-modern .chat-markdown h6 {
+  margin-top: 1.25em;
+  margin-bottom: 0.4em;
+  line-height: 1.35;
+}
+
+.chat-appearance-modern .chat-markdown h1 {
+  font-size: 1.3em;
+}
+
+.chat-appearance-modern .chat-markdown h2 {
+  font-size: 1.16em;
+}
+
+.chat-appearance-modern .chat-markdown h3 {
+  font-size: 1.05em;
+}
+
+.chat-appearance-modern .chat-markdown h4,
+.chat-appearance-modern .chat-markdown h5,
+.chat-appearance-modern .chat-markdown h6 {
+  font-size: 1em;
+}
+
+.chat-appearance-modern .chat-markdown > :first-child {
+  margin-top: 0;
+}
+
+.chat-appearance-modern .chat-markdown ul,
+.chat-appearance-modern .chat-markdown ol {
+  margin-bottom: 0.8em;
+  padding-left: 1.4em;
+}
+
+.chat-appearance-modern .chat-markdown li {
+  margin-bottom: 0.3em;
+}
+
+.chat-appearance-modern .chat-markdown li > p {
+  margin-bottom: 0.3em;
+}
+
+.chat-appearance-modern .chat-markdown a:not(.chat-citation) {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.chat-appearance-modern .chat-markdown code {
+  font-size: 0.875em;
+}
+
+.chat-appearance-modern .chat-markdown pre {
+  border-radius: 0.75rem;
+  font-size: 0.875em;
+}
+
+/* A host page's focus outline on every textarea would draw a second frame inside the composer's own */
+.chat-appearance-modern [data-chat-composer-input]:focus,
+.chat-appearance-modern [data-chat-composer-input]:focus-visible {
+  outline: none;
+  box-shadow: none;
+  border: 0;
+}
+
+/*
  * The row of buttons under a message (copy, edit, regenerate, thumbs): visible while the message is
  * hovered or holds the keyboard focus, always on the newest message and on screens without hover.
  */
