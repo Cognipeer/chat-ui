@@ -2,10 +2,11 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { cn, formatRelativeTime, isBudgetExhausted, isPinned, pinnedFirst } from "../../utils";
-import type { ConversationListItem, ConversationSearchMode, RuntimeStatus } from "../../types";
-import { ChatIcon, TrashIcon, PlusIcon, SearchIcon, XIcon, PencilIcon, PinIcon, ListCheckIcon } from "./Icons";
+import type { AgentInfo, ChatAccount, ChatBrand, ConversationListItem, ConversationSearchMode, RuntimeStatus } from "../../types";
+import { ChatIcon, TrashIcon, PlusIcon, SearchIcon, XIcon, PencilIcon, PinIcon, ListCheckIcon, ChevronDownIcon } from "./Icons";
 import { useI18n } from "../../hooks";
 import { FOCUS_RING, PRIMARY_BUTTON, SECONDARY_BUTTON } from "./styles";
+import { AgentBadge, useAppearance } from "./appearance";
 
 export interface ChatHistoryProps {
   /** Conversations list */
@@ -75,6 +76,33 @@ export interface ChatHistoryProps {
    * the list the server sent). Replaces the badge of the selected row.
    */
   selectedStatus?: RuntimeStatus;
+  /** `appearance="modern"`: the name (and logo) at the top of the sidebar */
+  brand?: ChatBrand;
+  /** `appearance="modern"`: who is signed in, at the bottom of the sidebar, with a menu (sign out) */
+  account?: ChatAccount;
+  /** `appearance="modern"`: the agents to offer at the top of the list (shown when there are two or more) */
+  agents?: AgentInfo[];
+  /** An agent was picked from the sidebar: start a new chat with it */
+  onAgentPick?: (agentId: string) => void;
+}
+
+/** How many agents the modern sidebar lists before "all agents" */
+const SIDEBAR_AGENTS = 4;
+
+type DayGroup = "pinned" | "today" | "yesterday" | "previous7" | "previous30" | "older";
+const DAY_GROUPS: DayGroup[] = ["pinned", "today", "yesterday", "previous7", "previous30", "older"];
+const DAY_MS = 86_400_000;
+
+/** Which heading a conversation goes under in the modern sidebar. */
+function dayGroupOf(conversation: ConversationListItem, now: Date): DayGroup {
+  if (isPinned(conversation)) return "pinned";
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const at = new Date(conversation.updatedAt).getTime();
+  if (!Number.isFinite(at) || at >= startOfToday) return "today";
+  if (at >= startOfToday - DAY_MS) return "yesterday";
+  if (at >= startOfToday - 6 * DAY_MS) return "previous7";
+  if (at >= startOfToday - 29 * DAY_MS) return "previous30";
+  return "older";
 }
 
 const SEARCH_MIN_CHARS = 2;
@@ -153,8 +181,13 @@ export function ChatHistory({
   onBulkDelete,
   error,
   onDismissError,
+  brand,
+  account,
+  agents = [],
+  onAgentPick,
 }: ChatHistoryProps) {
   const { t } = useI18n();
+  const modern = useAppearance() === "modern";
   const [searchQuery, setSearchQuery] = useState("");
   // Server search: the hits for `query`, whether a request is out, and whether the last one failed
   const [remote, setRemote] = useState<{ query: string; items: ConversationListItem[]; mode?: ConversationSearchMode } | null>(null);
@@ -275,6 +308,48 @@ export function ChatHistory({
     return onPin || matching.some(isPinned) ? pinnedFirst(matching) : matching;
   }, [conversations, normalizedQuery, onPin, showRemote, remote]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Modern: the rows under date headings (a search lists its hits as they come)
+  const groups = useMemo(() => {
+    if (!modern || normalizedQuery) return [{ key: "all" as const, items: filteredConversations }];
+    const now = new Date();
+    const byGroup = new Map<DayGroup, ConversationListItem[]>();
+    for (const conversation of filteredConversations) {
+      const key = dayGroupOf(conversation, now);
+      byGroup.set(key, [...(byGroup.get(key) ?? []), conversation]);
+    }
+    return DAY_GROUPS.filter((key) => byGroup.has(key)).map((key) => ({ key, items: byGroup.get(key)! }));
+  }, [modern, normalizedQuery, filteredConversations]);
+
+  const renderItem = (conversation: ConversationListItem) => (
+    <ConversationItem
+      key={conversation.id}
+      conversation={conversation}
+      isSelected={conversation.id === selectedId}
+      onSelect={() => onSelect(conversation)}
+      onDelete={onDelete ? () => onDelete(conversation.id) : undefined}
+      onRename={onRename ? (title) => onRename(conversation.id, title) : undefined}
+      onPin={onPin ? (pinned) => onPin(conversation.id, pinned) : undefined}
+      selecting={selecting}
+      checked={selected.has(conversation.id)}
+      onToggle={() => toggleSelected(conversation.id)}
+      renaming={renamingId === conversation.id}
+      onRenameStart={() => setRenamingId(conversation.id)}
+      onRenameEnd={() => setRenamingId((current) => (current === conversation.id ? null : current))}
+      showAgentName={showAgentName}
+      highlight={showRemote ? remote!.query : undefined}
+      badge={
+        showStatus
+          ? badgeFor(
+              conversation.id === selectedId && selectedStatus ? selectedStatus : conversation.runtime?.status,
+              conversation.id === selectedId && selectedStatus ? false : isBudgetExhausted(conversation)
+            )
+          : undefined
+      }
+    />
+  );
+
+  const showAgents = modern && agents.length > 1 && Boolean(onAgentPick) && !selecting;
+
   return (
     <>
       {/* Mobile overlay */}
@@ -290,7 +365,8 @@ export function ChatHistory({
       <div
         className={cn(
           "flex flex-col h-full bg-chat-bg-secondary border-r border-chat-border-primary",
-          "w-[280px] fixed md:relative z-50 transition-transform duration-300",
+          modern ? "w-[260px]" : "w-[280px]",
+          "fixed md:relative z-50 transition-transform duration-300",
           isOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0",
           className
         )}
@@ -299,7 +375,39 @@ export function ChatHistory({
         }}
       >
         {/* Header — fixed height to align border with main chat header */}
-        {header || (
+        {header || (modern ? (
+          <div className="flex-shrink-0 space-y-0.5 px-2 pb-1 pt-2">
+            <div className="flex h-11 items-center justify-between gap-2 pl-2 pr-1">
+              <span className="flex min-w-0 items-center gap-2">
+                {brand?.logo ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={brand.logo} alt="" className="h-6 max-w-[96px] flex-shrink-0 object-contain" />
+                ) : null}
+                {brand?.title ? <span className="truncate text-[15px] font-semibold">{brand.title}</span> : null}
+              </span>
+              {onClose && (
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className={cn("flex h-9 w-9 items-center justify-center rounded-lg text-chat-text-secondary hover:bg-chat-bg-hover md:hidden", FOCUS_RING)}
+                  aria-label={t("chat.history.closeSidebar")}
+                >
+                  <XIcon className="h-4 w-4" />
+                </button>
+              )}
+            </div>
+            {onNewChat && (
+              <button
+                type="button"
+                onClick={onNewChat}
+                className={cn("flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-sm text-chat-text-primary hover:bg-chat-bg-hover", FOCUS_RING)}
+              >
+                <PencilIcon className="h-4 w-4 flex-shrink-0" />
+                <span>{t("chat.history.newChat")}</span>
+              </button>
+            )}
+          </div>
+        ) : (
           <div className="flex-shrink-0 flex items-center px-4 h-[58px] border-b border-chat-border-primary">
             {onNewChat && (
               <button
@@ -311,12 +419,12 @@ export function ChatHistory({
               </button>
             )}
           </div>
-        )}
+        ))}
 
         {enableSearch && (
-          <div className="flex-shrink-0 px-3 py-2 border-b border-chat-border-primary bg-chat-bg-secondary">
+          <div className={cn("flex-shrink-0", modern ? "px-2 pb-1" : "px-3 py-2 border-b border-chat-border-primary bg-chat-bg-secondary")}>
             <div className="relative">
-              <SearchIcon className="w-4 h-4 text-chat-text-tertiary absolute left-3 top-1/2 -translate-y-1/2" />
+              <SearchIcon className={cn("w-4 h-4 text-chat-text-tertiary absolute top-1/2 -translate-y-1/2", modern ? "left-2.5" : "left-3")} />
               <input
                 type="text"
                 value={searchQuery}
@@ -331,7 +439,12 @@ export function ChatHistory({
                 }}
                 aria-label={t("chat.history.searchPlaceholder")}
                 placeholder={t("chat.history.searchPlaceholder")}
-                className="w-full bg-chat-bg-tertiary border border-chat-border-primary rounded-lg pl-9 pr-9 py-2 text-sm text-chat-text-primary placeholder:text-chat-text-tertiary focus:outline-none focus:border-chat-accent-primary"
+                className={cn(
+                  "w-full rounded-lg pr-9 text-sm text-chat-text-primary placeholder:text-chat-text-secondary focus:outline-none",
+                  modern
+                    ? "h-9 border border-transparent bg-transparent pl-[2.15rem] hover:bg-chat-bg-hover focus:border-chat-border-primary focus:bg-chat-bg-primary"
+                    : "bg-chat-bg-tertiary border border-chat-border-primary pl-9 py-2 placeholder:text-chat-text-tertiary focus:border-chat-accent-primary"
+                )}
               />
               {searchQuery && (
                 <button
@@ -357,9 +470,38 @@ export function ChatHistory({
           </div>
         )}
 
+        {/* Modern: the agents, a click starts a new chat with one */}
+        {showAgents && (
+          <nav aria-label={t("chat.history.agents")} className="flex-shrink-0 px-2 pb-1">
+            <div className="px-2.5 pb-1 pt-3 text-xs font-medium text-chat-text-secondary">{t("chat.history.agents")}</div>
+            {agents.slice(0, SIDEBAR_AGENTS).map((agent) => (
+              <button
+                key={agent.id}
+                type="button"
+                onClick={() => onAgentPick?.(agent.id)}
+                title={agent.description || agent.name}
+                className={cn("flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sm text-chat-text-primary hover:bg-chat-bg-hover", FOCUS_RING)}
+              >
+                <AgentBadge id={agent.id} name={agent.name} size={20} />
+                <span className="min-w-0 truncate">{agent.name}</span>
+              </button>
+            ))}
+            {agents.length > SIDEBAR_AGENTS && onNewChat && (
+              <button
+                type="button"
+                onClick={onNewChat}
+                className={cn("flex h-8 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] text-chat-text-secondary hover:bg-chat-bg-hover", FOCUS_RING)}
+              >
+                <span aria-hidden="true" className="inline-flex w-5 justify-center">⋯</span>
+                <span>{t("chat.agents.label")} ({agents.length})</span>
+              </button>
+            )}
+          </nav>
+        )}
+
         {/* Select mode: bulk delete */}
-        {onBulkDelete && conversations.length > 0 && (
-          <div className="flex-shrink-0 border-b border-chat-border-primary px-3 py-1.5">
+        {onBulkDelete && conversations.length > 0 && (!modern || selecting) && (
+          <div className={cn("flex-shrink-0 px-3 py-1.5", !modern && "border-b border-chat-border-primary")}>
             {!selecting ? (
               <button
                 type="button"
@@ -425,35 +567,37 @@ export function ChatHistory({
             </div>
           ) : (
             <div className="p-2" ref={listRef} onKeyDown={handleListKeyDown}>
-              <ul aria-label={t("chat.history.list")} className="m-0 list-none space-y-0.5 p-0">
-                {filteredConversations.map((conversation) => (
-                  <ConversationItem
-                    key={conversation.id}
-                    conversation={conversation}
-                    isSelected={conversation.id === selectedId}
-                    onSelect={() => onSelect(conversation)}
-                    onDelete={onDelete ? () => onDelete(conversation.id) : undefined}
-                    onRename={onRename ? (title) => onRename(conversation.id, title) : undefined}
-                    onPin={onPin ? (pinned) => onPin(conversation.id, pinned) : undefined}
-                    selecting={selecting}
-                    checked={selected.has(conversation.id)}
-                    onToggle={() => toggleSelected(conversation.id)}
-                    renaming={renamingId === conversation.id}
-                    onRenameStart={() => setRenamingId(conversation.id)}
-                    onRenameEnd={() => setRenamingId((current) => (current === conversation.id ? null : current))}
-                    showAgentName={showAgentName}
-                    highlight={showRemote ? remote!.query : undefined}
-                    badge={
-                      showStatus
-                        ? badgeFor(
-                            conversation.id === selectedId && selectedStatus ? selectedStatus : conversation.runtime?.status,
-                            conversation.id === selectedId && selectedStatus ? false : isBudgetExhausted(conversation)
-                          )
-                        : undefined
-                    }
-                  />
-                ))}
-              </ul>
+              {modern ? (
+                groups.map((group, index) => (
+                  <section key={group.key} aria-label={group.key === "all" ? t("chat.history.list") : t(`chat.history.${group.key}`)}>
+                    {(group.key !== "all" || (index === 0 && onBulkDelete && !selecting)) && (
+                      <div className={cn("flex h-8 items-center justify-between gap-2 px-2.5", index > 0 && "mt-3")}>
+                        <h3 className="m-0 text-xs font-medium text-chat-text-secondary">
+                          {group.key === "all" ? "" : t(`chat.history.${group.key}`)}
+                        </h3>
+                        {index === 0 && onBulkDelete && !selecting && (
+                          <button
+                            type="button"
+                            onClick={() => setSelecting(true)}
+                            className={cn("rounded p-1 text-chat-text-tertiary hover:bg-chat-bg-hover hover:text-chat-text-primary", FOCUS_RING)}
+                            title={t("chat.history.selectMode")}
+                            aria-label={t("chat.history.selectMode")}
+                          >
+                            <ListCheckIcon className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    )}
+                    <ul aria-label={t("chat.history.list")} className="m-0 list-none space-y-px p-0">
+                      {group.items.map(renderItem)}
+                    </ul>
+                  </section>
+                ))
+              ) : (
+                <ul aria-label={t("chat.history.list")} className="m-0 list-none space-y-0.5 p-0">
+                  {filteredConversations.map(renderItem)}
+                </ul>
+              )}
 
               {/* Load more button */}
               {hasMore && !isLoading && !showRemote && (
@@ -494,8 +638,110 @@ export function ChatHistory({
             {footer}
           </div>
         )}
+
+        {modern && account && <AccountButton account={account} />}
       </div>
     </>
+  );
+}
+
+/** Initials for an avatar: "Local Admin" -> "LA", "ayse@x.com" -> "A". */
+export function initialsOf(name: string): string {
+  // (the part before an "@" cut with indexOf: a regular expression for it backtracks on a long run of "@")
+  const at = name.indexOf("@");
+  const words = (at >= 0 ? name.slice(0, at) : name).split(/[\s._-]+/).filter(Boolean);
+  const letters = words.slice(0, 2).map((w) => Array.from(w)[0] ?? "");
+  return letters.join("").toLocaleUpperCase() || "?";
+}
+
+/** Who is signed in, at the foot of the modern sidebar; a click opens their menu (sign out and the host's own items). */
+function AccountButton({ account }: { account: ChatAccount }) {
+  const { t } = useI18n();
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const menuId = React.useId();
+  const hasMenu = Boolean(account.onSignOut || account.menu);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (event: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [open]);
+
+  return (
+    <div
+      ref={rootRef}
+      className="relative flex-shrink-0 border-t border-chat-border-secondary p-2"
+      onKeyDown={(event) => {
+        if (event.key === "Escape" && open) {
+          event.stopPropagation();
+          setOpen(false);
+        }
+      }}
+    >
+      {open && hasMenu && (
+        <div
+          id={menuId}
+          role="menu"
+          aria-label={t("chat.account.menu")}
+          className="absolute bottom-full left-2 right-2 z-10 mb-1 rounded-xl border border-chat-border-primary bg-chat-bg-primary p-1 shadow-xl"
+        >
+          {account.menu}
+          {account.onSignOut && (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setOpen(false);
+                account.onSignOut?.();
+              }}
+              className={cn("flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sm text-chat-text-primary hover:bg-chat-bg-hover", FOCUS_RING)}
+            >
+              <SignOutIcon className="h-4 w-4 flex-shrink-0" />
+              {account.signOutLabel ?? t("chat.account.signOut")}
+            </button>
+          )}
+        </div>
+      )}
+      <button
+        type="button"
+        aria-haspopup={hasMenu ? "menu" : undefined}
+        aria-expanded={hasMenu ? open : undefined}
+        aria-controls={hasMenu && open ? menuId : undefined}
+        aria-label={`${t("chat.account.menu")}: ${account.name}`}
+        disabled={!hasMenu}
+        onClick={() => setOpen((value) => !value)}
+        className={cn(
+          "flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left hover:bg-chat-bg-hover disabled:cursor-default disabled:hover:bg-transparent",
+          FOCUS_RING
+        )}
+      >
+        <span
+          aria-hidden="true"
+          className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-chat-text-primary text-xs font-semibold text-chat-bg-primary"
+        >
+          {initialsOf(account.name)}
+        </span>
+        <span className="flex min-w-0 flex-1 flex-col">
+          <span className="truncate text-sm font-medium text-chat-text-primary">{account.name}</span>
+          {account.detail && <span className="truncate text-xs text-chat-text-secondary">{account.detail}</span>}
+        </span>
+        {hasMenu && <ChevronDownIcon className={cn("h-4 w-4 flex-shrink-0 text-chat-text-tertiary transition-transform", open && "rotate-180")} />}
+      </button>
+    </div>
+  );
+}
+
+function SignOutIcon({ className }: { className?: string }) {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+      <path d="m16 17 5-5-5-5" />
+      <path d="M21 12H9" />
+    </svg>
   );
 }
 
@@ -540,6 +786,7 @@ function ConversationItem({
   highlight,
 }: ConversationItemProps) {
   const { t } = useI18n();
+  const modern = useAppearance() === "modern";
   const title = conversation.title || t("chat.history.newChat");
   const pinned = isPinned(conversation);
   const actionCount = selecting ? 0 : [onDelete, onRename, onPin].filter(Boolean).length;
@@ -549,7 +796,8 @@ function ConversationItem({
 
   const body = (
     <>
-      {pinned ? (
+      {/* modern: one line per chat - the date headings say when, the "Pinned" heading says pinned */}
+      {modern ? null : pinned ? (
         <PinIcon className="w-4 h-4 text-chat-accent-primary flex-shrink-0" />
       ) : (
         <ChatIcon className="w-4 h-4 text-chat-text-tertiary flex-shrink-0" />
@@ -563,7 +811,7 @@ function ConversationItem({
             <Highlighted text={conversation.searchMatch.snippet} query={highlight} />
           </span>
         )}
-        <span className="flex items-center gap-1 min-w-0 text-xs text-chat-text-tertiary">
+        <span className={cn("flex items-center gap-1 min-w-0 text-xs text-chat-text-tertiary", modern && "hidden")}>
           {conversation.agentName && showAgentName && (
             <>
               <span className="truncate">{conversation.agentName}</span>
@@ -632,8 +880,10 @@ function ConversationItem({
               onRenameStart?.();
             }
           }}
+          title={modern && conversation.agentName && showAgentName ? `${title} · ${conversation.agentName}` : undefined}
           className={cn(
-            "flex min-w-0 flex-1 items-center gap-2 rounded-lg px-3 py-2 text-left",
+            "flex min-w-0 flex-1 items-center gap-2 rounded-lg text-left",
+            modern ? "px-2.5 py-[7px]" : "px-3 py-2",
             actionCount === 1 && "pr-9",
             actionCount === 2 && "pr-16",
             actionCount >= 3 && "pr-24",

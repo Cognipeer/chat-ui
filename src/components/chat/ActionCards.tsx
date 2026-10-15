@@ -4,6 +4,7 @@ import React, { useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   actionDeadline,
   cn,
+  isActionPending,
   isQuestionRequired,
   jsonEqual,
   optionValue,
@@ -769,17 +770,25 @@ export interface ChatActionsConfig {
 export function MessageActionCards({
   message,
   config,
+  openOnly = false,
+  className,
 }: {
   message: Message;
   config?: ChatActionsConfig;
+  /** Only the cards that still wait for an answer (the answered ones are listed elsewhere, `appearance="modern"`) */
+  openOnly?: boolean;
+  className?: string;
 }) {
-  const actions = message.pendingActions?.filter((a) => a.type !== "client_tool");
+  const actions = message.pendingActions?.filter(
+    (a): a is Exclude<PendingAction, { type: "client_tool" }> =>
+      a.type !== "client_tool" && (!openOnly || isActionPending(message, a.id))
+  );
   if (!actions || actions.length === 0) return null;
 
   const canResolve = config?.canResolve !== false && Boolean(config?.onResolve);
 
   return (
-    <div className="mt-3 space-y-3">
+    <div className={cn("mt-3 space-y-3", className)}>
       {actions.map((action) => {
         const state = message.actionStates?.[action.id];
         if (action.type === "tool_approval") {

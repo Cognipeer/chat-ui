@@ -2,6 +2,7 @@
  * Type definitions for chat-ui
  */
 
+import type React from "react";
 import type { ChatTransport } from "./api/transport";
 
 // ============================================================================
@@ -382,6 +383,27 @@ export interface AgentModelOption {
   default: boolean;
 }
 
+/** The name (and logo) at the top of the sidebar (`appearance="modern"`). */
+export interface ChatBrand {
+  title: string;
+  /** An image URL (or a data URI) drawn left of the title */
+  logo?: string;
+}
+
+/** Who is signed in, shown at the foot of the sidebar with a small menu (`appearance="modern"`). */
+export interface ChatAccount {
+  /** The name shown; its initials make the avatar */
+  name: string;
+  /** A second line, e.g. the e-mail address */
+  detail?: string;
+  /** Adds "Sign out" to the menu */
+  onSignOut?: () => void;
+  /** Replaces the "Sign out" label */
+  signOutLabel?: string;
+  /** More menu items of the host, drawn above "Sign out" */
+  menu?: React.ReactNode;
+}
+
 export interface AgentInfo {
   id: string;
   name: string;
@@ -562,6 +584,13 @@ export interface StreamDoneEvent extends StreamEventBase {
   warnings?: TurnWarning[];
 }
 
+/** The conversation's generated title, after `stream.done` (when the client asked for it as a frame of its own) */
+export interface StreamTitleEvent extends StreamEventBase {
+  type: "stream.title";
+  conversationId: string;
+  title: string;
+}
+
 export type StreamEvent =
   | StreamStartEvent
   | StreamTextEvent
@@ -572,7 +601,8 @@ export type StreamEvent =
   | StreamErrorEvent
   | StreamActionRequiredEvent
   | StreamActionResolvedEvent
-  | StreamDoneEvent;
+  | StreamDoneEvent
+  | StreamTitleEvent;
 
 // ============================================================================
 // Portal experience types

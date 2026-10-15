@@ -4,6 +4,17 @@ All notable changes to Chat UI will be documented here.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-15
+
+### Added
+
+- `appearance="modern"` (opt-in; the default `classic` is unchanged): the person's messages as bubbles on the right and answers as plain text (no avatars, no shaded bands); every turn's steps - reasoning, tool calls, answered approvals and questions - folded into one "Worked for 24s · Web Search ×4" line that opens a timeline, while an approval or question that still waits stays a card; a live line ("Running Web Search…") while a turn works; a slim header naming the agent; a sidebar grouped by date with the agents on top, an optional `brand` and the signed-in `account` with a sign-out menu; agent cards on the empty chat (with a search box from seven agents); a single rounded composer with one line of notes; the system UI font at 15px with smaller headings (`--chat-font-family`, `--chat-font-size`).
+- `ChatAppearanceProvider` / `useAppearance`, `AgentBadge`, `TurnActivity`, `buildTurnBlocks`, `activityItems`; types `ChatAppearance`, `ChatBrand`, `ChatAccount`. `MessageActionCards` gains `openOnly` and `className`; `ChatMessage` gains `hideActivity`.
+- Copy, feedback and the other answer buttons no longer wait for the conversation's generated title. `AgentServerClient.sendMessageStream` asks for the title as its own `stream.title` frame after `stream.done` (`titleFrame`, agent-server >= 0.8.0) when the callbacks take it (`StreamCallbacks.onTitle`), which `useChat` does: the turn ends at the done frame and the title lands in the header and the sidebar a moment later. An older server keeps the title in `stream.done`; a caller without `onTitle` is not affected. New type `StreamTitleEvent`.
+- English and Turkish strings `chat.activity.*`, `chat.history.today` / `yesterday` / `previous7` / `previous30` / `older` / `pinned` / `agents` / `closeSidebar` / `selectMode`, `chat.account.*`, `chat.agents.*`, `chat.input.placeholderModern`.
+
+## [0.9.0] - 2026-10-15
+
 ### Added
 
 - Files a Console agent wrote for the user (its sandbox `/outputs/`) show as download chips under the assistant message, on the Responses (`output_files` or `file_path` annotations), Chat Completions (`output_files`, or `files` on the closing stream chunk) and A2A (file artifacts) transports. With credentials configured (`authorization`, `headers`, `getHeaders`, `fetch`) the file is fetched with them through `getFileUrl`; without, the chip is a plain link. Nothing changes for responses that carry no files. The stateless transports gain `getFileUrl` and `dispose`.

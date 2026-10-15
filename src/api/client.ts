@@ -486,7 +486,8 @@ export class AgentServerClient implements ChatTransport {
       {
         method: "POST",
         headers: await buildHeaders(this.http),
-        body: JSON.stringify({ ...options, stream: true }),
+        // A caller that takes the title as its own frame does not have the done frame wait for it
+        body: JSON.stringify({ ...options, stream: true, ...(callbacks.onTitle ? { titleFrame: true } : {}) }),
         signal,
       }
     );
@@ -698,6 +699,9 @@ export class AgentServerClient implements ChatTransport {
             break;
           case "stream.done":
             callbacks.onDone?.(event);
+            break;
+          case "stream.title":
+            callbacks.onTitle?.(event);
             break;
         }
       } catch {

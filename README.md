@@ -310,6 +310,28 @@ When the server streams the model's reasoning (agent-server >= 0.5.0, `stream.th
 
 An agent with `AgentInfo.showReasoning === false` never shows the block. With `useChat`, `streamingReasoning` holds the reasoning of the running turn and `getReasoningEffort: () => "low"` sets the effort sent (`none` | `minimal` | `low` | `medium` | `high`, also `SendMessageOptions.reasoningEffort`). Use the block on its own: `<ThinkingBlock reasoning={text} />`. A custom `StreamCallbacks` gets `onThinking(text, fullThinking)`.
 
+## Appearance (classic / modern)
+
+`appearance` chooses how the chat is drawn. The default, `classic`, is the look the chat always had, so an existing integration changes nothing. `modern` is opt-in:
+
+- the person's messages are bubbles on the right; answers are plain text, without avatars or a shaded band;
+- the steps of a turn (reasoning, tool calls, answered approvals and questions) fold into one line, "Worked for 24s · Web Search ×4", which opens a timeline; an approval or question that still waits stays a card;
+- a slim header names the agent; the sidebar groups chats by date (Today, Yesterday, Previous 7 days, ...), lists the agents on top, and can show a `brand` (title, logo) and the signed-in `account` with a menu (sign out);
+- the empty chat shows the agents as cards when there is a choice, then the chosen agent's welcome and starters;
+- the composer is one rounded box with a single line of notes under it;
+- the chat uses the system UI font at 15px (set `--chat-font-family` / `--chat-font-size` to change it) instead of inheriting the page's font.
+
+```tsx
+<Chat
+  baseUrl="/api/agents"
+  appearance="modern"
+  brand={{ title: "Acme assistants", logo: "/logo.svg" }}
+  account={{ name: "Ayşe Yılmaz", detail: "ayse@acme.com", onSignOut: () => signOut() }}
+/>
+```
+
+Components drawn outside `<Chat>` read the appearance from `ChatAppearanceProvider`. `TurnActivity` and `buildTurnBlocks` are exported for hosts that draw their own message list.
+
 ## Using Hooks Directly
 
 For more control, use the hooks directly. A custom layout shows approval and question cards through `actions`, and the composer follows `composerState` (one value for a waiting card, a turn running elsewhere, a used-up usage limit, a read-only chat):
@@ -472,6 +494,9 @@ Main chat component with all features.
 | `renderAvatar` | `function` | - | Custom avatar |
 | `renderEmptyState` | `function` | - | Custom empty state |
 | `renderHeader` | `function` | - | Custom header |
+| `appearance` | `"classic" \| "modern"` | `"classic"` | How the chat is drawn (see Appearance) |
+| `brand` | `ChatBrand` | - | `modern`: title and logo at the top of the sidebar |
+| `account` | `ChatAccount` | - | `modern`: the signed-in person at the foot of the sidebar, with a menu (`onSignOut`, `menu`) |
 
 ### `<ChatMinimal>`
 

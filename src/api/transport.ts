@@ -92,6 +92,12 @@ export interface StreamCallbacks {
   onProgress?: (event: StreamEvent) => void;
   onError?: (error: Error) => void;
   onDone?: (event: StreamEvent) => void;
+  /**
+   * The conversation's generated title, after `onDone`. Setting it asks the server for the title as a frame of its own
+   * (`titleFrame`), so the done event does not wait for the title model; a server that does not know the flag keeps
+   * putting the title in the done event.
+   */
+  onTitle?: (event: StreamEvent) => void;
   /** The turn paused: these approvals / questions need an answer */
   onActionRequired?: (event: StreamEvent) => void;
   /** An action was answered (possibly from another app) */

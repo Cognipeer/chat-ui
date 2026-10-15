@@ -29,6 +29,13 @@ export {
   NotificationsMenu,
   type NotificationsMenuProps,
   type ListToolbarConfig,
+  ChatAppearanceProvider,
+  useAppearance,
+  AgentBadge,
+  type ChatAppearance,
+  TurnActivity,
+  type TurnActivityProps,
+  type ActivityItem,
 } from "./components/chat";
 export { MessageStopNotice, MessageWarnings, InterruptedNotice, type MessageStopNoticeProps, type InterruptedNoticeProps } from "./components/chat";
 export { ToolCall, ToolCalls, type ToolCallProps, type ToolCallsProps } from "./components/chat";
@@ -151,6 +158,8 @@ export type {
   ConversationSearchMatch,
   ConversationSearchMode,
   AgentInfo,
+  ChatAccount,
+  ChatBrand,
   AgentModelOption,
   ReasoningEffort,
   StreamEvent,

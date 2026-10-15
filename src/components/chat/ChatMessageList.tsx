@@ -5,10 +5,13 @@ import { cn, collectPendingActions, messageText, modelLabel, modelOfMessage, rea
 import type { AgentModelOption, FeedbackInput, Message, MessageActionProps, StopNoticeRenderProps } from "../../types";
 import { ChatMessage, type ImageRenderProps, type ResolveFileUrl } from "./ChatMessage";
 import { ThinkingBlock } from "./ThinkingBlock";
-import { ToolCalls } from "./ToolCall";
+import { ToolCalls, formatToolName } from "./ToolCall";
 import { InterruptedNotice } from "./StopNotice";
-import type { ChatActionsConfig } from "./ActionCards";
+import { MessageActionCards, type ChatActionsConfig } from "./ActionCards";
+import { buildTurnBlocks, TurnActivity } from "./TurnActivity";
+import { useAppearance } from "./appearance";
 import { SECONDARY_BUTTON } from "./styles";
+import { LoadingIcon } from "./Icons";
 import { useI18n } from "../../hooks/useI18n";
 
 /** What the list adds under its messages (see `ChatMessageListProps.toolbar`). */
@@ -190,6 +193,7 @@ export function ChatMessageList({
   onFocusHandled,
 }: ChatMessageListProps) {
   const { t } = useI18n();
+  const modern = useAppearance() === "modern";
   const containerRef = useRef<HTMLDivElement>(null);
   // What the list looked like at the last render, and where it was scrolled when older messages were asked for
   const shown = useRef<{ first?: string; last?: string; count: number }>({ count: 0 });
@@ -307,6 +311,55 @@ export function ChatMessageList({
     return out;
   }, [messages, offered]);
 
+  // appearance="modern": the steps of each turn folded into one line (see `buildTurnBlocks`)
+  const blocks = useMemo(
+    () => (modern ? buildTurnBlocks(messages, t, { reasoning: showReasoning }) : []),
+    [modern, messages, t, showReasoning]
+  );
+
+  /** One stored message, with the "model changed" divider before it and "answered with" after it. */
+  const messageRow = (message: Message, index: number) => {
+    const model = answerModels.get(message.id);
+    return (
+      <React.Fragment key={message.id}>
+        {model?.switched && model.label && (
+          <div role="separator" aria-label={t("chat.model.switched", { model: model.label })} className="mx-4 my-2 flex items-center gap-3 text-xs text-chat-text-tertiary">
+            <span className="h-px flex-1 bg-chat-border-primary" />
+            <span>{t("chat.model.switched", { model: model.label })}</span>
+            <span className="h-px flex-1 bg-chat-border-primary" />
+          </div>
+        )}
+        <ChatMessage
+          message={message}
+          aiLabel={aiLabel}
+          {...toolbarFor(message, index)}
+          renderActions={renderActions}
+          renderAvatar={renderAvatar}
+          showAvatar={showAvatars}
+          showTimestamp={showTimestamps}
+          enableCitations={enableCitations}
+          actions={cardActions}
+          renderImage={renderImage}
+          renderStopNotice={renderStopNotice}
+          resolveFileUrl={resolveFileUrl}
+          showReasoning={showReasoning}
+          hideActivity={modern && message.role === "assistant"}
+        />
+        {showAnsweredWith && model?.label && (
+          <p className={cn("px-4 text-xs text-chat-text-tertiary", modern ? "-mt-2 mb-3" : cn("-mt-4 mb-6", showAvatars && "pl-16"))}>
+            {t("chat.model.answeredWith", { model: model.label })}
+          </p>
+        )}
+      </React.Fragment>
+    );
+  };
+
+  // What the turn being streamed is doing now, before any words arrive (modern)
+  const latestTool = activeToolCalls && activeToolCalls.size > 0 ? Array.from(activeToolCalls.values()).pop() : undefined;
+  const liveLabel = latestTool
+    ? t("chat.activity.running", { tool: latestTool.displayName || formatToolName(latestTool.name) })
+    : t("chat.activity.working");
+
   const loadEarlier = () => {
     const container = containerRef.current;
     anchor.current = container ? { top: container.scrollTop, height: container.scrollHeight } : null;
@@ -340,7 +393,7 @@ export function ChatMessageList({
       <div aria-live="assertive" aria-atomic="true" className="sr-only">
         {announcement}
       </div>
-      <div className="max-w-3xl mx-auto">
+      <div className={cn("max-w-3xl mx-auto", modern && "px-1 py-4 sm:px-3")}>
         {hasEarlier && onLoadEarlier && (
           <div className="flex justify-center px-4 pt-4">
             <button type="button" className={SECONDARY_BUTTON} disabled={isLoadingEarlier} onClick={loadEarlier}>
@@ -349,37 +402,19 @@ export function ChatMessageList({
           </div>
         )}
         {/* A stored message always shows what was stored; the turn being streamed is drawn below, never in one of them */}
-        {messages.map((message, index) => (
-          <React.Fragment key={message.id}>
-          {answerModels.get(message.id)?.switched && answerModels.get(message.id)?.label && (
-            <div role="separator" aria-label={t("chat.model.switched", { model: answerModels.get(message.id)!.label! })} className="mx-4 my-2 flex items-center gap-3 text-xs text-chat-text-tertiary">
-              <span className="h-px flex-1 bg-chat-border-primary" />
-              <span>{t("chat.model.switched", { model: answerModels.get(message.id)!.label! })}</span>
-              <span className="h-px flex-1 bg-chat-border-primary" />
-            </div>
-          )}
-          <ChatMessage
-            message={message}
-            aiLabel={aiLabel}
-            {...toolbarFor(message, index)}
-            renderActions={renderActions}
-            renderAvatar={renderAvatar}
-            showAvatar={showAvatars}
-            showTimestamp={showTimestamps}
-            enableCitations={enableCitations}
-            actions={cardActions}
-            renderImage={renderImage}
-            renderStopNotice={renderStopNotice}
-            resolveFileUrl={resolveFileUrl}
-            showReasoning={showReasoning}
-          />
-          {showAnsweredWith && answerModels.get(message.id)?.label && (
-            <p className={cn("-mt-4 mb-6 px-4 text-xs text-chat-text-tertiary", showAvatars && "pl-16")}>
-              {t("chat.model.answeredWith", { model: answerModels.get(message.id)!.label! })}
-            </p>
-          )}
-          </React.Fragment>
-        ))}
+        {modern
+          ? blocks.map((block) =>
+              block.kind === "message" ? (
+                messageRow(block.message, block.index)
+              ) : block.kind === "activity" ? (
+                <TurnActivity key={block.key} items={block.items} durationMs={block.durationMs} className="px-4 pt-3" />
+              ) : (
+                <div key={`cards:${block.message.id}`} data-chat-message-id={block.message.id} className="px-4">
+                  <MessageActionCards message={block.message} config={cardActions} openOnly className="mt-2" />
+                </div>
+              )
+            )
+          : messages.map((message, index) => messageRow(message, index))}
 
         {/* The run that was answering the last message was cut off before it wrote anything */}
         {interrupted && !isStreaming && messages.length > 0 && messages[messages.length - 1].role === "user" && (
@@ -388,7 +423,7 @@ export function ChatMessageList({
             message={messages[messages.length - 1]}
             onRetry={onRetryInterrupted}
             render={renderStopNotice}
-            className={cn("mx-4 mb-6", showAvatars && "ml-16")}
+            className={cn("mx-4 mb-6", showAvatars && !modern && "ml-16")}
           />
         )}
 
@@ -415,8 +450,22 @@ export function ChatMessageList({
           />
         )}
 
+        {/* Modern: one live line - the reasoning as it arrives, or what runs now */}
+        {modern && isStreaming && !streamingText && (
+          <div className="space-y-2 px-4 py-3 animate-fade-in">
+            {showReasoning && streamingReasoning && <ThinkingBlock reasoning={streamingReasoning} streaming />}
+            {(latestTool || !(showReasoning && streamingReasoning)) && (
+              <div role="status" className="inline-flex items-center gap-2 text-sm text-chat-text-secondary">
+                <LoadingIcon className="h-4 w-4 animate-spin text-chat-text-tertiary motion-reduce:animate-none" />
+                <span>{liveLabel}</span>
+              </div>
+            )}
+            {progressMessage && <div className="text-xs text-chat-text-tertiary">{progressMessage}</div>}
+          </div>
+        )}
+
         {/* Thinking / loading indicator when streaming but no text yet */}
-        {isStreaming && !streamingText && (
+        {!modern && isStreaming && !streamingText && (
           <div className="flex gap-4 px-4 py-6 bg-chat-bg-secondary animate-fade-in">
             {showAvatars && (
               <div className="flex-shrink-0">

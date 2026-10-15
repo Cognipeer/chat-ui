@@ -19,6 +19,7 @@ import { MessageToolbar, type MessageToolbarConfig } from "./MessageToolbar";
 import { MessageEditor } from "./MessageEditor";
 import { MessageStopNotice, MessageWarnings } from "./StopNotice";
 import { useI18n } from "../../hooks";
+import { useAppearance } from "./appearance";
 
 /** What `renderImage` receives for an image in a message. */
 export interface ImageRenderProps {
@@ -78,6 +79,11 @@ export interface ChatMessageProps {
   onSaveEdit?: (content: string) => Promise<boolean> | boolean | void;
   /** Label this message as AI-generated with this text (assistant messages only) */
   aiLabel?: string;
+  /**
+   * The message list shows this message's reasoning, tool calls and answered cards in a "worked for ..."
+   * line above it (`appearance="modern"`): the message itself shows only what is still open.
+   */
+  hideActivity?: boolean;
 }
 
 /**
@@ -102,7 +108,9 @@ export function ChatMessage({
   toolbar,
   onSaveEdit,
   aiLabel,
+  hideActivity = false,
 }: ChatMessageProps) {
+  const modern = useAppearance() === "modern";
   const [editing, setEditing] = React.useState(false);
   const isUser = message.role === "user";
   const isAssistant = message.role === "assistant";
@@ -130,17 +138,33 @@ export function ChatMessage({
   // A turn that only paused for a tool of the host page has nothing to show: the page answers it unseen
   if (isAssistant && !isStreaming && isHostToolPauseOnly(message, content, images.length)) return null;
 
+  const markdown = (
+    <div className="chat-markdown">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={markdownComponents}
+        urlTransform={citationUrlTransform}
+      >
+        {renderedContent}
+      </ReactMarkdown>
+      {isStreaming && <StreamingCursor />}
+    </div>
+  );
+
   return (
     <div
       data-chat-message-id={message.id}
+      data-chat-role={message.role}
       className={cn(
-        "group flex gap-4 px-4 py-6 animate-fade-in",
-        isUser ? "bg-transparent" : "bg-chat-bg-secondary",
+        "group animate-fade-in",
+        modern
+          ? cn("px-4", isUser ? "flex flex-col items-end py-2" : "py-3")
+          : cn("flex gap-4 px-4 py-6", isUser ? "bg-transparent" : "bg-chat-bg-secondary"),
         className
       )}
     >
       {/* Avatar */}
-      {showAvatar && (
+      {showAvatar && !modern && (
         <div className="flex-shrink-0">
           {renderAvatar ? (
             renderAvatar(message.role)
@@ -151,9 +175,15 @@ export function ChatMessage({
       )}
 
       {/* Content */}
-      <div className="flex-1 min-w-0 space-y-2">
+      <div
+        className={cn(
+          "min-w-0 space-y-2",
+          modern && isUser ? "flex max-w-[85%] flex-col items-end" : "flex-1",
+          modern && isUser && editing && "w-full max-w-full"
+        )}
+      >
         {/* Tool calls from completed messages — shown above the text */}
-        {isAssistant && !isStreaming && hasToolCalls(message) && (
+        {isAssistant && !isStreaming && !hideActivity && hasToolCalls(message) && (
           <MessageToolCalls message={message} />
         )}
 
@@ -170,21 +200,18 @@ export function ChatMessage({
           />
         )}
 
-        {reasoning && <ThinkingBlock reasoning={reasoning} streaming={isStreaming} answering={content.trim().length > 0} className="mb-3" />}
+        {reasoning && !hideActivity && <ThinkingBlock reasoning={reasoning} streaming={isStreaming} answering={content.trim().length > 0} className="mb-3" />}
 
         {/* Message content (a turn that only paused for an answer has none) */}
-        {!(isUser && editing) && (renderedContent || isStreaming || !isAssistant || !message.pendingActions?.length) && (
-          <div className="chat-markdown">
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              components={markdownComponents}
-              urlTransform={citationUrlTransform}
-            >
-              {renderedContent}
-            </ReactMarkdown>
-            {isStreaming && <StreamingCursor />}
-          </div>
-        )}
+        {!(isUser && editing) && (renderedContent || isStreaming || !isAssistant || !message.pendingActions?.length) &&
+          (modern && isUser ? (
+            // the person's own words: a bubble on the right
+            <div data-chat-bubble className="max-w-full rounded-3xl bg-chat-bg-tertiary px-4 py-2.5 text-chat-text-primary">
+              {markdown}
+            </div>
+          ) : modern && hideActivity && !renderedContent.trim() && !isStreaming ? null : (
+            markdown
+          ))}
 
         {/* Images that are part of the content */}
         {images.length > 0 && <MessageImages images={images} renderImage={renderImage} />}
@@ -195,7 +222,7 @@ export function ChatMessage({
         )}
 
         {/* Approvals and questions the assistant is waiting on */}
-        {isAssistant && !isStreaming && <MessageActionCards message={message} config={actions} />}
+        {isAssistant && !isStreaming && <MessageActionCards message={message} config={actions} openOnly={hideActivity} />}
 
         {/* File attachments */}
         {message.files && message.files.length > 0 && (
@@ -779,7 +806,7 @@ function formatTime(date: Date): string {
 }
 
 /** The tool calls a completed message stored (`metadata.toolCallDetails`) */
-function storedToolCalls(message: Message): ToolCallRow[] {
+export function storedToolCalls(message: Message): ToolCallRow[] {
   const details = (message.metadata as Record<string, unknown> | undefined)?.toolCallDetails;
   return Array.isArray(details) ? (details as ToolCallRow[]) : [];
 }

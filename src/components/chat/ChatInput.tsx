@@ -3,8 +3,9 @@
 import React, { useState, useRef, useCallback, useEffect, useImperativeHandle, forwardRef, KeyboardEvent, ChangeEvent, ClipboardEvent, DragEvent } from "react";
 import { cn, formatFileSize, isImageType, safeImageSrc } from "../../utils";
 import type { ComposerState, FileAttachment } from "../../types";
-import { SendIcon, PaperclipIcon, XIcon, StopIcon, FileIcon, ImageIcon, LoadingIcon, CheckIcon, RefreshIcon } from "./Icons";
+import { SendIcon, PaperclipIcon, PlusIcon, XIcon, StopIcon, FileIcon, ImageIcon, LoadingIcon, CheckIcon, RefreshIcon } from "./Icons";
 import { useI18n } from "../../hooks";
+import { useAppearance } from "./appearance";
 
 export interface ChatInputHandle {
   /** Programmatically focus the textarea */
@@ -132,6 +133,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   state,
 }, ref) {
   const { t } = useI18n();
+  const modern = useAppearance() === "modern";
   const [value, setValue] = useState("");
   const [dragging, setDragging] = useState(false);
   const dragDepth = useRef(0);
@@ -150,7 +152,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
           ? t("chat.input.budgetPlaceholder")
           : mode === "readonly"
             ? t("chat.input.readOnlyPlaceholder")
-            : placeholder ?? t("chat.input.placeholder");
+            : placeholder ?? (modern ? t("chat.input.placeholderModern") : t("chat.input.placeholder"));
   // The usage-limit banner explains itself; every other state says what it is in a line above the box
   const pendingNotice =
     mode === "blocked"
@@ -331,7 +333,11 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
 
   return (
     <div
-      className={cn("relative border-t border-chat-border-primary bg-chat-bg-primary p-4", className)}
+      className={cn(
+        "relative bg-chat-bg-primary",
+        modern ? "px-4 pb-3 pt-2" : "border-t border-chat-border-primary p-4",
+        className
+      )}
       onDragEnter={handleDragEnter}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
@@ -479,7 +485,14 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
         )}
 
         {/* Input area */}
-        <div className="relative flex items-end gap-2 bg-chat-bg-tertiary rounded-2xl border border-chat-border-primary focus-within:border-chat-text-tertiary transition-colors">
+        <div
+          className={cn(
+            "relative flex items-end transition-colors focus-within:border-chat-text-tertiary",
+            modern
+              ? "gap-1 rounded-[26px] border border-chat-border-primary bg-chat-bg-primary p-2 shadow-[0_1px_2px_rgba(0,0,0,0.05),0_6px_20px_rgba(0,0,0,0.06)]"
+              : "gap-2 bg-chat-bg-tertiary rounded-2xl border border-chat-border-primary"
+          )}
+        >
           {/* File upload button */}
           {enableFileUpload && onFilesAdd && (
             <>
@@ -498,13 +511,14 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
                 onClick={handleFileSelect}
                 disabled={attachDisabled}
                 className={cn(
-                  "flex-shrink-0 p-3 text-chat-text-secondary hover:text-chat-text-primary transition-colors",
+                  "flex-shrink-0 text-chat-text-secondary hover:text-chat-text-primary transition-colors",
+                  modern ? "flex h-9 w-9 items-center justify-center rounded-full hover:bg-chat-bg-hover" : "p-3",
                   attachDisabled && "opacity-50 cursor-not-allowed"
                 )}
                 title={t("chat.input.attachFiles")}
                 aria-label={t("chat.input.attachFiles")}
               >
-                <PaperclipIcon className="w-5 h-5" />
+                {modern ? <PlusIcon className="w-[18px] h-[18px]" /> : <PaperclipIcon className="w-5 h-5" />}
               </button>
             </>
           )}
@@ -520,14 +534,16 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
             aria-label={t("chat.input.label")}
             disabled={disabled || blocked}
             rows={1}
+            data-chat-composer-input
             className={cn(
-              "flex-1 bg-transparent border-none outline-none resize-none py-3 text-chat-text-primary placeholder:text-chat-text-tertiary",
-              !enableFileUpload && "pl-4"
+              "flex-1 bg-transparent border-none outline-none resize-none text-chat-text-primary placeholder:text-chat-text-tertiary",
+              modern ? "min-h-[36px] px-2 py-[7px] text-[15px] leading-[22px]" : "py-3",
+              !enableFileUpload && (modern ? "pl-3" : "pl-4")
             )}
           />
 
           {/* Send/Stop button */}
-          <div className="flex flex-shrink-0 items-center gap-2 p-2">
+          <div className={cn("flex flex-shrink-0 items-center", modern ? "gap-1" : "gap-2 p-2")}>
             {modelPicker}
             {isLoading && onStop ? (
               renderStopButton ? (
@@ -536,7 +552,10 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
                 <button
                   type="button"
                   onClick={onStop}
-                  className="p-2 bg-chat-text-secondary hover:bg-chat-text-primary text-chat-bg-primary rounded-lg transition-colors"
+                  className={cn(
+                    "bg-chat-text-secondary hover:bg-chat-text-primary text-chat-bg-primary transition-colors",
+                    modern ? "flex h-9 w-9 items-center justify-center rounded-full" : "p-2 rounded-lg"
+                  )}
                   title={t("chat.input.stop")}
                   aria-label={t("chat.input.stop")}
                 >
@@ -551,7 +570,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
                 onClick={handleSend}
                 disabled={!canSend}
                 className={cn(
-                  "p-2 rounded-lg transition-colors",
+                  "transition-colors",
+                  modern ? "flex h-9 w-9 items-center justify-center rounded-full" : "p-2 rounded-lg",
                   canSend
                     ? "bg-chat-text-primary text-chat-bg-primary hover:bg-chat-text-secondary"
                     : "bg-chat-bg-hover text-chat-text-tertiary cursor-not-allowed"
@@ -559,21 +579,42 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
                 title={t("chat.input.send")}
                 aria-label={t("chat.input.send")}
               >
-                <SendIcon className="w-4 h-4" />
+                {modern ? <ArrowUpIcon className="w-[18px] h-[18px]" /> : <SendIcon className="w-4 h-4" />}
               </button>
             )}
           </div>
         </div>
 
         {/* Helper text */}
-        <div className="text-center mt-2 text-xs text-chat-text-tertiary">
-          {t("chat.input.helper")}
-          {retentionDays !== undefined && retentionDays > 0 && enableFileUpload && onFilesAdd
-            ? ` · ${t("chat.input.fileRetention", { days: retentionDays })}`
-            : ""}
-        </div>
-        {footer}
+        {modern ? (
+          // One quiet line: how long files are kept, then the host's notice and links (Enter to send goes without saying)
+          <div className="mt-2 flex flex-wrap items-center justify-center gap-x-3 text-xs text-chat-text-tertiary [&_[data-chat-legal]]:mt-0">
+            {retentionDays !== undefined && retentionDays > 0 && enableFileUpload && onFilesAdd ? (
+              <span>{t("chat.input.fileRetention", { days: retentionDays })}</span>
+            ) : null}
+            {footer}
+          </div>
+        ) : (
+          <>
+            <div className="text-center mt-2 text-xs text-chat-text-tertiary">
+              {t("chat.input.helper")}
+              {retentionDays !== undefined && retentionDays > 0 && enableFileUpload && onFilesAdd
+                ? ` · ${t("chat.input.fileRetention", { days: retentionDays })}`
+                : ""}
+            </div>
+            {footer}
+          </>
+        )}
       </div>
     </div>
   );
 });
+
+function ArrowUpIcon({ className }: { className?: string }) {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="M12 19V5" />
+      <path d="m5 12 7-7 7 7" />
+    </svg>
+  );
+}
