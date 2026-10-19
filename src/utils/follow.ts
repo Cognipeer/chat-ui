@@ -22,7 +22,7 @@ export interface FollowState {
   /** The assistant message the turn wrote, once it did */
   messageId?: string;
   /** The user message of the followed turn, when its `user.message` (or the reattach snapshot) was in the part we saw */
-  userMessage?: { id: string; content: string; files?: FileAttachment[] };
+  userMessage?: { id: string; content: string; files?: FileAttachment[]; origin?: string; reminderMessage?: string };
   /**
    * The run a reattach snapshot (`agent.message.snapshot`) seeded the text from, when it named one.
    * Its own `session.status_running`, replayed after the snapshot, must not wipe that text.
@@ -49,6 +49,16 @@ const runIdOf = (event: ConversationEvent, data: Record<string, unknown>): strin
   asString(event.runId) ?? asString(data.run_id) ?? asString(data.runId);
 const asRecord = (value: unknown): Record<string, unknown> =>
   value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+
+/** `origin: 'reminder'` (and what it was about) on a `user.message` / snapshot user message, flat or in `metadata`. */
+function originOf(data: Record<string, unknown>): { origin?: string; reminderMessage?: string } {
+  const meta = asRecord(data.metadata);
+  const origin = asString(data.origin) ?? asString(meta.origin);
+  if (!origin) return {};
+  const reminder = asRecord(data.reminder ?? meta.reminder);
+  const reminderMessage = asString(reminder.message);
+  return { origin, ...(reminderMessage ? { reminderMessage } : {}) };
+}
 
 function filesOf(value: unknown): FileAttachment[] | undefined {
   if (!Array.isArray(value)) return undefined;
@@ -106,7 +116,7 @@ export function applyFollowEvent(state: FollowState, event: ConversationEvent): 
         snapshotRunId: runIdOf(event, data) ?? base.snapshotRunId,
         seeded: true,
         idle: undefined,
-        ...(userId ? { userMessage: { id: userId, content: asString(user.content) ?? "", files: filesOf(user.files) } } : {}),
+        ...(userId ? { userMessage: { id: userId, content: asString(user.content) ?? "", files: filesOf(user.files), ...originOf(user) } } : {}),
       };
     }
 
@@ -115,7 +125,7 @@ export function applyFollowEvent(state: FollowState, event: ConversationEvent): 
       if (!id) return base;
       return {
         ...base,
-        userMessage: { id, content: asString(data.content) ?? "", files: filesOf(data.files) },
+        userMessage: { id, content: asString(data.content) ?? "", files: filesOf(data.files), ...originOf(data) },
       };
     }
 

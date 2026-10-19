@@ -4,6 +4,16 @@ All notable changes to Chat UI will be documented here.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-19
+
+### Added
+
+- Agent reminders (Console agents that set a one-shot reminder for themselves). Everything below stays hidden unless the agent reports `capabilities.reminders: true` (new `AgentCapabilities.reminders`); standalone `@cognipeer/agent-server` is unchanged.
+  - The conversation (and its history item) may carry `reminders: { id, fireAt, message }[]` (new type `ConversationReminder`; the wire's `fire_at` is epoch seconds). While the open conversation is idle and has a reminder, `useChat` keeps a passive `followEvents(id, { types: ['session.status_running'] })` open; when the reminder fires, the turn it starts streams in like any followed turn (and raises the existing background alerts). A transport without `followEvents` falls back to refreshing every 30 s while the tab is visible and a reminder is due within 2 minutes or overdue.
+  - A user message with `metadata.origin === 'reminder'` renders as a small gray card (clock icon, "Reminder · time", `metadata.reminder.message`) instead of a user bubble (`ReminderNote`; helpers `isReminderMessage`, `reminderMessageOf`).
+  - A gray line above the composer, "Will check back at <time>" (`(+n)` for more), with a Cancel button (`ReminderStrip`) that calls the new optional `ChatTransport.cancelReminder(conversationId, reminderId)` (`AgentServerClient`: `DELETE /conversations/:id/reminders/:reminderId`). A small gray clock marks conversations with reminders in the sidebar.
+  - `useChat` takes `remindersEnabled` and returns `reminders`, `canCancelReminder`, `cancelReminder`. English and Turkish strings `chat.reminder.*` and `chat.history.reminder`.
+
 ## [0.10.0] - 2026-10-15
 
 ### Added

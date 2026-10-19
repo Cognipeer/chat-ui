@@ -3,6 +3,8 @@
 import React, { useRef, useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { cn, collectPendingActions, messageText, modelLabel, modelOfMessage, readFeedback } from "../../utils";
 import type { AgentModelOption, FeedbackInput, Message, MessageActionProps, StopNoticeRenderProps } from "../../types";
+import { ReminderNote } from "./ReminderNote";
+import { isReminderMessage } from "../../utils/reminders";
 import { ChatMessage, type ImageRenderProps, type ResolveFileUrl } from "./ChatMessage";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { ToolCalls, formatToolName } from "./ToolCall";
@@ -329,6 +331,9 @@ export function ChatMessageList({
             <span className="h-px flex-1 bg-chat-border-primary" />
           </div>
         )}
+        {isReminderMessage(message) ? (
+          <ReminderNote message={message} />
+        ) : (
         <ChatMessage
           message={message}
           aiLabel={aiLabel}
@@ -345,6 +350,7 @@ export function ChatMessageList({
           showReasoning={showReasoning}
           hideActivity={modern && message.role === "assistant"}
         />
+        )}
         {showAnsweredWith && model?.label && (
           <p className={cn("px-4 text-xs text-chat-text-tertiary", modern ? "-mt-2 mb-3" : cn("-mt-4 mb-6", showAvatars && "pl-16"))}>
             {t("chat.model.answeredWith", { model: model.label })}

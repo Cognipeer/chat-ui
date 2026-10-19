@@ -24,6 +24,7 @@
 | Reattach to a running turn (`followEvents`) | yes | | | | |
 | Stop on the server (`cancel`) | yes | | no (abort only) | `POST .../responses/<id>/cancel` | `tasks/cancel` |
 | Usage limit (`updateBudget`, `continueConversation`) | yes | | | | |
+| Cancel a reminder (`cancelReminder`) | yes (Console portal) | | | | |
 | Stop reason on an answer | yes | cancelled | | limit, cancelled | limit |
 | Files stored ahead (`uploadFile`, raw body, progress) | yes | | | | |
 | Count of files in a conversation (`listFiles`), signed file URLs (`getFileUrl`) | yes | | | | |
@@ -152,4 +153,4 @@ Implement `ChatTransport`, or extend `StatelessTransport` and implement `run()`:
 
 `run()` may return `pendingActions` (the turn stopped for a person), `stopReason` / `stopDetail` and `status`. To take answers, also implement `resolve(input)` (and `canResolve()` when that depends on your options): it is handed the action, the others of the same pause that still wait and the person's resolution, and returns what the agent did next. The base class keeps the paused message, records how each card ended and adds the continuation as a new message; `resolveAction` exists on the transport only when `canResolve()` is true, so the chat shows read-only cards otherwise.
 
-A transport of your own can add the run methods too: `followEvents`, `cancel`, `continueConversation`, `updateBudget`, `listFiles`, `getFileUrl`, and `uploadFile` with `supportsRawUpload`. They are all optional.
+A transport of your own can add the run methods too: `followEvents`, `cancel`, `cancelReminder`, `continueConversation`, `updateBudget`, `listFiles`, `getFileUrl`, and `uploadFile` with `supportsRawUpload`. They are all optional.

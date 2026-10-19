@@ -309,6 +309,15 @@ export interface ActionState {
 // Conversation Types
 // ============================================================================
 
+/** A one-shot reminder the agent set for itself: it starts a new turn in the conversation when due. */
+export interface ConversationReminder {
+  id: string;
+  /** When it fires, epoch milliseconds (the wire carries `fire_at` in epoch seconds) */
+  fireAt: number;
+  /** What the agent will check back on */
+  message: string;
+}
+
 export interface Conversation {
   id: string;
   agentId: string;
@@ -322,6 +331,8 @@ export interface Conversation {
   runtime?: ConversationRuntime;
   /** The spend limit of the conversation, when it has one; `null`: removed on purpose */
   budget?: ConversationBudget | null;
+  /** Scheduled reminders (portal / console servers whose agent reports `capabilities.reminders`) */
+  reminders?: ConversationReminder[];
   /** What the conversation's turns have cost so far, in USD */
   spentUsd?: number;
   /**
@@ -345,6 +356,8 @@ export interface ConversationListItem {
   runtime?: ConversationRuntime;
   budget?: ConversationBudget | null;
   spentUsd?: number;
+  /** Scheduled reminders of the conversation, when the server has them */
+  reminders?: ConversationReminder[];
   /** Pinned conversations are listed first (`metadata.pinned` on the server) */
   pinned?: boolean;
   metadata?: Record<string, unknown>;
@@ -459,6 +472,8 @@ export interface AgentAttachmentsCapability {
 }
 
 export interface AgentCapabilities {
+  /** The agent can set reminders for itself; the UI shows them and lets a person cancel them */
+  reminders?: boolean;
   toolApproval?: boolean;
   askUser?: boolean;
   /** The approval card may edit a call's arguments (overrides `allowArgumentEdit`) */

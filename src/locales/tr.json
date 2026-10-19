@@ -398,5 +398,12 @@
   "chat.agents.search": "Ajan ara",
   "chat.agents.noMatch": "Aramana uyan ajan yok",
   "chat.agents.label": "Ajanlar",
-  "chat.input.placeholderModern": "Bir şey sor"
+  "chat.input.placeholderModern": "Bir şey sor",
+  "chat.reminder.label": "Hatırlatma",
+  "chat.reminder.labelAt": "Hatırlatma · {time}",
+  "chat.reminder.next": "{time} civarında tekrar bakacak",
+  "chat.reminder.more": "(+{count})",
+  "chat.reminder.cancel": "İptal",
+  "chat.reminder.cancelLabel": "Bu hatırlatmayı iptal et",
+  "chat.history.reminder": "{time} civarında tekrar bakacak"
 }

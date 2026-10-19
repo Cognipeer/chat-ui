@@ -117,6 +117,7 @@ await client.followEvents(conversationId, {
 });
 
 // Carry on a turn the usage limit stopped (POST /conversations/:id/continue)
+await client.cancelReminder(conversationId, reminderId);                 // DELETE /conversations/:id/reminders/:rid
 await client.continueConversation(conversationId, { stream: true, callbacks: { onText, onDone } });
 const reply = await client.continueConversation(conversationId);            // JSON
 

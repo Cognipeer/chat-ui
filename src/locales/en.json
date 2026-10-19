@@ -398,5 +398,12 @@
   "chat.agents.search": "Search agents",
   "chat.agents.noMatch": "No agents match your search",
   "chat.agents.label": "Agents",
-  "chat.input.placeholderModern": "Ask anything"
+  "chat.input.placeholderModern": "Ask anything",
+  "chat.reminder.label": "Reminder",
+  "chat.reminder.labelAt": "Reminder · {time}",
+  "chat.reminder.next": "Will check back at {time}",
+  "chat.reminder.more": "(+{count})",
+  "chat.reminder.cancel": "Cancel",
+  "chat.reminder.cancelLabel": "Cancel this reminder",
+  "chat.history.reminder": "Will check back at {time}"
 }

@@ -242,6 +242,7 @@ interface AgentInfo {
     toolApproval?: boolean;
     askUser?: boolean;
     approvalArgsEdit?: boolean; // the approval card may edit arguments
+    reminders?: boolean;        // the agent can set reminders: shows the strip, the sidebar clock, watches for a firing
     acceptsImages?: boolean;    // the older place for attachments.acceptsImages
     attachments?: {             // what agent-server reports; wins over `metadata`
       enabled?: boolean;        // false hides the paperclip

@@ -1,9 +1,9 @@
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { cn, formatRelativeTime, isBudgetExhausted, isPinned, pinnedFirst } from "../../utils";
+import { cn, formatReminderTime, formatRelativeTime, isBudgetExhausted, isPinned, nextReminder, pinnedFirst } from "../../utils";
 import type { AgentInfo, ChatAccount, ChatBrand, ConversationListItem, ConversationSearchMode, RuntimeStatus } from "../../types";
-import { ChatIcon, TrashIcon, PlusIcon, SearchIcon, XIcon, PencilIcon, PinIcon, ListCheckIcon, ChevronDownIcon } from "./Icons";
+import { ChatIcon, TrashIcon, PlusIcon, SearchIcon, XIcon, PencilIcon, PinIcon, ListCheckIcon, ChevronDownIcon, ClockIcon } from "./Icons";
 import { useI18n } from "../../hooks";
 import { FOCUS_RING, PRIMARY_BUTTON, SECONDARY_BUTTON } from "./styles";
 import { AgentBadge, useAppearance } from "./appearance";
@@ -145,6 +145,11 @@ const BADGE_TONE: Record<BadgeKind, string> = {
   waiting: "bg-chat-warning-bg text-chat-warning",
   budgetPaused: "bg-chat-danger-bg text-chat-danger",
 };
+
+/** The reminder of a history item that fires first. */
+function nextReminderOf(conversation: ConversationListItem) {
+  return nextReminder(conversation.reminders)?.next;
+}
 
 /** The badge a conversation earns, or undefined for one that is idle. */
 function badgeFor(status: RuntimeStatus | undefined, exhausted: boolean): BadgeKind | undefined {
@@ -785,7 +790,7 @@ function ConversationItem({
   badge,
   highlight,
 }: ConversationItemProps) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const modern = useAppearance() === "modern";
   const title = conversation.title || t("chat.history.newChat");
   const pinned = isPinned(conversation);
@@ -821,6 +826,16 @@ function ConversationItem({
           <span className="flex-shrink-0">{formatRelativeTime(new Date(conversation.updatedAt))}</span>
         </span>
       </span>
+      {nextReminderOf(conversation) && (
+        <span
+          data-chat-reminder-icon
+          title={t("chat.history.reminder", { time: formatReminderTime(nextReminderOf(conversation)!.fireAt, locale) })}
+          className="inline-flex flex-shrink-0 text-chat-text-tertiary"
+        >
+          <ClockIcon className="h-3.5 w-3.5" />
+          <span className="sr-only">{t("chat.history.reminder", { time: formatReminderTime(nextReminderOf(conversation)!.fireAt, locale) })}</span>
+        </span>
+      )}
       {badge && (
         <span
           data-chat-status={badge}

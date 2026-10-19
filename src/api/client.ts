@@ -43,6 +43,7 @@ import {
   type HttpOptions,
 } from "./http";
 import { normalizeBudget, normalizeMessagesPage, normalizeRuntime, readContinuable } from "../utils/runtime";
+import { normalizeReminders } from "../utils/reminders";
 import { fileFromRecord, uploadMimeType } from "../utils/files";
 import { normalizeFeedback } from "../utils/experience";
 import { filenameFromDisposition, exportFilename } from "../utils/export";
@@ -233,8 +234,10 @@ export class AgentServerClient implements ChatTransport {
     return {
       ...page,
       conversations: (page.conversations ?? []).map((item) => {
-        const { runtime: rawRuntime, ...rest } = item;
+        const { runtime: rawRuntime, reminders: rawReminders, ...rest } = item;
         const runtime = normalizeRuntime(rawRuntime);
+        const reminders = normalizeReminders(rawReminders);
+        if (reminders) (rest as ConversationListItem).reminders = reminders;
         // `metadata.pinned` is how the server stores a pin; the list item carries it as `pinned`
         const pinned = rest.pinned === true || rest.metadata?.pinned === true;
         const normalized = pinned ? { ...rest, pinned: true } : rest;
@@ -362,7 +365,8 @@ export class AgentServerClient implements ChatTransport {
     id: string,
     beside?: boolean
   ): Conversation {
-    const { runtime: rawRuntime, budget: rawBudget, continuable: ownContinuable, ...rest } = (raw.conversation ?? raw) as Partial<Conversation>;
+    const { runtime: rawRuntime, budget: rawBudget, continuable: ownContinuable, reminders: rawReminders, ...rest } = (raw.conversation ?? raw) as Partial<Conversation>;
+    const reminders = normalizeReminders(rawReminders);
     const runtime = normalizeRuntime(rawRuntime);
     const budget = rawBudget === undefined ? undefined : normalizeBudget(rawBudget);
     const continuable = readContinuable(ownContinuable, raw.conversation ? raw.continuable : undefined, beside, rawRuntime);
@@ -371,8 +375,18 @@ export class AgentServerClient implements ChatTransport {
       id: rest.id ?? id,
       ...(runtime ? { runtime } : {}),
       ...(budget !== undefined ? { budget } : {}),
+      // always present once the server speaks reminders, so a fired / cancelled one clears the strip
+      ...(rawReminders !== undefined ? { reminders: reminders ?? [] } : {}),
       ...(continuable !== undefined ? { continuable } : {}),
     };
+  }
+
+  /** Cancel a scheduled reminder (`DELETE /conversations/:id/reminders/:reminderId`). */
+  async cancelReminder(conversationId: string, reminderId: string): Promise<{ reminder?: unknown }> {
+    return this.request(
+      "DELETE",
+      `/conversations/${encodeURIComponent(conversationId)}/reminders/${encodeURIComponent(reminderId)}`
+    );
   }
 
   async deleteConversation(conversationId: string): Promise<void> {

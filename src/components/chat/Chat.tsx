@@ -60,6 +60,7 @@ import type { ChatActionsConfig } from "./ActionCards";
 import { ChatInput } from "./ChatInput";
 import type { ChatInputHandle } from "./ChatInput";
 import { ChatHistory } from "./ChatHistory";
+import { ReminderStrip } from "./ReminderStrip";
 import { BudgetBanner, type BudgetBannerProps } from "./BudgetBanner";
 import { MenuIcon, ChevronDownIcon } from "./Icons";
 import { AgentBadge, ChatAppearanceProvider, type ChatAppearance } from "./appearance";
@@ -542,6 +543,7 @@ function ChatContent({
     baseUrl,
     transport,
     agentId: effectiveAgentId,
+    remindersEnabled: selectedAgent?.capabilities?.reminders === true,
     authorization,
     headers,
     getHeaders,
@@ -1114,6 +1116,15 @@ function ChatContent({
             <div className="px-4 pt-2">
               <div className="max-w-3xl mx-auto">
                 {renderBudgetBanner ? renderBudgetBanner(budgetBannerProps) : <BudgetBanner {...budgetBannerProps} />}
+              </div>
+            </div>
+          )}
+
+          {/* When the agent will check back (only for an agent that has reminders) */}
+          {chat.reminders.length > 0 && (
+            <div className="px-4 pt-2">
+              <div className="max-w-3xl mx-auto">
+                <ReminderStrip reminders={chat.reminders} onCancel={chat.canCancelReminder ? chat.cancelReminder : undefined} />
               </div>
             </div>
           )}
