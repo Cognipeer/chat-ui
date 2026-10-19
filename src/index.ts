@@ -155,6 +155,7 @@ export type {
   FileAttachment,
   Conversation,
   ConversationListItem,
+  ConversationReminder,
   ConversationSearchMatch,
   ConversationSearchMode,
   AgentInfo,

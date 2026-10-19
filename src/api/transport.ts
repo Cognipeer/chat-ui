@@ -236,6 +236,13 @@ export interface ChatTransport {
   }): Promise<Conversation>;
 
   /**
+   * Cancel a scheduled reminder (`DELETE /conversations/:id/reminders/:reminderId`). Resolves
+   * with the reminder that was cancelled; 404 / 409 mean it is gone or already fired.
+   * Optional: without it the reminder strip has no Cancel button.
+   */
+  cancelReminder?(conversationId: string, reminderId: string): Promise<{ reminder?: unknown } | void>;
+
+  /**
    * Search the whole history on the server (`GET /conversations?q=`): titles and message text, newest
    * first, each hit with where it matched (`searchMatch`). Optional: without it the history filters
    * the titles it has loaded.

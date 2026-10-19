@@ -36,6 +36,9 @@ import {
   formatFileSize,
   type FollowState,
   type PendingActionEntry,
+  reminderWatchMode,
+  shouldPollReminders,
+  REMINDER_POLL_INTERVAL_MS,
 } from "../utils";
 import type {
   Message,
@@ -46,6 +49,7 @@ import type {
   ClientToolResult,
   ComposerState,
   Conversation,
+  ConversationReminder,
   ConversationBudget,
   FeedbackInput,
   MessageFeedback,
@@ -68,6 +72,11 @@ import {
 import { useI18n } from "./useI18n";
 
 export interface UseChatOptions extends ChatConfig, ChatCallbacks {
+  /**
+   * The agent reports `capabilities.reminders`: an idle conversation with scheduled reminders is
+   * watched, so the turn a reminder starts streams in, and `cancelReminder` is offered.
+   */
+  remindersEnabled?: boolean;
   /** Initial conversation ID */
   conversationId?: string;
   /** Initial messages */
@@ -129,6 +138,12 @@ export interface UseChatReturn {
    * tool calls and cards arrive from the conversation's event log.
    */
   isFollowing: boolean;
+  /** Scheduled reminders of the open conversation (empty unless `remindersEnabled` and the server reports some) */
+  reminders: ConversationReminder[];
+  /** The transport can cancel a reminder */
+  canCancelReminder: boolean;
+  /** Cancel a reminder, then read the conversation's reminders again; resolves whether the server cancelled it */
+  cancelReminder: (reminderId: string) => Promise<boolean>;
   /** Current streaming text */
   streamingText: string;
   /** The model's reasoning for the turn being streamed (kept apart from `streamingText`) */
@@ -391,6 +406,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     onActionResolved,
     onActionRequired,
     onFeedback,
+    remindersEnabled = false,
   } = options;
 
   const [messages, setMessages] = useState<Message[]>(initialMessages);
@@ -1142,7 +1158,18 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       const user = state.userMessage;
       if (user && !messagesRef.current.some((m) => m.id === user.id)) {
         const at = new Date();
-        const added: Message = { id: user.id, conversationId, role: "user", content: user.content, files: user.files, createdAt: at, updatedAt: at };
+        const isReminder = user.origin === "reminder";
+        const added: Message = {
+          id: user.id,
+          conversationId,
+          role: "user",
+          // the stored content of a reminder turn is a framed note for the model: show what it was about
+          content: isReminder ? user.reminderMessage ?? "" : user.content,
+          files: user.files,
+          ...(isReminder ? { metadata: { origin: "reminder", reminder: { message: user.reminderMessage ?? "" } } } : {}),
+          createdAt: at,
+          updatedAt: at,
+        };
         // a snapshot and the `user.message` it stands for may both arrive before the next render
         setMessages((prev) => (prev.some((m) => m.id === added.id) ? prev : [...prev, added]));
       }
@@ -1255,6 +1282,112 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       setIsFollowing(false);
     }
   };
+
+  // ---------------------------------------------------------------------------
+  // Reminders
+  // ---------------------------------------------------------------------------
+
+  const reminders = remindersEnabled ? conversation?.reminders : undefined;
+  const conversationId = conversation?.id;
+  const remindersRef = useRef(reminders);
+  remindersRef.current = reminders;
+  const idleForReminders = !isStreaming && !isFollowing && !isLoadingConversation;
+
+  /** Reads the conversation's reminders again, leaving the messages alone. */
+  const syncReminders = useCallback(async (id: string, session: number) => {
+    const client = clientRef.current;
+    if (!client) return;
+    try {
+      const data = await client.getConversation(id);
+      if (sessionRef.current !== session || conversationRef.current?.id !== id) return;
+      const next = data.conversation?.reminders ?? [];
+      setConversation((prev) => (prev && prev.id === id ? { ...prev, reminders: next } : prev));
+    } catch {
+      // the strip keeps what it has
+    }
+  }, []);
+
+  // A turn the person just had may have set a reminder: look for it once it is over
+  const wasStreamingRef = useRef(false);
+  const wasFollowingRef = useRef(false);
+  useEffect(() => {
+    const ended = wasStreamingRef.current && !isStreaming && !wasFollowingRef.current;
+    wasStreamingRef.current = isStreaming;
+    wasFollowingRef.current = isFollowing;
+    if (ended && remindersEnabled && conversationId) void syncReminders(conversationId, sessionRef.current);
+  }, [isStreaming, isFollowing, remindersEnabled, conversationId, syncReminders]);
+
+  // Wait for a reminder to fire in the open, idle conversation. Whether anything is scheduled is the dependency,
+  // not the list itself: the effect must not restart on every refresh.
+  const hasReminders = Boolean(reminders && reminders.length > 0);
+  const canFollowEvents = typeof clientRef.current?.followEvents === "function";
+  const watch = reminderWatchMode({
+    capability: remindersEnabled,
+    reminders: hasReminders ? remindersRef.current : undefined,
+    idle: idleForReminders,
+    canFollow: canFollowEvents,
+  });
+  useEffect(() => {
+    const client = clientRef.current;
+    if (!client || !conversationId || watch === "none") return;
+    const session = sessionRef.current;
+    const controller = new AbortController();
+
+    if (watch === "stream" && client.followEvents) {
+      const after = conversationRef.current?.runtime?.lastEventSeq ?? 0;
+      void client
+        .followEvents(conversationId, {
+          after,
+          types: ["session.status_running"],
+          signal: controller.signal,
+          onEvent: (event) => {
+            if (event.type !== "session.status_running" || controller.signal.aborted) return;
+            controller.abort();
+            if (sessionRef.current !== session || followRef.current) return;
+            // the reminder turn is replayed from where the watch began, then streams like any followed turn
+            void followRunRef.current(conversationId, after, session);
+          },
+        })
+        .catch(() => {
+          // a watcher that cannot connect is not worth a banner; the next refresh looks again
+        });
+      return () => controller.abort();
+    }
+
+    const timer = setInterval(() => {
+      const visible = typeof document === "undefined" || document.visibilityState === "visible";
+      if (!shouldPollReminders(remindersRef.current, Date.now(), visible)) return;
+      void refreshConversation(conversationId, session);
+    }, REMINDER_POLL_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, [watch, conversationId, refreshConversation]);
+
+  const canCancelReminder = remindersEnabled && typeof clientRef.current?.cancelReminder === "function";
+  const cancelReminder = useCallback(
+    async (reminderId: string): Promise<boolean> => {
+      const client = clientRef.current;
+      const id = conversationRef.current?.id;
+      if (!client?.cancelReminder || !id) return false;
+      const session = sessionRef.current;
+      let cancelled = true;
+      try {
+        await client.cancelReminder(id, reminderId);
+      } catch (err) {
+        cancelled = false;
+        const status = (err as { status?: number } | null)?.status;
+        // gone (404) or already fired (409): the refresh below shows how it stands
+        if (status !== 404 && status !== 409) {
+          const shown = friendly(err instanceof Error ? err : new Error(String(err)));
+          setError(shown);
+          onError?.(shown);
+        }
+      }
+      await syncReminders(id, session);
+      return cancelled;
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [syncReminders]
+  );
 
   // ---------------------------------------------------------------------------
   // Files
@@ -2563,6 +2696,9 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     isStreaming: isStreaming || hostToolBusy,
     isLoadingConversation,
     isFollowing,
+    reminders: reminders ?? [],
+    canCancelReminder,
+    cancelReminder,
     streamingText,
     streamingReasoning,
     progressMessage,

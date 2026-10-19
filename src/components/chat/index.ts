@@ -18,6 +18,8 @@ export {
 export { BudgetBanner, type BudgetBannerProps } from "./BudgetBanner";
 export { MessageStopNotice, MessageWarnings, InterruptedNotice, type MessageStopNoticeProps, type InterruptedNoticeProps } from "./StopNotice";
 export * from "./Icons";
+export { ReminderNote, type ReminderNoteProps } from "./ReminderNote";
+export { ReminderStrip, type ReminderStripProps } from "./ReminderStrip";
 export { AnnouncementBanner, type AnnouncementBannerProps } from "./AnnouncementBanner";
 export { TermsGate, type TermsGateProps } from "./TermsGate";
 export { LegalFooter, type LegalFooterProps } from "./LegalFooter";

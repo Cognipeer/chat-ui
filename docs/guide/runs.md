@@ -158,3 +158,11 @@ One value says what the composer is doing: `useChat` returns `composerState`, an
 - [Usage limits](/guide/budgets)
 - [File uploads](/guide/file-uploads)
 - [Approvals and questions](/guide/approvals)
+
+## Reminders
+
+A Console agent can set a one-shot reminder for itself; when it fires, the server starts a new turn in the same conversation. The agent reports `capabilities.reminders: true`, and the conversation (`GET /conversations/:id`, and list items) carries `reminders: [{ id, fire_at, message }]` (`fire_at` in epoch seconds; `Conversation.reminders[].fireAt` is in milliseconds). Without the capability none of this is shown.
+
+- While the open conversation is idle and has a reminder, `useChat` follows `session.status_running` in the background (`followEvents` with `types: ['session.status_running']`). When it arrives, the turn streams in like any followed turn. A transport without `followEvents` refreshes the conversation every 30 seconds instead, only while the tab is visible and a reminder is due within two minutes or overdue.
+- The wake-up message is stored with `metadata: { origin: 'reminder', reminder: { message } }`; it renders as a small gray card showing `metadata.reminder.message`, not as a user bubble.
+- A gray line above the composer says when the agent will check back, with **Cancel** (`transport.cancelReminder(conversationId, reminderId)`; `DELETE /conversations/:id/reminders/:reminderId` answers 200 `{ reminder }`, 404 or 409 when it is gone or already fired). The sidebar marks conversations with reminders with a clock.
