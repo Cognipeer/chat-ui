@@ -1,10 +1,10 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render as rtlRender, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render as rtlRender, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { ChatI18nProvider } from "../../providers";
 import { Chat, type ChatProps } from "./Chat";
-import type { ChatTransport, FollowEventsOptions, StreamCallbacks, UploadFileParams } from "../../api";
-import type { AgentInfo, Conversation, ConversationListItem, FileAttachment, Message } from "../../types";
+import type { ChatTransport, FollowEventsOptions, StreamCallbacks } from "../../api";
+import type { AgentInfo, Conversation, ConversationListItem, Message } from "../../types";
 
 afterEach(cleanup);
 
@@ -59,7 +59,6 @@ function renderChat(transport: ChatTransport, props: Partial<ChatProps> = {}) {
   return render(<Chat baseUrl={`http://run-${counter}`} transport={transport} {...props} />);
 }
 
-const textbox = () => screen.getByRole("textbox") as HTMLTextAreaElement;
 const user = message({ id: "u1", role: "user", content: "check the build later" });
 const fireAt = Math.floor(Date.now() / 1000) + 3600;
 // the client turns the wire's fire_at into fireAt; a bare transport hands over the normalized shape
