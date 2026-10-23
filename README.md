@@ -310,6 +310,26 @@ When the server streams the model's reasoning (agent-server >= 0.5.0, `stream.th
 
 An agent with `AgentInfo.showReasoning === false` never shows the block. With `useChat`, `streamingReasoning` holds the reasoning of the running turn and `getReasoningEffort: () => "low"` sets the effort sent (`none` | `minimal` | `low` | `medium` | `high`, also `SendMessageOptions.reasoningEffort`). Use the block on its own: `<ThinkingBlock reasoning={text} />`. A custom `StreamCallbacks` gets `onThinking(text, fullThinking)`.
 
+## Plan and activity
+
+When the agent keeps a plan (agent-server >= 0.9.0, `capabilities.plan`, `stream.plan` frames) the chat shows it as a card above the live answer: "Plan · 2 of 5", a thin progress bar, a collapse button (`aria-expanded`) and one row per step with its status (not started, in progress, completed, blocked); the step in progress is bold. Only titles and status are shown. While the agent condenses its earlier context (`stream.compaction`, `phase: "start"`) a line says "Condensing earlier context…" until the pass is `done` or `skipped`. Nothing shows for an agent that sends neither.
+
+When the turn is over, the plan stays above the answer as a collapsed card ("Plan ✓ 5 of 5 done"; open by default while the plan is not complete). In `appearance="modern"` the "Worked for 24s" timeline also lists, in the order they happened, the calls, "Plan created · 5 steps", "Plan updated · 2 of 5" and an "Earlier context condensed" divider for each condensing pass. The classic appearance shows the plan card only.
+
+`useChat` writes what it saw into the finished message, so a reload shows the same; a server that keeps the history (the Console portal) writes the same shape:
+
+```ts
+message.metadata.plan      // PlanSnapshot: { version?, operation?, steps: [{ id?, title, status }] } - the latest plan of the turn
+message.metadata.activity  // ActivityEntry[], in the order it happened:
+//   { kind: 'tool', id?, name, label?, status?: 'ok' | 'error' }
+//   { kind: 'plan', version?, done, total, created? }
+//   { kind: 'compaction', id? }
+```
+
+A plan frame says what the agent did to the plan in `operation` (`"write"`: it wrote the plan out, `"update"`: it changed steps of the plan it had; agent-server >= 0.9.0 sends it). That is what tells "Plan created" (`created: true`) from "Plan updated". A server that does not send it gets its first plan of a turn marked created. A turn that paused for an answer goes on with the plan it had when it carries on (an answer, `continueConversation`, or a followed run whose `session.status_running` has `trigger: "resume"` or `"timeout"`): what the plan does next is an update, and the message of that leg keeps `metadata.plan` only when the leg wrote or changed it, so the card is drawn once.
+
+A message without `metadata.activity` lists its calls, then its reasoning, as before. A custom `StreamCallbacks` gets `onPlan(plan)` and `onCompaction({ id?, phase })`; `useChat` returns `plan` and `isCondensing`; an in-process adapter reports them with `emit.plan(plan)` and `emit.compaction({ id?, phase? })`. `PlanCard` is exported for hosts that draw their own list. Strings are `chat.plan.*`, `chat.activity.plan*`, `chat.activity.condensed` and `chat.live.condensing` (English, Turkish).
+
 ## Appearance (classic / modern)
 
 `appearance` chooses how the chat is drawn. The default, `classic`, is the look the chat always had, so an existing integration changes nothing. `modern` is opt-in:
@@ -541,6 +561,7 @@ Returns:
 - `composerState` - `"open" | "blocked" | "cancel" | "answer" | "following" | "budget_paused" | "readonly"`
 - `budget`, `spentUsd`, `budgetExhausted`, `canContinue`, `canUpdateBudget`, `continueConversation()`, `updateBudget(budget, { continue })` - Usage limit (see `docs/guide/budgets.md`)
 - `activeToolCalls` - Active tool calls
+- `plan`, `isCondensing` - The agent's plan for the running turn, and whether it is condensing its earlier context (see "Plan and activity")
 - `pendingActions`, `awaitingAction`, `isResolvingAction`, `canResolveActions`, `answerableQuestion`, `resolveAction(actionId, resolution)` - Approvals and questions (see `docs/guide/approvals.md`)
 - `sendMessage(content)` - Send a message
 - `addFiles(files)` - Add files

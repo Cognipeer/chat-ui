@@ -1,5 +1,14 @@
-import type { ConversationEvent, FileAttachment, StopReason } from "../types";
+import type { ConversationEvent, FileAttachment, PlanSnapshot, StopReason } from "../types";
 import { normalizeStopReason } from "./runtime";
+import {
+  emptyTurnFlow,
+  flowCompaction,
+  flowPlan,
+  flowToolEnd,
+  flowToolStart,
+  normalizePlan,
+  type TurnFlowState,
+} from "./plan";
 
 /** A tool call seen in the event log. */
 export interface FollowedTool {
@@ -19,6 +28,12 @@ export interface FollowState {
   /** Text deltas were seen (so `agent.message` repeats what is already there) */
   streamed: boolean;
   tools: Map<string, FollowedTool>;
+  /**
+   * The plan of the turn and what happened in it, in order (calls, plan changes, condensing passes), folded from
+   * `agent.plan` / `agent.compaction` and the tool events. The finished message brings its own copy of the same
+   * when the turn ends; this is what the page shows while the turn runs.
+   */
+  flow: TurnFlowState;
   /** The assistant message the turn wrote, once it did */
   messageId?: string;
   /** The user message of the followed turn, when its `user.message` (or the reattach snapshot) was in the part we saw */
@@ -28,6 +43,13 @@ export interface FollowState {
    * Its own `session.status_running`, replayed after the snapshot, must not wipe that text.
    */
   snapshotRunId?: string;
+  /**
+   * The plan of the turn this page shows as paused, asked for when a run begins that carries that turn on
+   * (`session.status_running` with `trigger: "resume"` or `"timeout"`): the run's flow starts from it, so the plan card
+   * stays and what the run writes next is an update of it, not a creation. Set by the page (`newFollowState`), never by
+   * the log; a run that begins a turn (a person's message, a reminder) carries nothing.
+   */
+  carriedPlan?: () => PlanSnapshot | undefined;
   /**
    * The text comes from a reattach snapshot and no later run has proved otherwise. While it is set a
    * replayed `session.status_running` that names no run (or the snapshot's own) keeps the text; only a
@@ -41,7 +63,13 @@ export interface FollowState {
   lastSeq?: number;
 }
 
-export const newFollowState = (): FollowState => ({ text: "", streamed: false, tools: new Map() });
+export const newFollowState = (carriedPlan?: () => PlanSnapshot | undefined): FollowState => ({
+  text: "",
+  streamed: false,
+  tools: new Map(),
+  flow: emptyTurnFlow(),
+  ...(carriedPlan ? { carriedPlan } : {}),
+});
 
 const asString = (value: unknown): string | undefined => (typeof value === "string" ? value : undefined);
 /** The run an event belongs to: stamped on the frame, or inside its data (a delta carries it there). */
@@ -95,11 +123,16 @@ export function applyFollowEvent(state: FollowState, event: ConversationEvent): 
       // names the snapshot's run, or (a server that does not stamp it on the event) no run at all. What the
       // snapshot brought stays until another run proves itself.
       const incoming = runIdOf(event, data);
+      // A run that answers or outlasts a pause carries its turn on: the plan the turn had is where the run starts
+      const trigger = asString(data.trigger);
+      const carried = trigger === "resume" || trigger === "timeout" ? base.carriedPlan?.() : undefined;
       if (base.seeded && !base.idle && (incoming === undefined || base.snapshotRunId === undefined || incoming === base.snapshotRunId)) {
-        return { ...base, error: undefined, snapshotRunId: base.snapshotRunId ?? incoming };
+        // (a flow that has seen nothing of the run yet takes the carried plan: a run joined through its snapshot is not told its start otherwise)
+        const untouched = !base.flow.plan && base.flow.activity.length === 0;
+        return { ...base, ...(carried && untouched ? { flow: emptyTurnFlow(carried) } : {}), error: undefined, snapshotRunId: base.snapshotRunId ?? incoming };
       }
-      // A new turn begins: nothing of the previous one is on screen any more
-      return { ...base, text: "", streamed: false, tools: new Map(), idle: undefined, error: undefined, messageId: undefined, snapshotRunId: undefined, seeded: false };
+      // A new run begins: nothing of the previous one is on screen any more (but the plan a paused turn carries on)
+      return { ...base, text: "", streamed: false, tools: new Map(), flow: emptyTurnFlow(carried), idle: undefined, error: undefined, messageId: undefined, snapshotRunId: undefined, seeded: false };
     }
 
     case "agent.message.snapshot": {
@@ -137,7 +170,7 @@ export function applyFollowEvent(state: FollowState, event: ConversationEvent): 
         // A delta of another run than the snapshot's: that run began without us seeing its start, and
         // nothing the snapshot seeded belongs to it
         if (incoming !== undefined && base.snapshotRunId !== undefined && incoming !== base.snapshotRunId) {
-          return { ...base, text, streamed: true, tools: new Map(), idle: undefined, error: undefined, messageId: undefined, snapshotRunId: incoming, seeded: false };
+          return { ...base, text, streamed: true, tools: new Map(), flow: emptyTurnFlow(), idle: undefined, error: undefined, messageId: undefined, snapshotRunId: incoming, seeded: false };
         }
         if (incoming !== undefined && base.snapshotRunId === undefined) {
           return { ...base, text: base.text + text, streamed: true, snapshotRunId: incoming };
@@ -150,8 +183,9 @@ export function applyFollowEvent(state: FollowState, event: ConversationEvent): 
       const id = asString(data.tool_call_id);
       if (!id) return base;
       const tools = new Map(base.tools);
-      tools.set(id, { name: asString(data.name) ?? "tool", args: asRecord(data.args) });
-      return { ...base, tools };
+      const name = asString(data.name) ?? "tool";
+      tools.set(id, { name, args: asRecord(data.args) });
+      return { ...base, tools, flow: flowToolStart(base.flow, { id, name }) };
     }
 
     case "agent.tool_result": {
@@ -161,7 +195,18 @@ export function applyFollowEvent(state: FollowState, event: ConversationEvent): 
       const tools = new Map(base.tools);
       const failed = data.ok === false;
       tools.set(id, { ...existing, result: failed ? { ok: false, error: asString(data.error) ?? "failed" } : { ok: true } });
-      return { ...base, tools };
+      return { ...base, tools, flow: flowToolEnd(base.flow, id, failed) };
+    }
+
+    case "agent.plan": {
+      // The whole plan as it is now; a replay of a state already shown changes nothing
+      const flow = flowPlan(base.flow, normalizePlan(data));
+      return flow === base.flow ? base : { ...base, flow };
+    }
+
+    case "agent.compaction": {
+      // Only a finished pass is stored; it marks where in the turn the context was condensed
+      return { ...base, flow: flowCompaction(base.flow, asString(data.id)) };
     }
 
     case "agent.message": {

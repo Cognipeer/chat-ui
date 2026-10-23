@@ -7,14 +7,16 @@ import {
   isActionPending,
   messageText,
   messageWarnings,
+  readActivity,
+  readPlan,
   reasoningOf,
   stopNoticeKind,
   waitingToolCallIds,
 } from "../../utils";
-import type { ActionState, Message, PendingAction } from "../../types";
+import type { ActionState, Message, PendingAction, PlanSnapshot } from "../../types";
 import { storedToolCalls } from "./ChatMessage";
 import { formatToolName } from "./ToolCall";
-import { ChevronRightIcon, LoadingIcon } from "./Icons";
+import { ChevronRightIcon, ListCheckIcon, LoadingIcon, RefreshIcon } from "./Icons";
 import { useI18n } from "../../hooks/useI18n";
 import { FOCUS_RING } from "./styles";
 
@@ -24,7 +26,11 @@ type Translate = ReturnType<typeof useI18n>["t"];
 export type ActivityItem =
   | { kind: "thinking"; key: string; text: string }
   | { kind: "tool"; key: string; name: string; label: string; detail?: string; waiting: boolean }
-  | { kind: "action"; key: string; label: string; detail?: string; tone: "positive" | "negative" | "neutral" };
+  | { kind: "action"; key: string; label: string; detail?: string; tone: "positive" | "negative" | "neutral" }
+  /** The agent wrote its plan ("Plan created · 5 steps") or moved it on ("Plan updated · 2 of 5") */
+  | { kind: "plan"; key: string; label: string; detail?: string }
+  /** A pass that condensed the agent's earlier context happened here (drawn as a divider) */
+  | { kind: "compaction"; key: string; label: string };
 
 /** Argument keys that say best what a call was about, in order of preference. */
 const TELLING_ARGS = ["query", "q", "search", "question", "url", "path", "file", "name", "prompt", "input", "text"];
@@ -78,23 +84,59 @@ function actionItem(messageId: string, action: PendingAction, state: ActionState
 
 /**
  * What an agent did in these messages, in order: the calls it made, its reasoning, and the approvals and
- * questions that were already answered (an open one is a card of its own, not a line here).
+ * questions that were already answered (an open one is a card of its own, not a line here). A message that
+ * stored the order things happened in (`metadata.activity`: calls, plan changes, condensing passes) is listed
+ * in that order; one that did not lists its calls, then its reasoning, as it always did.
  */
 export function activityItems(messages: Message[], t: Translate, options: { reasoning?: boolean } = {}): ActivityItem[] {
   const items: ActivityItem[] = [];
   for (const message of messages) {
     const calls = storedToolCalls(message);
     const waiting = waitingToolCallIds(message, calls);
-    calls.forEach((call, index) => {
-      items.push({
-        kind: "tool",
-        key: `${message.id}:tool:${call.id}:${index}`,
-        name: call.name,
-        label: call.displayName || formatToolName(call.name),
-        detail: argSummary(call.args) ?? call.reasoning,
-        waiting: waiting.has(call.id),
-      });
+    const toolItem = (call: (typeof calls)[number], index: number): ActivityItem => ({
+      kind: "tool",
+      key: `${message.id}:tool:${call.id}:${index}`,
+      name: call.name,
+      label: call.displayName || formatToolName(call.name),
+      detail: argSummary(call.args) ?? call.reasoning,
+      waiting: waiting.has(call.id),
     });
+    const recorded = readActivity(message);
+    if (recorded) {
+      const byId = new Map(calls.map((call) => [call.id, call]));
+      const listed = new Set<string>();
+      recorded.forEach((entry, index) => {
+        const key = `${message.id}:activity:${index}`;
+        if (entry.kind === "plan") {
+          items.push({
+            kind: "plan",
+            key,
+            label: entry.created ? t("chat.activity.planCreated") : t("chat.activity.planUpdated"),
+            detail: entry.created ? t("chat.activity.steps", { count: entry.total }) : t("chat.plan.progress", { done: entry.done, total: entry.total }),
+          });
+        } else if (entry.kind === "compaction") {
+          items.push({ kind: "compaction", key, label: t("chat.activity.condensed") });
+        } else {
+          // the stored call (when the message kept it) says what it was asked; without it the entry stands alone
+          const call = entry.id ? byId.get(entry.id) : undefined;
+          if (call) listed.add(call.id);
+          items.push({
+            kind: "tool",
+            key,
+            name: entry.name,
+            label: entry.label || call?.displayName || formatToolName(entry.name),
+            detail: call ? argSummary(call.args) ?? call.reasoning : undefined,
+            waiting: call ? waiting.has(call.id) : false,
+          });
+        }
+      });
+      // calls the record does not know of (written by something else) are not lost: they follow the ordered ones
+      calls.forEach((call, index) => {
+        if (!listed.has(call.id)) items.push(toolItem(call, index));
+      });
+    } else {
+      calls.forEach((call, index) => items.push(toolItem(call, index)));
+    }
     const reasoning = options.reasoning === false ? "" : reasoningOf(message);
     if (reasoning) items.push({ kind: "thinking", key: `${message.id}:thinking`, text: reasoning });
     for (const action of message.pendingActions ?? []) {
@@ -149,7 +191,7 @@ export function hasVisibleBody(message: Message): boolean {
 /** One thing the modern message list draws, in order. */
 export type TurnBlock =
   | { kind: "message"; message: Message; index: number }
-  | { kind: "activity"; key: string; items: ActivityItem[]; durationMs?: number }
+  | { kind: "activity"; key: string; items: ActivityItem[]; durationMs?: number; plan?: PlanSnapshot }
   /** The open approvals and questions of a message that is otherwise only steps */
   | { kind: "cards"; message: Message; index: number };
 
@@ -168,8 +210,11 @@ export function buildTurnBlocks(messages: Message[], t: Translate, options: { re
   const flush = () => {
     if (bucket.length === 0) return;
     const items = activityItems(bucket, t, options);
-    if (items.length > 0) {
-      blocks.push({ kind: "activity", key: `activity:${bucket[0].id}`, items, durationMs: turnDuration(bucket, since) });
+    // the turn's plan is the newest one its messages carry; it is drawn right above the answer
+    let plan: PlanSnapshot | undefined;
+    for (const message of bucket) plan = readPlan(message) ?? plan;
+    if (items.length > 0 || plan) {
+      blocks.push({ kind: "activity", key: `activity:${bucket[0].id}`, items, durationMs: turnDuration(bucket, since), ...(plan ? { plan } : {}) });
     }
     bucket = [];
   };
@@ -274,15 +319,35 @@ export function TurnActivity({ items, durationMs, live = false, liveLabel, class
       >
         {items.map((item) => (
           <li key={item.key} className="relative">
-            <span
-              aria-hidden="true"
-              className={cn(
-                "absolute -left-[1.3rem] top-[0.45rem] h-2 w-2 rounded-full border bg-chat-bg-primary",
-                item.kind === "action" && item.tone === "negative" ? "border-chat-danger" : "border-chat-text-tertiary"
-              )}
-            />
+            {item.kind === "plan" ? (
+              <ListCheckIcon className="absolute -left-[1.45rem] top-[0.3rem] h-3.5 w-3.5 bg-chat-bg-primary text-chat-text-secondary" />
+            ) : item.kind === "compaction" ? null : (
+              <span
+                aria-hidden="true"
+                className={cn(
+                  "absolute -left-[1.3rem] top-[0.45rem] h-2 w-2 rounded-full border bg-chat-bg-primary",
+                  item.kind === "action" && item.tone === "negative" ? "border-chat-danger" : "border-chat-text-tertiary"
+                )}
+              />
+            )}
             {item.kind === "thinking" ? (
               <ThinkingLine text={item.text} />
+            ) : item.kind === "plan" ? (
+              <div className="break-words text-chat-text-primary">
+                <span className="font-medium">{item.label}</span>
+                {item.detail ? <span className="text-chat-text-tertiary"> · {item.detail}</span> : null}
+              </div>
+            ) : item.kind === "compaction" ? (
+              <div role="separator" aria-label={item.label} className="flex items-center gap-3 text-xs text-chat-text-tertiary">
+                <span aria-hidden="true" className="h-px flex-1 bg-chat-border-primary" />
+                <span className="inline-flex items-center gap-1.5">
+                  <span aria-hidden="true" className="inline-flex">
+                    <RefreshIcon className="h-3 w-3" />
+                  </span>
+                  {item.label}
+                </span>
+                <span aria-hidden="true" className="h-px flex-1 bg-chat-border-primary" />
+              </div>
             ) : (
               <>
                 <div className={cn("break-words", item.kind === "action" && item.tone === "negative" ? "text-chat-danger" : "text-chat-text-primary")}>

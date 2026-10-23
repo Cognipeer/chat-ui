@@ -120,6 +120,8 @@ interface UseChatReturn {
   streamingText: string;
   progressMessage: string;
   activeToolCalls: Map<string, ToolCallState>;
+  plan: PlanSnapshot | undefined;     // the agent's plan for the running turn (stream.plan), if it published one
+  isCondensing: boolean;              // the agent is condensing its earlier context right now
   
   // Error handling: a localized, friendly message for well-known server codes
   error: Error | null;

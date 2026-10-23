@@ -20,6 +20,15 @@ import {
   localizeError,
   messageText,
   newFollowState,
+  emptyTurnFlow,
+  flowCompaction,
+  flowMetadata,
+  flowPlan,
+  flowToolEnd,
+  flowToolStart,
+  toolResultFailed,
+  turnPlanOf,
+  type TurnFlowState,
   normalizeActions,
   normalizeBudget,
   normalizeStopReason,
@@ -54,6 +63,7 @@ import type {
   FeedbackInput,
   MessageFeedback,
   PendingAction,
+  PlanSnapshot,
   ReasoningEffort,
   ActionResolution,
   ActionState,
@@ -158,6 +168,10 @@ export interface UseChatReturn {
   isUploading: boolean;
   /** Active tool calls */
   activeToolCalls: Map<string, { name: string; args: Record<string, unknown>; result?: unknown; reasoning?: string; displayName?: string }>;
+  /** The agent's plan for the turn being streamed (or followed); undefined until it publishes one */
+  plan: PlanSnapshot | undefined;
+  /** The agent is condensing its earlier context right now (a pass has started and not ended) */
+  isCondensing: boolean;
   /**
    * Send a message. Resolves `false` when it was refused before the server took it
    * (an upload or the send itself failed): nothing was added to the transcript, the
@@ -425,6 +439,17 @@ export function useChat(options: UseChatOptions): UseChatReturn {
   const [pendingFiles, setPendingFiles] = useState<FileAttachment[]>([]);
   const [isUploadingMessage, setIsUploadingMessage] = useState(false);
   const [activeToolCalls, setActiveToolCalls] = useState<ToolCallMap>(new Map());
+  // The plan of the turn being streamed or followed, and whether a condensing pass is under way
+  const [plan, setPlan] = useState<PlanSnapshot | undefined>(undefined);
+  const [isCondensing, setIsCondensing] = useState(false);
+  // What the streamed turn has done so far, in order: written to the answer's metadata when the turn ends
+  const turnFlowRef = useRef<TurnFlowState>(emptyTurnFlow());
+  /** Starts a turn's record afresh; `seed` is the plan a paused turn already had when its next leg begins. */
+  const startTurnFlow = useCallback((seed?: PlanSnapshot) => {
+    turnFlowRef.current = emptyTurnFlow(seed);
+    setPlan(seed);
+    setIsCondensing(false);
+  }, []);
   const [progressMessage, setProgressMessage] = useState<string>("");
   const [isResolvingAction, setIsResolvingAction] = useState(false);
   // What the server says the conversation holds (null: it cannot say, the messages are counted)
@@ -580,9 +605,10 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     activeToolCallsRef.current = new Map();
     toolCallStartTimeRef.current = null;
     setActiveToolCalls(new Map());
+    startTurnFlow();
     setProgressMessage("");
     setIsStreaming(false);
-  }, [stopFollowing]);
+  }, [stopFollowing, startTurnFlow]);
 
   useEffect(
     () => () => {
@@ -889,6 +915,11 @@ export function useChat(options: UseChatOptions): UseChatReturn {
                     return next;
                   });
                 });
+                turnFlowRef.current = flowToolStart(turnFlowRef.current, {
+                  id: event.toolCallId,
+                  name: event.toolName,
+                  label: (event as any).displayName || undefined,
+                });
                 onToolCall?.(event.toolName, event.args);
               }
             },
@@ -906,8 +937,23 @@ export function useChat(options: UseChatOptions): UseChatReturn {
                     return next;
                   });
                 });
+                turnFlowRef.current = flowToolEnd(turnFlowRef.current, event.toolCallId, toolResultFailed(event.result));
                 onToolResult?.(event.toolName, event.result);
               }
+            },
+            onPlan: (next) => {
+              if (isStale()) return;
+              const flow = flowPlan(turnFlowRef.current, next);
+              // The same plan again shows nothing new
+              if (flow === turnFlowRef.current) return;
+              turnFlowRef.current = flow;
+              setPlan(flow.plan);
+            },
+            onCompaction: (info) => {
+              if (isStale()) return;
+              // Only a pass that finished is part of the turn's record; `start` is a live note until `done` or `skipped`
+              if (info.phase === "done") turnFlowRef.current = flowCompaction(turnFlowRef.current, info.id);
+              setIsCondensing(info.phase === "start");
             },
             onError: (err) => {
               if (isStale()) return;
@@ -958,6 +1004,9 @@ export function useChat(options: UseChatOptions): UseChatReturn {
                 const stopReason = normalizeStopReason(event.stopReason);
                 const shownStop = stopReason && stopReason !== "end_turn" && stopReason !== "requires_action" ? stopReason : undefined;
                 const warnings = Array.isArray(event.warnings) && event.warnings.length > 0 ? event.warnings : undefined;
+                // The plan and the order things happened in, kept with the answer so a reload shows the same
+                const flowMeta = flowMetadata(turnFlowRef.current);
+                const hasFlowMeta = Boolean(flowMeta.plan || flowMeta.activity);
 
                 const assistantMessage: Message = {
                   id: event.messageId,
@@ -975,7 +1024,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
                       ? { status: event.status }
                       : {}),
                   ...(shownStop ? { stopReason: shownStop } : {}),
-                  metadata: currentToolCalls.size > 0 || warnings
+                  metadata: currentToolCalls.size > 0 || warnings || hasFlowMeta
                     ? {
                         ...(currentToolCalls.size > 0
                           ? {
@@ -989,6 +1038,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
                             }
                           : {}),
                         ...(warnings ? { warnings } : {}),
+                        ...flowMeta,
                       }
                     : undefined,
                   createdAt: new Date(),
@@ -1001,6 +1051,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
                 activeToolCallsRef.current = new Map();
                 toolCallStartTimeRef.current = null;
                 setActiveToolCalls(new Map());
+                startTurnFlow();
                 setProgressMessage("");
                 setIsStreaming(false);
                 // The conversation after this turn: title, spend limit and where it is in its life
@@ -1142,13 +1193,16 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     followRef.current = { controller };
     const stale = () => sessionRef.current !== session;
 
-    let state: FollowState = newFollowState();
+    // A run that carries a paused turn on (an answer given elsewhere) goes on with the plan that turn had, as `resolveAction` does;
+    // the messages are looked at when the run begins, not now: the ones just loaded are not on screen yet
+    let state: FollowState = newFollowState(() => turnPlanOf(messagesRef.current));
     streamActionsRef.current = [];
     streamingTextRef.current = "";
     setStreamingText("");
     clearStreamingReasoning();
     activeToolCallsRef.current = new Map();
     setActiveToolCalls(new Map());
+    startTurnFlow();
     setProgressMessage("");
     setIsStreaming(true);
     setIsFollowing(true);
@@ -1182,6 +1236,8 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       }
       const previous = state;
       state = applyFollowEvent(state, event);
+      // The plan of the followed turn, as the log has it so far (the finished message brings its own copy)
+      if (state.flow.plan !== previous.flow.plan) setPlan(state.flow.plan);
       switch (event.type) {
         case "user.message":
           showFollowedUserMessage();
@@ -1275,6 +1331,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     clearStreamingReasoning();
     activeToolCallsRef.current = new Map();
     setActiveToolCalls(new Map());
+    startTurnFlow();
     setProgressMessage("");
     // A new turn may have started right after this one: refreshConversation picked it up
     if (!followRef.current) {
@@ -1788,6 +1845,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         clearStreamingReasoning();
         streamingTextRef.current = "";
         setActiveToolCalls(new Map());
+        startTurnFlow();
         setProgressMessage("");
         toolCallStartTimeRef.current = null;
 
@@ -1967,6 +2025,8 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     setActiveToolCalls(new Map());
     activeToolCallsRef.current = new Map();
     toolCallStartTimeRef.current = null;
+    // the leg that carries on a paused turn goes on with the plan the turn had
+    startTurnFlow(turnPlanOf(messagesRef.current));
     setProgressMessage("");
 
     // Once the server has started answering, the action is spent even if the stream later breaks.
@@ -2053,6 +2113,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     setActiveToolCalls(new Map());
     activeToolCallsRef.current = new Map();
     toolCallStartTimeRef.current = null;
+    startTurnFlow(turnPlanOf(messagesRef.current));
     setProgressMessage("");
 
     let accepted = false;
@@ -2197,6 +2258,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       setActiveToolCalls(new Map());
       activeToolCallsRef.current = new Map();
       toolCallStartTimeRef.current = null;
+      startTurnFlow();
       setProgressMessage("");
       // the ref is what the stream callbacks look at before the next render
       messagesRef.current = cutBack;
@@ -2550,6 +2612,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         clearStreamingReasoning();
         activeToolCallsRef.current = new Map();
         setActiveToolCalls(new Map());
+        startTurnFlow();
       }
       return;
     }
@@ -2589,6 +2652,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
                 })),
               }
             : {}),
+          ...flowMetadata(turnFlowRef.current),
         },
         createdAt: at,
         updatedAt: at,
@@ -2601,9 +2665,10 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     activeToolCallsRef.current = new Map();
     toolCallStartTimeRef.current = null;
     setActiveToolCalls(new Map());
+    startTurnFlow();
     setProgressMessage("");
     setIsStreaming(false);
-  }, [cancelOnServer, stopFollowing, refreshConversation]);
+  }, [cancelOnServer, stopFollowing, refreshConversation, startTurnFlow]);
 
   const pendingActions = useMemo(() => collectPendingActions(messages), [messages]);
 
@@ -2707,6 +2772,8 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     isUploading:
       isUploadingMessage || pendingFiles.some((f) => f.status === "uploading" || f.status === "queued"),
     activeToolCalls,
+    plan,
+    isCondensing,
     sendMessage,
     addFiles,
     removeFile,

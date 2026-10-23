@@ -1062,6 +1062,8 @@ function ChatContent({
               streamingText={chat.streamingText}
               progressMessage={chat.progressMessage}
               activeToolCalls={chat.activeToolCalls}
+              plan={chat.plan}
+              condensing={chat.isCondensing}
               autoScroll={autoScroll}
               renderActions={renderMessageActions}
               renderAvatar={renderAvatar}

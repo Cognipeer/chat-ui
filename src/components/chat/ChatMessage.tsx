@@ -3,7 +3,7 @@
 import React from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { cn, formatFileSize, imagePartSource, isFileExpired, isImageType, isRasterImageType, safeFileHref, safeImageSrc, messageText, reasoningOf, waitingToolCallIds, callsWithOpenActions, type ToolCallRow } from "../../utils";
+import { cn, formatFileSize, imagePartSource, isFileExpired, isImageType, isRasterImageType, safeFileHref, safeImageSrc, messageText, readPlan, reasoningOf, waitingToolCallIds, callsWithOpenActions, type ToolCallRow } from "../../utils";
 import {
   insertCitationMarkers,
   parseCitationHref,
@@ -14,6 +14,7 @@ import type { Message, MessageActionProps, FileAttachment, Citation, StopNoticeR
 import { FileIcon, ImageIcon, InfoIcon, LoadingIcon } from "./Icons";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { ToolCalls } from "./ToolCall";
+import { PlanCard } from "./PlanCard";
 import { MessageActionCards, type ChatActionsConfig } from "./ActionCards";
 import { MessageToolbar, type MessageToolbarConfig } from "./MessageToolbar";
 import { MessageEditor } from "./MessageEditor";
@@ -117,6 +118,7 @@ export function ChatMessage({
   const content = isStreaming && streamingText ? streamingText : messageText(message.content);
   const reasoning = showReasoning && isAssistant ? (isStreaming ? streamingReasoning ?? "" : reasoningOf(message)) : "";
   const images = React.useMemo(() => getImages(message.content), [message.content]);
+  const storedPlan = React.useMemo(() => (isAssistant ? readPlan(message) : undefined), [isAssistant, message.metadata]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Offsets index the finished answer, so markers only go in once it is whole.
   const showInlineCitations = enableCitations && isAssistant && !isStreaming;
@@ -186,6 +188,9 @@ export function ChatMessage({
         {isAssistant && !isStreaming && !hideActivity && hasToolCalls(message) && (
           <MessageToolCalls message={message} />
         )}
+
+        {/* The agent's plan, kept with the answer (the modern list draws it itself, in the turn's activity) */}
+        {isAssistant && !isStreaming && !hideActivity && storedPlan && <PlanCard plan={storedPlan} />}
 
         {/* Editing one of the person's messages */}
         {isUser && editing && onSaveEdit && (

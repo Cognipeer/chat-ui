@@ -4,6 +4,17 @@ All notable changes to Chat UI will be documented here.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-10-23
+
+### Added
+
+- The agent's plan. A server that reports `capabilities.plan` (new `AgentCapabilities.plan`) sends `stream.plan` frames, each with the whole plan (`PlanSnapshot`: `version?`, `steps: { id?, title, status }[]` with status `not-started` | `in-progress` | `completed` | `blocked`). While the turn runs the chat draws a plan card above the live answer ("Plan · 2 of 5", a thin progress bar, a collapse button with `aria-expanded`, a row per step with its status, the step in progress in bold); only titles and status are shown. When the turn is over a collapsed card ("Plan ✓ 5 of 5 done") sits above the answer, open by default while the plan is not complete. Nothing shows when no plan arrives. New `PlanCard` component, types `PlanStep`, `PlanStepStatus`, `PlanSnapshot`, `StreamPlanEvent`.
+- Context condensing. `stream.compaction` frames (`phase`: `start`, `done`, `skipped`; a marker only, never the condensed content) show "Condensing earlier context…" while a pass has started and not ended. New type `StreamCompactionEvent`.
+- Ordered activity (`appearance="modern"`). The "Worked for 24s" timeline lists, in the order they happened, the tool calls, "Plan created · 5 steps", "Plan updated · 2 of 5" and an "Earlier context condensed" divider for every pass. The order is stored with the answer: `metadata.plan` (the latest `PlanSnapshot` of the turn) and `metadata.activity` (`ActivityEntry[]`: `{ kind: 'tool', id?, name, label?, status? }`, `{ kind: 'plan', version?, done, total, created? }`, `{ kind: 'compaction', id? }`) next to the existing `toolCallDetails` / `toolCallDurationSeconds`; a server that keeps the history writes the same shape, so a reload shows the same timeline and plan. A message without `metadata.activity` lists its calls, then its reasoning, as before. The classic appearance shows the plan card only.
+- `PlanSnapshot.operation` (`write` | `update`, new type `PlanOperation`; agent-server >= 0.9.0 sends it on `stream.plan` and `agent.plan`): it says whether the agent wrote the plan out or changed it, so the timeline reads "Plan created" or "Plan updated" as it happened. A server that does not send it gets its first plan of a turn marked created, as before.
+- `StreamCallbacks.onPlan(plan)` and `onCompaction({ id?, phase })`; `useChat` returns `plan` and `isCondensing` and keeps the plan of a turn that paused for an answer when it carries on. The message of the leg that carries on keeps `metadata.plan` only when that leg wrote or changed the plan, so the card is drawn once. Following a turn that runs elsewhere (`applyFollowEvent`) folds the stored `agent.plan` and `agent.compaction` events into the same state (`FollowState.flow`); a followed run that carries a paused turn on (`session.status_running` with `trigger: "resume"` or `"timeout"`) starts from the plan the turn had, so the card stays (`newFollowState(carriedPlan?)`). In-process adapters report them with `emit.plan(plan)` and `emit.compaction({ id?, phase? })`.
+- English and Turkish strings `chat.plan.*`, `chat.activity.planCreated` / `planUpdated` / `condensed`, `chat.live.condensing`.
+
 ## [0.11.0] - 2026-10-19
 
 ### Added

@@ -2,7 +2,7 @@
 
 import React, { useRef, useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { cn, collectPendingActions, messageText, modelLabel, modelOfMessage, readFeedback } from "../../utils";
-import type { AgentModelOption, FeedbackInput, Message, MessageActionProps, StopNoticeRenderProps } from "../../types";
+import type { AgentModelOption, FeedbackInput, Message, MessageActionProps, PlanSnapshot, StopNoticeRenderProps } from "../../types";
 import { ReminderNote } from "./ReminderNote";
 import { isReminderMessage } from "../../utils/reminders";
 import { ChatMessage, type ImageRenderProps, type ResolveFileUrl } from "./ChatMessage";
@@ -11,6 +11,7 @@ import { ToolCalls, formatToolName } from "./ToolCall";
 import { InterruptedNotice } from "./StopNotice";
 import { MessageActionCards, type ChatActionsConfig } from "./ActionCards";
 import { buildTurnBlocks, TurnActivity } from "./TurnActivity";
+import { CondensingLine, PlanCard } from "./PlanCard";
 import { useAppearance } from "./appearance";
 import { SECONDARY_BUTTON } from "./styles";
 import { LoadingIcon } from "./Icons";
@@ -47,6 +48,10 @@ export interface ChatMessageListProps {
   progressMessage?: string;
   /** Active tool calls during streaming */
   activeToolCalls?: Map<string, { name: string; args: Record<string, unknown>; result?: unknown; reasoning?: string; displayName?: string }>;
+  /** The agent's plan for the turn being streamed (`useChat().plan`): a card above the live answer */
+  plan?: PlanSnapshot;
+  /** The agent is condensing its earlier context now (`useChat().isCondensing`): a line says so */
+  condensing?: boolean;
   /** Custom class name */
   className?: string;
   /** Auto-scroll to bottom on new messages */
@@ -169,6 +174,8 @@ export function ChatMessageList({
   showReasoning = true,
   progressMessage,
   activeToolCalls,
+  plan,
+  condensing = false,
   className,
   autoScroll = true,
   renderActions,
@@ -230,7 +237,7 @@ export function ChatMessageList({
         container.scrollTop = container.scrollHeight;
       }
     }
-  }, [messages, streamingText, streamingReasoning, activeToolCalls, autoScroll]);
+  }, [messages, streamingText, streamingReasoning, activeToolCalls, plan, condensing, autoScroll]);
 
   // Jump to the message a search hit pointed at: the list is scrolled, never the page
   const handledFocus = useRef(onFocusHandled);
@@ -413,7 +420,11 @@ export function ChatMessageList({
               block.kind === "message" ? (
                 messageRow(block.message, block.index)
               ) : block.kind === "activity" ? (
-                <TurnActivity key={block.key} items={block.items} durationMs={block.durationMs} className="px-4 pt-3" />
+                <React.Fragment key={block.key}>
+                  <TurnActivity items={block.items} durationMs={block.durationMs} className="px-4 pt-3" />
+                  {/* the turn's plan, folded unless it was left unfinished, right above what the turn said */}
+                  {block.plan && <PlanCard plan={block.plan} className="mx-4 mt-2" />}
+                </React.Fragment>
               ) : (
                 <div key={`cards:${block.message.id}`} data-chat-message-id={block.message.id} className="px-4">
                   <MessageActionCards message={block.message} config={cardActions} openOnly className="mt-2" />
@@ -431,6 +442,14 @@ export function ChatMessageList({
             render={renderStopNotice}
             className={cn("mx-4 mb-6", showAvatars && !modern && "ml-16")}
           />
+        )}
+
+        {/* The plan of the turn that is running, and a note while the agent condenses what came before */}
+        {isStreaming && (plan || condensing) && (
+          <div className={cn("space-y-2 px-4 pb-2 animate-fade-in", modern ? "pt-1" : "pt-3")}>
+            {plan && <PlanCard plan={plan} live />}
+            {condensing && <CondensingLine />}
+          </div>
         )}
 
         {/* Streaming placeholder for new assistant message */}

@@ -11,6 +11,7 @@ import type {
   MessagesPage,
   AgentInfo,
   StreamEvent,
+  PlanSnapshot,
   PendingAction,
   ActionResolution,
   MessageStatus,
@@ -102,6 +103,13 @@ export interface StreamCallbacks {
   onActionRequired?: (event: StreamEvent) => void;
   /** An action was answered (possibly from another app) */
   onActionResolved?: (event: StreamEvent) => void;
+  /** The agent wrote or changed its plan (every call carries the whole plan as it is now) */
+  onPlan?: (plan: PlanSnapshot) => void;
+  /**
+   * The agent's earlier context is being condensed (`start`), was (`done`), or turned out to need no
+   * condensing (`skipped`). A marker only: what was condensed is never sent.
+   */
+  onCompaction?: (event: { id?: string; phase: "start" | "done" | "skipped" }) => void;
 }
 
 export interface ResolveActionOptions {

@@ -32,6 +32,8 @@ const chat = useChat({ baseUrl: "/api/agents", agentId: "assistant" });
 | `streamingText` | `string` | - | Current streaming text |
 | `progressMessage` | `string` | - | Progress line shown while waiting |
 | `activeToolCalls` | `Map` | - | Tool calls of the running turn |
+| `plan` | `PlanSnapshot` | - | The agent's plan for the running turn (`useChat().plan`): a card above the live answer |
+| `condensing` | `boolean` | `false` | The agent is condensing its earlier context (`useChat().isCondensing`): a line says so |
 | `actions` | `ChatActionsConfig` | - | How approval / question cards behave. Without `onResolve` they are read-only ("Waiting for approval in another app"); see [Approvals and Questions](/guide/approvals#custom-layouts) |
 | `autoScroll` | `boolean` | `true` | Scroll to new messages |
 | `showAvatars`, `showTimestamps` | `boolean` | `true`, `false` | Message chrome |
