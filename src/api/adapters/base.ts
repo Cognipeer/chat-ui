@@ -9,6 +9,7 @@ import type {
   Message,
   MessageStatus,
   PendingAction,
+  PlanSnapshot,
   StopReason,
   StreamEvent,
 } from "../../types";
@@ -24,6 +25,16 @@ import { MemoryThreadStore, type ThreadStore } from "../threadStore";
 import { makeId, type InlineFile } from "./files";
 import type { AuthedFileUrls } from "./outputFiles";
 import { isActionPending, stateForResolution } from "../../utils/actions";
+import {
+  emptyTurnFlow,
+  flowCompaction,
+  flowMetadata,
+  flowPlan,
+  flowToolEnd,
+  flowToolStart,
+  normalizePlan,
+  toolResultFailed,
+} from "../../utils/plan";
 
 /** What a backend adapter reports while a turn is running. */
 export interface RunEmit {
@@ -34,6 +45,18 @@ export interface RunEmit {
   toolCall(id: string, name: string, args: Record<string, unknown>): void;
   toolResult(id: string, name: string, result: unknown): void;
   progress(message: string): void;
+  /**
+   * The agent wrote or changed its plan. Pass the whole plan as it is now (titles and status); the chat shows
+   * it as a card and keeps the latest one with the answer. `operation` says whether the agent wrote the plan
+   * out (`write`: "Plan created") or changed it (`update`: "Plan updated"); leave it out and the first plan of
+   * the turn counts as created.
+   */
+  plan(plan: PlanSnapshot): void;
+  /**
+   * The agent's earlier context was condensed (`phase` defaults to `done`, the only phase that is remembered
+   * with the answer). `start` shows "Condensing earlier context…" until `done` or `skipped`.
+   */
+  compaction(info?: { id?: string; phase?: "start" | "done" | "skipped" }): void;
 }
 
 export interface RunInput {
@@ -347,9 +370,10 @@ export abstract class StatelessTransport implements ChatTransport {
     });
   }
 
-  /** The `RunEmit` of one turn: relays to the stream callbacks and remembers text and tool calls. */
+  /** The `RunEmit` of one turn: relays to the stream callbacks and remembers text, tool calls, the plan and the order of it all. */
   private makeEmit(callbacks: StreamCallbacks | undefined) {
     let text = "";
+    let flow = emptyTurnFlow();
     const toolDetails: Array<{ id: string; name: string; args: Record<string, unknown>; result?: unknown }> = [];
     const event = (e: Record<string, unknown>) =>
       ({ ...e, timestamp: Date.now() }) as unknown as StreamEvent;
@@ -367,6 +391,7 @@ export abstract class StatelessTransport implements ChatTransport {
         const existing = toolDetails.find((t) => t.id === id);
         if (existing) existing.args = args;
         else toolDetails.push({ id, name, args });
+        flow = flowToolStart(flow, { id, name });
         callbacks?.onToolCall?.(
           event({ type: "stream.tool_call", toolCallId: id, toolName: name, args })
         );
@@ -374,6 +399,7 @@ export abstract class StatelessTransport implements ChatTransport {
       toolResult: (id, name, result) => {
         const existing = toolDetails.find((t) => t.id === id);
         if (existing) existing.result = result;
+        flow = flowToolEnd(flow, id, toolResultFailed(result));
         callbacks?.onToolResult?.(
           event({ type: "stream.tool_result", toolCallId: id, toolName: name, result })
         );
@@ -381,8 +407,19 @@ export abstract class StatelessTransport implements ChatTransport {
       progress: (message) => {
         callbacks?.onProgress?.(event({ type: "stream.progress", message }));
       },
+      plan: (snapshot) => {
+        const plan = normalizePlan(snapshot);
+        if (!plan) return;
+        flow = flowPlan(flow, plan);
+        callbacks?.onPlan?.(plan);
+      },
+      compaction: (info) => {
+        const phase = info?.phase ?? "done";
+        if (phase === "done") flow = flowCompaction(flow, info?.id);
+        callbacks?.onCompaction?.({ ...(info?.id !== undefined ? { id: info.id } : {}), phase });
+      },
     };
-    return { emit, event, text: () => text, toolDetails };
+    return { emit, event, text: () => text, toolDetails, flow: () => flow };
   }
 
   /** The assistant message a finished run leaves in the thread. */
@@ -413,8 +450,11 @@ export abstract class StatelessTransport implements ChatTransport {
       toolCalls: toolDetails.length
         ? toolDetails.map((t) => ({ id: t.id, name: t.name, arguments: JSON.stringify(t.args) }))
         : undefined,
-      metadata: toolDetails.length
-        ? { toolCallDetails: toolDetails.map((t) => ({ ...t })) }
+      metadata: toolDetails.length || streamed.flow().activity.length
+        ? {
+            ...(toolDetails.length ? { toolCallDetails: toolDetails.map((t) => ({ ...t })) } : {}),
+            ...flowMetadata(streamed.flow()),
+          }
         : undefined,
       ...(paused ? { pendingActions: result.pendingActions } : {}),
       ...(status ? { status } : {}),
@@ -557,6 +597,14 @@ export abstract class StatelessTransport implements ChatTransport {
       progress: (message) => {
         announce();
         run.emit.progress(message);
+      },
+      plan: (snapshot) => {
+        announce();
+        run.emit.plan(snapshot);
+      },
+      compaction: (info) => {
+        announce();
+        run.emit.compaction(info);
       },
     };
 

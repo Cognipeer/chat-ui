@@ -9,6 +9,7 @@ export * from "./runtime";
 export * from "./agent";
 export * from "./files";
 export * from "./follow";
+export * from "./plan";
 export * from "./wire";
 export * from "./sdkActions";
 export * from "./experience";

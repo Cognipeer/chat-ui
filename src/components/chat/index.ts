@@ -31,4 +31,5 @@ export { ExportMenu, type ExportMenuProps } from "./ExportMenu";
 export { NotificationsMenu, type NotificationsMenuProps } from "./NotificationsMenu";
 export type { ListToolbarConfig } from "./ChatMessageList";
 export { ChatAppearanceProvider, useAppearance, AgentBadge, type ChatAppearance } from "./appearance";
+export { PlanCard, CondensingLine, type PlanCardProps } from "./PlanCard";
 export { TurnActivity, buildTurnBlocks, activityItems, type TurnActivityProps, type ActivityItem, type TurnBlock } from "./TurnActivity";

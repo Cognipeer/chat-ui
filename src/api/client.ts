@@ -44,6 +44,7 @@ import {
 } from "./http";
 import { normalizeBudget, normalizeMessagesPage, normalizeRuntime, readContinuable } from "../utils/runtime";
 import { normalizeReminders } from "../utils/reminders";
+import { normalizePlan } from "../utils/plan";
 import { fileFromRecord, uploadMimeType } from "../utils/files";
 import { normalizeFeedback } from "../utils/experience";
 import { filenameFromDisposition, exportFilename } from "../utils/export";
@@ -716,6 +717,18 @@ export class AgentServerClient implements ChatTransport {
             break;
           case "stream.title":
             callbacks.onTitle?.(event);
+            break;
+          case "stream.plan": {
+            // Titles and status only; a frame with no usable step is not a plan
+            const plan = normalizePlan(event.plan);
+            if (plan) callbacks.onPlan?.(plan);
+            break;
+          }
+          case "stream.compaction":
+            // A marker: what was condensed never reaches the chat
+            if (event.phase === "start" || event.phase === "done" || event.phase === "skipped") {
+              callbacks.onCompaction?.({ ...(typeof event.id === "string" ? { id: event.id } : {}), phase: event.phase });
+            }
             break;
         }
       } catch {

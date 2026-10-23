@@ -472,6 +472,8 @@ export interface AgentAttachmentsCapability {
 }
 
 export interface AgentCapabilities {
+  /** The agent may publish a plan while it works (`stream.plan`); the chat shows it as a card */
+  plan?: boolean;
   /** The agent can set reminders for itself; the UI shows them and lets a person cancel them */
   reminders?: boolean;
   toolApproval?: boolean;
@@ -606,6 +608,57 @@ export interface StreamTitleEvent extends StreamEventBase {
   title: string;
 }
 
+/** Where one step of an agent's plan stands */
+export type PlanStepStatus = "not-started" | "in-progress" | "completed" | "blocked";
+
+/** One step of the plan: only its title and where it stands (owners, criteria and evidence are not sent to the chat) */
+export interface PlanStep {
+  id?: string | number;
+  title: string;
+  status: PlanStepStatus;
+}
+
+/** What the agent did to its plan: `write` wrote it out (made it, or started over), `update` changed steps of the plan it had */
+export type PlanOperation = "write" | "update";
+
+/** The agent's plan as it is now. Every frame carries the whole plan, not a change. */
+export interface PlanSnapshot {
+  /** Counts up with every change the agent made to the plan, when the server says */
+  version?: number;
+  /**
+   * What the agent did to get here, when the server says (agent-server >= 0.9.0 does). It is what tells "Plan created"
+   * (`write`) from "Plan updated" (`update`); without it the chat goes by whether the turn has shown a plan before.
+   */
+  operation?: PlanOperation;
+  steps: PlanStep[];
+}
+
+/** The agent wrote or changed its plan (agent-server >= 0.9.0, `capabilities.plan`) */
+export interface StreamPlanEvent extends StreamEventBase {
+  type: "stream.plan";
+  plan: PlanSnapshot;
+}
+
+/**
+ * The agent's earlier context was condensed to make room (agent-server >= 0.9.0). A pass is `start`, then
+ * `done`, or `skipped` when there turned out to be nothing to condense. The frame is a marker only: it
+ * never carries what was condensed.
+ */
+export interface StreamCompactionEvent extends StreamEventBase {
+  type: "stream.compaction";
+  id?: string;
+  phase: "start" | "done" | "skipped";
+}
+
+/**
+ * One thing the agent did in a turn, in the order it happened (`metadata.activity` of a stored message). The chat
+ * writes it itself when a turn ends; a server that keeps the history (the Console portal) writes the same shape.
+ */
+export type ActivityEntry =
+  | { kind: "tool"; id?: string; name: string; label?: string; status?: "ok" | "error" }
+  | { kind: "plan"; version?: number; done: number; total: number; /** the agent wrote the plan out (the first plan of the turn, when the server does not say) */ created?: boolean }
+  | { kind: "compaction"; id?: string };
+
 export type StreamEvent =
   | StreamStartEvent
   | StreamTextEvent
@@ -617,7 +670,9 @@ export type StreamEvent =
   | StreamActionRequiredEvent
   | StreamActionResolvedEvent
   | StreamDoneEvent
-  | StreamTitleEvent;
+  | StreamTitleEvent
+  | StreamPlanEvent
+  | StreamCompactionEvent;
 
 // ============================================================================
 // Portal experience types

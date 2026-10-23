@@ -36,6 +36,8 @@ export {
   TurnActivity,
   type TurnActivityProps,
   type ActivityItem,
+  PlanCard,
+  type PlanCardProps,
 } from "./components/chat";
 export { MessageStopNotice, MessageWarnings, InterruptedNotice, type MessageStopNoticeProps, type InterruptedNoticeProps } from "./components/chat";
 export { ToolCall, ToolCalls, type ToolCallProps, type ToolCallsProps } from "./components/chat";
@@ -173,6 +175,13 @@ export type {
   StreamActionRequiredEvent,
   StreamActionResolvedEvent,
   StreamDoneEvent,
+  StreamPlanEvent,
+  StreamCompactionEvent,
+  PlanStep,
+  PlanStepStatus,
+  PlanOperation,
+  PlanSnapshot,
+  ActivityEntry,
   UserQuestionOption,
   UserQuestion,
   PendingAction,
@@ -274,6 +283,7 @@ export {
 export { resolveAgentSettings, type AgentSettings, type AgentSettingsDefaults } from "./utils/agent";
 export { fileFromRecord, applyFileList, isFileExpired, isFileTypeAllowed } from "./utils/files";
 export { applyFollowEvent, newFollowState, type FollowState, type FollowedTool } from "./utils/follow";
+export { normalizePlan, planProgress, readPlan, readActivity, type TurnFlowState } from "./utils/plan";
 export { pendingActionFromWire, pendingActionsFromWire, resolutionToWire } from "./utils/wire";
 export { validateAgainstSchema, type SchemaIssue } from "./utils/jsonSchema";
 export { localizeError, normalizeErrorCode, type CodedError } from "./utils/errors";
