@@ -53,8 +53,13 @@ export function safeImageSrc(url: unknown): string | undefined {
  */
 export function safeFileHref(url: unknown): string | undefined {
   if (typeof url !== "string") return undefined;
-  // eslint-disable-next-line no-control-regex
-  const value = url.replace(/[\t\n\r]/g, "").replace(/^[\u0000-\u0020]+/, "").replace(/[\u0000-\u0020]+$/, "");
+  const stripped = url.replace(/[\t\n\r]/g, "");
+  // control characters and spaces off both ends, in one pass (a regex for the end is quadratic on a long run)
+  let start = 0;
+  let end = stripped.length;
+  while (start < end && stripped.charCodeAt(start) <= 0x20) start++;
+  while (end > start && stripped.charCodeAt(end - 1) <= 0x20) end--;
+  const value = stripped.slice(start, end);
   if (!value) return undefined;
 
   const page = typeof window !== "undefined" ? window.location : undefined;

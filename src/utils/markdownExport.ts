@@ -38,6 +38,16 @@ function safeLink(url: string): string | undefined {
   return /^(https?:|mailto:)/i.test(url.trim()) ? url.trim() : undefined;
 }
 
+/** The text of raw HTML in the Markdown, tags taken out until none is left (`<b<b>>` leaves none either). */
+function htmlText(html: string): string {
+  let text = html.replace(/<br\s*\/?>/gi, "\n");
+  for (let previous = ""; previous !== text; ) {
+    previous = text;
+    text = text.replace(/<[^>]*>/g, "");
+  }
+  return text;
+}
+
 function runsOf(nodes: PhrasingContent[], marks: Marks = {}): Run[] {
   const out: Run[] = [];
   for (const node of nodes) {
@@ -73,7 +83,7 @@ function runsOf(nodes: PhrasingContent[], marks: Marks = {}): Run[] {
         out.push({ text: "\n" });
         break;
       case "html": {
-        const text = node.value.replace(/<br\s*\/?>/gi, "\n").replace(/<[^>]*>/g, "");
+        const text = htmlText(node.value);
         if (text) out.push({ ...marks, text });
         break;
       }
@@ -119,7 +129,7 @@ function blocksOf(nodes: RootContent[]): Block[] {
         out.push({ type: "rule" });
         break;
       case "html": {
-        const text = node.value.replace(/<br\s*\/?>/gi, "\n").replace(/<[^>]*>/g, "").trim();
+        const text = htmlText(node.value).trim();
         if (text) out.push({ type: "paragraph", runs: [{ text }] });
         break;
       }

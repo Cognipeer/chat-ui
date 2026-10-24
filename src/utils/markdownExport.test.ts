@@ -63,6 +63,14 @@ describe("markdownBlocks", () => {
     expect(table.type === "table" && table.align).toEqual(["left", "right"]);
     expect(table.type === "table" && table.rows.length).toBe(3);
   });
+
+  it("keeps only the text of raw HTML, however its tags are nested", () => {
+    const blocks = markdownBlocks("Satır<br>iki <b>kalın</b>\n\n<div><scr<script>ipt>x</scr</script>ipt> Blok</div>");
+    const texts = blocks.map((b) => (b.type === "paragraph" ? b.runs.map((r) => r.text).join("") : ""));
+    expect(texts[0]).toBe("Satır\niki kalın");
+    expect(texts[1]).toContain("Blok");
+    expect(texts[1]).not.toMatch(/<[^>]*>/);
+  });
 });
 
 describe("exportMarkdown", () => {
