@@ -98,4 +98,34 @@ describe("StatelessTransport plan and compaction", () => {
     const sent = await backend.sendMessage(conversation.id, { message: "go" });
     expect(sent.response.metadata).toBeUndefined();
   });
+
+  it("keeps what the agent wrote before a call in the stored activity, and streams the words after it as they come", async () => {
+    class Announcer extends StatelessTransport {
+      constructor() {
+        super({ defaultAgentId: "agent" });
+      }
+      protected async run({ emit }: RunInput): Promise<RunResult> {
+        emit.text("Let me look that up.");
+        emit.toolCall("t1", "search", { q: "x" });
+        emit.toolResult("t1", "search", { ok: true });
+        emit.text("Found it.");
+        return { content: "Found it." };
+      }
+    }
+    const backend = new Announcer();
+    const conversation = await backend.createConversation({ agentId: "agent" });
+    const texts: Array<[string, string]> = [];
+    await backend.sendMessageStream(conversation.id, { message: "go" }, { onText: (text, full) => texts.push([text, full]) });
+    // the transport's full text is still the whole of it: the chat decides what to show
+    expect(texts).toEqual([
+      ["Let me look that up.", "Let me look that up."],
+      ["Found it.", "Let me look that up.Found it."],
+    ]);
+    const stored = (await backend.getConversation(conversation.id)).messages.find((m: Message) => m.role === "assistant")!;
+    expect(stored.content).toBe("Found it.");
+    expect(stored.metadata?.activity).toEqual([
+      { kind: "text", text: "Let me look that up." },
+      { kind: "tool", id: "t1", name: "search", status: "ok" },
+    ]);
+  });
 });

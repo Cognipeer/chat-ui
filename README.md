@@ -324,7 +324,10 @@ message.metadata.activity  // ActivityEntry[], in the order it happened:
 //   { kind: 'tool', id?, name, label?, status?: 'ok' | 'error' }
 //   { kind: 'plan', version?, done, total, created? }
 //   { kind: 'compaction', id? }
+//   { kind: 'text', text }     - words the agent wrote before a tool call ("Let me look that up.")
 ```
+
+A model that announces its calls (Claude models do) writes the announcement in the same text stream as its answer. Once a tool starts after some words, `useChat` keeps those words as a `text` entry ahead of the call, sets `workingAfterText` so the list shows what runs now under them, and starts the shown text afresh with the next words: the answer is not glued to the announcement.
 
 A plan frame says what the agent did to the plan in `operation` (`"write"`: it wrote the plan out, `"update"`: it changed steps of the plan it had; agent-server >= 0.9.0 sends it). That is what tells "Plan created" (`created: true`) from "Plan updated". A server that does not send it gets its first plan of a turn marked created. A turn that paused for an answer goes on with the plan it had when it carries on (an answer, `continueConversation`, or a followed run whose `session.status_running` has `trigger: "resume"` or `"timeout"`): what the plan does next is an update, and the message of that leg keeps `metadata.plan` only when the leg wrote or changed it, so the card is drawn once.
 
