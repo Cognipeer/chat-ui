@@ -64,7 +64,7 @@ The component also takes a `ref` with `focus()`.
 | `blocked` | closed | off | off | "The assistant is waiting for your response above" |
 | `cancel` | open | on | on | sending cancels the request |
 | `answer` | open | on | the text answers the question (files alone are not an answer) | "Your reply will answer the question above" |
-| `following` | closed | off | off (Stop stays) | "This conversation is answering in another window. You can stop it here." |
+| `following` | closed | off | off (Stop stays) | "This conversation is still answering. You can stop it here." |
 | `budget_paused` | closed | off | off | none: the [usage limit](/guide/budgets) banner explains |
 | `readonly` | closed | off | off | "This conversation is read-only" |
 

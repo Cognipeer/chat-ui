@@ -4,6 +4,17 @@ All notable changes to Chat UI will be documented here.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-10-25
+
+### Added
+
+- `onConversationChange(conversationId | null)` on `Chat`: called when the chat moves to another conversation - a new chat's id as soon as the server created it, a conversation opened from the history (or a search hit), and `null` when the person starts a new chat (the sidebar, an agent picked in the sidebar, `controllerRef.newChat()`) or deletes the conversation on screen. It is not called for the `conversationId` the chat opened with, nor twice for the same one. A host that keeps the id in its address and passes it back as `conversationId` brings a reload back to the same conversation, and a turn still running there is followed again. See [Keep the conversation in the address](/guide/history#keep-the-conversation-in-the-address).
+
+### Fixed
+
+- The notice above the composer while a turn that runs elsewhere is followed no longer says "in another window": after a reload it is the same window. It now reads "This conversation is still answering. You can stop it here." (`chat.input.followingNotice`, English and Turkish).
+- `appearance="modern"`: the last block of a message (paragraph, list, code block, quote, table) no longer keeps its bottom margin, which showed as an empty line at the foot of the person's bubble and under answers.
+
 ## [0.12.0] - 2026-10-23
 
 ### Added

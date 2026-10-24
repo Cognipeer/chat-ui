@@ -63,6 +63,27 @@ Every row is a button: Tab, Enter and Space open it, the arrow keys, Home and En
 />
 ```
 
+## Keep the conversation in the address
+
+`onConversationChange` reports every move to another conversation: a new chat's id as soon as the server created it (before the answer streams), a conversation opened from the history, and `null` when the person starts a new chat or deletes the one on screen. It is not called for the `conversationId` the chat opened with. Keep the id in the page's address and pass it back as `conversationId` on the next load, and a reload comes back to the same conversation; a turn that was still running there is picked up again (agent-server 0.3.0 or later).
+
+```tsx
+const [openWith] = useState(() => new URLSearchParams(location.search).get("c") ?? undefined);
+
+<Chat
+  baseUrl="/api/agents"
+  conversationId={openWith}
+  onConversationChange={(id) => {
+    const url = new URL(location.href);
+    if (id) url.searchParams.set("c", id);
+    else url.searchParams.delete("c");
+    history.replaceState(history.state, "", url);
+  }}
+/>
+```
+
+Read the address once: `conversationId` opens a conversation whenever it changes, so passing the live id back would reload the conversation the person is already in.
+
 ## useChatHistory Hook
 
 For custom implementations:
