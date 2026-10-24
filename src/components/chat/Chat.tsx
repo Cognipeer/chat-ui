@@ -157,6 +157,12 @@ export interface ChatProps extends ChatConfig, ChatCallbacks {
   expiryWarningSeconds?: number;
   /** Replace how an image in a message is drawn, e.g. to fetch it with credentials */
   renderImage?: (props: ImageRenderProps) => React.ReactNode;
+  /**
+   * Offer a preview next to Download on attached and produced files, and open pictures in it (default true):
+   * pictures, PDF, Word, spreadsheets (xlsx, csv), Markdown (also saved as PDF or Word), HTML, JSON, text and
+   * code, audio and video. A panel on a wide screen, the whole screen on a phone.
+   */
+  filePreview?: boolean;
   /** Replace the notice under an answer that stopped early (stopped, a limit, the usage limit, an error) */
   renderStopNotice?: (props: StopNoticeRenderProps) => React.ReactNode;
   /**
@@ -356,6 +362,7 @@ function ChatContent({
   allowArgumentEdit = false,
   expiryWarningSeconds,
   renderImage,
+  filePreview = true,
   renderStopNotice,
   showBudgetMeter = true,
   allowBudgetContinue = false,
@@ -1072,6 +1079,7 @@ function ChatContent({
               enableCitations={enableCitations}
               actions={actionsConfig}
               renderImage={renderImage}
+              filePreview={filePreview}
               renderStopNotice={renderStopNotice}
               resolveFileUrl={chat.resolveFileUrl}
               hasEarlier={chat.hasEarlierMessages}

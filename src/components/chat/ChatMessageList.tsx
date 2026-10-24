@@ -76,6 +76,8 @@ export interface ChatMessageListProps {
   actions?: ChatActionsConfig;
   /** Replace how an image in a message is drawn */
   renderImage?: (props: ImageRenderProps) => React.ReactNode;
+  /** Offer a preview of attached and produced files next to Download (default true; see `ChatMessage`) */
+  filePreview?: boolean;
   /** Replace the notice under an answer that stopped early */
   renderStopNotice?: (props: StopNoticeRenderProps) => React.ReactNode;
   /** How to get a URL for a stored file that has none of its own (images are fetched this way to be shown) */
@@ -186,6 +188,7 @@ export function ChatMessageList({
   enableCitations = true,
   actions,
   renderImage,
+  filePreview = true,
   renderStopNotice,
   resolveFileUrl,
   hasEarlier = false,
@@ -352,6 +355,7 @@ export function ChatMessageList({
           enableCitations={enableCitations}
           actions={cardActions}
           renderImage={renderImage}
+          filePreview={filePreview}
           renderStopNotice={renderStopNotice}
           resolveFileUrl={resolveFileUrl}
           showReasoning={showReasoning}

@@ -4,6 +4,16 @@ All notable changes to Chat UI will be documented here.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-10-25
+
+### Added
+
+- File preview. A file under a message (the files an agent wrote and the person's attachments) gets a **Preview** button next to Download, and a picture's thumbnail opens the preview instead of a new tab. The preview is a panel on the right of a wide screen and the whole screen on a phone (inside the safe areas); it closes on Escape or its close button, keeps Tab inside, stops the page behind it from scrolling and gives focus back to what opened it. It shows pictures; SVG (drawn as a picture, so its scripts never run); PDF (pdf.js: each page drawn as it scrolls into view, the page number, zoom); Word `.docx` (docx-preview, laid out as pages in a shadow root so the document's styles stay inside the preview, scaled down to fit a phone); Excel `.xlsx` / `.xlsm` (up to 10 sheets as tabs, dates as `YYYY-MM-DD`, percents as percents); CSV and TSV (a `;` delimiter is found too); Markdown (rendered, or its source); HTML (in a sandboxed frame: its scripts run without access to the page); JSON (pretty-printed); text and code; audio and video. A spreadsheet or CSV shows its first 500 rows and 50 columns and says how many rows it has; text stops at 300,000 characters with a note. The type comes from the extension first, then the media type, so agent files sent as `application/octet-stream` preview too. A file larger than its kind's limit (`PREVIEW_MAX_BYTES`: 40 MB for PDF, 15 MB for Word and Excel, 5 MB for text, ...) is not read and offers its download instead. The bytes are read the way Download reads them: the copy still on this device, the file's own link, or `resolveFileUrl` (`ChatTransport.getFileUrl`, with the transport's credentials). `.doc`, `.xls`, `.pptx` and other types keep only their Download.
+- Markdown as PDF or Word. The download menu of a Markdown file's preview saves it as Markdown, as a PDF document or as a Word document (`report.md` → `report.pdf` / `report.docx`): headings, paragraphs with bold, italic, code and links (http, https and mailto), nested and numbered lists, task lists, quotes, code blocks, tables with their column alignment, and rules; a picture becomes its alt text. The PDF uses Roboto, which covers Turkish and the other Latin, Greek and Cyrillic scripts (not emoji or CJK). `exportMarkdown(markdown, "pdf" | "docx", title)` returns the file as a `Blob`; `markdownExportName(name, format)` names it.
+- `filePreview` on `Chat`, `ChatMessageList` and `ChatMessage` (default `true`; `false` leaves chips and thumbnails as they were). `FilePreview` (`file`, `resolveFileUrl`, `onClose`, `container`) shows a file from a list of the host's own; `filePreviewKind(file)` says how a file would be shown, or `undefined` when it cannot be. Types `FilePreviewProps`, `FilePreviewKind`, `MarkdownExportFormat`.
+- New dependencies `pdfjs-dist`, `docx-preview`, `jszip`, `docx`, `pdfmake`, `unified` and `remark-parse`. The PDF, Word, Excel and export code is loaded only when a preview or an export needs it.
+- English and Turkish strings `chat.preview.*`.
+
 ## [0.12.0] - 2026-10-23
 
 ### Added

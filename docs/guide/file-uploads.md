@@ -214,8 +214,9 @@ Or use [`ChatInput`](/components/chat-input), which does the picking, dropping, 
 
 Files and images are displayed in messages with:
 
-- **Image thumbnail** - An image attachment with a usable URL (the server's `url`, a stored copy fetched through `getFileUrl`, or the local preview of a file you just sent) is drawn as a picture that opens full size in a new tab
+- **Image thumbnail** - An image attachment with a usable URL (the server's `url`, a stored copy fetched through `getFileUrl`, or the local preview of a file you just sent) is drawn as a picture that opens in the preview (full size in a new tab with `filePreview={false}`)
 - **File chip** - Other files, and images without a usable URL, as a chip with a file icon, name, extension and size
+- **Preview** - A button on the chip that shows the file in a panel (the whole screen on a phone): PDF, Word, Excel, CSV, Markdown (which it also saves as PDF or Word), HTML, JSON, text and code, pictures, audio and video. See [File preview](/components/chat-message#file-preview)
 - **Download** - A link on the chip when the file has a safe `url` (http(s), `blob:` or relative), or a button that fetches it through the transport
 - **Images in the content** - A message whose `content` has `image_url` / `input_image` / `image` parts shows those images below its text
 

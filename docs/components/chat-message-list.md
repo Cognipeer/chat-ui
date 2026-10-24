@@ -43,6 +43,7 @@ const chat = useChat({ baseUrl: "/api/agents", agentId: "assistant" });
 | `renderImage` | `(props: ImageRenderProps) => ReactNode` | - | Draw images yourself |
 | `renderStopNotice` | `(props: StopNoticeRenderProps) => ReactNode` | - | Replace the notice under an answer that stopped early |
 | `resolveFileUrl` | `(file, { disposition? }) => Promise<string \| undefined>` | - | How stored files without a URL are shown and downloaded; pass `chat.resolveFileUrl` |
+| `filePreview` | `boolean` | `true` | A **Preview** button on file chips, and thumbnails that open the preview; see [File preview](/components/chat-message#file-preview) |
 | `hasEarlier`, `isLoadingEarlier`, `onLoadEarlier` | `boolean`, `boolean`, `() => void` | `false`, `false`, - | A "Show earlier messages" button above the first message; pass `chat.hasEarlierMessages`, `chat.isLoadingEarlierMessages` and `chat.loadEarlierMessages`. The list keeps the reader's place when the older page arrives |
 | `interrupted`, `onRetryInterrupted` | `boolean`, `() => void` | `false`, - | The list ends on a message of the person's that the run never answered: a "The reply was interrupted" notice follows it, with Retry when `onRetryInterrupted` is given; pass `chat.interrupted` and `chat.retryInterrupted` |
 | `emptyState` | `ReactNode` | built-in | Shown when there are no messages |
