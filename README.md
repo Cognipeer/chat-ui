@@ -1,5 +1,11 @@
 # @cognipeer/chat-ui
 
+**Customizable React chat UI for AI agents, with streaming, file uploads, tool-call visualization and a ready-made connection to `@cognipeer/agent-server`.**
+
+[![npm version](https://img.shields.io/npm/v/@cognipeer/chat-ui)](https://www.npmjs.com/package/@cognipeer/chat-ui) [![npm downloads](https://img.shields.io/npm/dm/@cognipeer/chat-ui)](https://www.npmjs.com/package/@cognipeer/chat-ui) [![license](https://img.shields.io/github/license/Cognipeer/chat-ui)](LICENSE) [![docs](https://img.shields.io/badge/docs-docs.cognipeer.com-0A7CFF)](https://docs.cognipeer.com/chat-ui/) [![GitHub stars](https://img.shields.io/github/stars/Cognipeer/chat-ui?style=social)](https://github.com/Cognipeer/chat-ui)
+
+[Docs](https://docs.cognipeer.com/chat-ui/) · [Quick start](#quick-start) · [Changelog](docs/changelog.md) · [Contact](mailto:developer@cognipeer.com)
+
 A customizable React chat UI component library for AI agents. Features a ChatGPT-like dark theme, streaming support, file uploads, tool call visualization, and seamless integration with `@cognipeer/agent-server`.
 
 
@@ -650,6 +656,22 @@ export default function ChatPage() {
   );
 }
 ```
+
+## Cognipeer open-source projects
+
+| Project | What it does |
+| --- | --- |
+| [Cognipeer Console](https://github.com/Cognipeer/console) | Self-hosted AI gateway and control plane: OpenAI-compatible routing, RAG, MCP hub, guardrails and agent tracing |
+| [console-sdk](https://github.com/Cognipeer/console-sdk) | TypeScript SDK for the Cognipeer Console API |
+| [agent-sdk](https://github.com/Cognipeer/agent-sdk) | Lightweight, message-first agent runtime |
+| [agent-server](https://github.com/Cognipeer/agent-server) | Ready-made REST API layer for AI agents |
+| [to-markdown](https://github.com/Cognipeer/to-markdown) | Convert PDF, Office, HTML and more to Markdown for LLM pipelines |
+| [graph-builder](https://github.com/Cognipeer/graph-builder) | Turn text sources into a queryable graph |
+| [cognipeer-observability](https://github.com/Cognipeer/cognipeer-observability) | Drop-in agent tracing for LangChain, LangGraph, OpenAI Agents and OpenTelemetry |
+
+If this project is useful to you, a ⭐ on GitHub helps other developers find it.
+
+Questions or enterprise support: [developer@cognipeer.com](mailto:developer@cognipeer.com).
 
 ## License
 
