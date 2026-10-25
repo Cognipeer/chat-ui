@@ -68,7 +68,7 @@ content: [
 
 ## File preview
 
-**Preview** opens the file in a panel on the right of a wide screen, and over the whole screen on a phone. It closes on Escape or its close button and gives focus back to the button that opened it.
+In `Chat`, **Preview** opens the file in a pane on the right that slides in and pushes the conversation over: the page stays as it is, so the person can keep reading and writing beside the file, and another file's Preview replaces the one in the pane. The pane is about half of the conversation area (360 to 720 pixels) and leaves the conversation at least 520. When the area is narrower than 880 pixels (a phone, a narrow window) the preview is a dialog instead: a panel over the page on the right, the whole screen on a phone. A `ChatMessage` or `ChatMessageList` used on its own always opens the dialog. Either closes on Escape or its close button and gives focus back to the button the file was opened from; opening another conversation closes the pane.
 
 | File | Shown as |
 |------|----------|
@@ -108,7 +108,7 @@ import { FilePreview, filePreviewKind } from "@cognipeer/chat-ui";
 {open && <FilePreview file={open} resolveFileUrl={chat.resolveFileUrl} onClose={() => setOpen(null)} />}
 ```
 
-Pass `container` (an element inside the chat's theme) to keep the chat's colours when the preview is outside the chat; it is mounted in `document.body` otherwise.
+Pass `container` (an element inside the chat's theme) to keep the chat's colours when the preview is outside the chat; it is mounted in `document.body` otherwise. With `paneWidth` it is a pane of that width in your own layout instead of a dialog (`previewPaneWidth(areaWidth)` gives the width `Chat` uses, or `undefined` when a pane does not fit).
 
 ## Why an answer ended
 

@@ -19,7 +19,7 @@ import { MessageActionCards, type ChatActionsConfig } from "./ActionCards";
 import { MessageToolbar, type MessageToolbarConfig } from "./MessageToolbar";
 import { MessageEditor } from "./MessageEditor";
 import { MessageStopNotice, MessageWarnings } from "./StopNotice";
-import { FilePreview } from "./FilePreview";
+import { FilePreview, FilePreviewOpenerContext } from "./FilePreview";
 import { filePreviewKind, saveFile } from "../../utils/filePreview";
 import { useI18n } from "../../hooks";
 import { useAppearance } from "./appearance";
@@ -473,6 +473,8 @@ function FileAttachmentItem({
   const { t, formatDate } = useI18n();
   const [downloadFailed, setDownloadFailed] = React.useState(false);
   const [previewing, setPreviewing] = React.useState(false);
+  // Inside `Chat` the preview opens in the chat's pane; a message shown on its own opens a dialog
+  const openInChat = React.useContext(FilePreviewOpenerContext);
   const rootRef = React.useRef<HTMLElement | null>(null);
   const expired = isFileExpired(file);
   // Going up (or refused by the server): there is no stored copy to show, open or download yet
@@ -499,6 +501,7 @@ function FileAttachmentItem({
     !notStored &&
     filePreviewKind(file) !== undefined &&
     Boolean(href || resolveFileUrl || (file.previewUrl && /^blob:/i.test(file.previewUrl)));
+  const openPreview = () => (openInChat ? openInChat(file, resolveFileUrl) : setPreviewing(true));
   const previewPanel = previewing && (
     <FilePreview
       file={file}
@@ -518,7 +521,7 @@ function FileAttachmentItem({
           renderImage={renderImage}
           file={file}
           onError={() => setFailedSrc((prev) => [...prev, thumb])}
-          onOpen={canPreview ? () => setPreviewing(true) : undefined}
+          onOpen={canPreview ? openPreview : undefined}
         />
         <figcaption className="mt-1 text-xs text-chat-text-secondary truncate max-w-[16rem]" title={file.name}>
           {file.name} · {formatFileSize(file.size)}
@@ -607,7 +610,7 @@ function FileAttachmentItem({
       {canPreview && (
         <button
           type="button"
-          onClick={() => setPreviewing(true)}
+          onClick={openPreview}
           aria-label={t("chat.preview.openFile", { fileName: file.name })}
           className="text-chat-accent-primary hover:underline flex-shrink-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-chat-accent-primary rounded"
         >

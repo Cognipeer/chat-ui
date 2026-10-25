@@ -28,6 +28,7 @@ export {
   type ExportMenuProps,
   FilePreview,
   type FilePreviewProps,
+  previewPaneWidth,
   NotificationsMenu,
   type NotificationsMenuProps,
   type ListToolbarConfig,

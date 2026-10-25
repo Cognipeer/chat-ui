@@ -49,7 +49,39 @@ export interface FilePreviewProps {
   onClose: () => void;
   /** Where the dialog is mounted; defaults to `document.body` (pass the chat's theme root to keep its colours) */
   container?: Element | null;
+  /**
+   * Shown as a pane this many pixels wide beside the conversation instead of a dialog over it (`Chat` does this
+   * on a wide screen, see `previewPaneWidth`): it slides in from the right and pushes the conversation over. The
+   * page stays usable then; Escape closes the pane while the focus is in it.
+   */
+  paneWidth?: number;
 }
+
+/** Opens a file of a message in the chat's own preview pane. */
+export type FilePreviewOpener = (file: FileAttachment, resolveFileUrl?: FileUrlResolver) => void;
+
+/** Set by `Chat`, which lays the preview out beside the conversation: a message's file opens there, not in a dialog of its own. */
+export const FilePreviewOpenerContext = React.createContext<FilePreviewOpener | null>(null);
+
+const PANE_MIN = 360;
+const PANE_MAX = 720;
+/** What the conversation keeps beside the pane, at the least */
+const CONVERSATION_MIN = 520;
+/** How long the pane takes to slide in or out, in ms (`duration-200` below) */
+const PANE_MS = 200;
+
+/**
+ * The width of the preview pane beside a conversation area `width` pixels wide: about half of it, 360 to 720
+ * pixels, leaving the conversation 520 at least. `undefined` when that does not fit (a phone, a narrow window):
+ * the preview is a dialog then.
+ */
+export function previewPaneWidth(width: number): number | undefined {
+  if (width < PANE_MIN + CONVERSATION_MIN) return undefined;
+  return Math.round(Math.min(PANE_MAX, width - CONVERSATION_MIN, Math.max(PANE_MIN, width * 0.45)));
+}
+
+const reducedMotion = () =>
+  typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 type Content =
   | { kind: "image" | "svg" | "audio" | "video"; url: string }
@@ -192,34 +224,75 @@ const IconButton = React.forwardRef<
 });
 
 /**
- * A file shown in place: a panel on the right of a wide screen, the whole screen on a phone. Pictures, PDF,
- * Word, spreadsheets (xlsx, csv), Markdown, HTML, JSON, text and code, audio and video; a Markdown file can be
- * saved as PDF or Word too. It closes on Escape or the close button and gives focus back to what opened it.
+ * A file shown in place: a dialog on the right of a wide screen and the whole screen on a phone, or, with
+ * `paneWidth`, a pane beside the conversation. Pictures, PDF, Word, spreadsheets (xlsx, csv), Markdown, HTML,
+ * JSON, text and code, audio and video; a Markdown file can be saved as PDF or Word too. It closes on Escape or
+ * the close button and gives focus back to what opened it.
  */
-export function FilePreview({ file, resolveFileUrl, onClose, container }: FilePreviewProps) {
+export function FilePreview({ file, resolveFileUrl, onClose, container, paneWidth }: FilePreviewProps) {
   const { t } = useI18n();
   const titleId = React.useId();
   const kind = filePreviewKind(file);
   const state = useFileContent(file, kind, resolveFileUrl);
-  const dialogRef = React.useRef<HTMLDivElement>(null);
+  const dialogRef = React.useRef<HTMLElement>(null);
   const closeRef = React.useRef<HTMLButtonElement>(null);
   const [source, setSource] = React.useState(false);
   const [copied, setCopied] = React.useState(false);
   const [notice, setNotice] = React.useState<string>();
   const [pdfFailed, setPdfFailed] = React.useState(false);
   const [docxFailed, setDocxFailed] = React.useState(false);
-
-  // Focus moves in, the page under it stops scrolling, and both come back on close
+  const docked = paneWidth !== undefined;
+  // The pane is laid out at no width first and widens on the next frame; closing narrows it before it goes
+  const [entered, setEntered] = React.useState(false);
+  const [leaving, setLeaving] = React.useState(false);
+  const onCloseRef = React.useRef(onClose);
   React.useEffect(() => {
-    const opener = document.activeElement as HTMLElement | null;
-    closeRef.current?.focus();
+    onCloseRef.current = onClose;
+  });
+
+  // What had the focus when a file was opened (the Preview button it came from) gets it back on close
+  const openerRef = React.useRef<HTMLElement | null>(null);
+  React.useEffect(() => {
+    const active = document.activeElement as HTMLElement | null;
+    if (active && !dialogRef.current?.contains(active)) openerRef.current = active;
+  }, [file.id, file.url]);
+  React.useEffect(() => () => openerRef.current?.focus?.(), []);
+
+  // The focus moves in (again when a pane turns into a dialog or back); without a scroll, which would shift the
+  // pane's content while it is still narrow
+  React.useEffect(() => {
+    closeRef.current?.focus({ preventScroll: true });
+  }, [docked]);
+
+  // The page under a dialog stops scrolling; beside a pane it is still the page
+  React.useEffect(() => {
+    if (docked) return;
     const overflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => {
       document.body.style.overflow = overflow;
-      opener?.focus?.();
     };
-  }, []);
+  }, [docked]);
+
+  React.useEffect(() => {
+    if (!docked) return;
+    const frame = requestAnimationFrame(() => setEntered(true));
+    return () => cancelAnimationFrame(frame);
+  }, [docked]);
+
+  // Another file opened while this one was sliding out: the pane stays for it
+  React.useEffect(() => setLeaving(false), [file.id, file.url]);
+
+  React.useEffect(() => {
+    if (!leaving) return;
+    const timer = setTimeout(() => onCloseRef.current(), PANE_MS);
+    return () => clearTimeout(timer);
+  }, [leaving]);
+
+  const close = () => {
+    if (docked && !reducedMotion()) setLeaving(true);
+    else onClose();
+  };
 
   React.useEffect(() => {
     if (!copied) return;
@@ -227,13 +300,16 @@ export function FilePreview({ file, resolveFileUrl, onClose, container }: FilePr
     return () => clearTimeout(timer);
   }, [copied]);
 
-  // Events in a portal still bubble through the React tree: the chat around the opener must not act on them
+  // Events in a portal still bubble through the React tree: the chat around the opener must not act on them.
+  // The focus stays in a dialog; a pane is part of the page and Tab goes on out of it.
   const onKeyDown = (event: React.KeyboardEvent) => {
-    event.stopPropagation();
     if (event.key === "Escape") {
-      onClose();
+      event.stopPropagation();
+      close();
       return;
     }
+    if (docked) return;
+    event.stopPropagation();
     if (event.key !== "Tab" || !dialogRef.current) return;
     const focusable = Array.from(
       dialogRef.current.querySelectorAll<HTMLElement>('button:not([disabled]), a[href], iframe, audio, video, [tabindex]:not([tabindex="-1"])')
@@ -284,6 +360,92 @@ export function FilePreview({ file, resolveFileUrl, onClose, container }: FilePr
 
   const meta = [fileExtension(file.name).toUpperCase(), file.size > 0 ? formatFileSize(file.size) : ""].filter(Boolean).join(" · ");
 
+  const panel = (
+    <>
+      <header className="flex flex-shrink-0 items-center gap-1 border-b border-chat-border-primary py-2 pl-3 pr-2 pt-[max(0.5rem,env(safe-area-inset-top))] sm:gap-1.5 sm:pl-4">
+        <FileIcon className="mr-1 h-5 w-5 flex-shrink-0 text-chat-text-secondary" />
+        <div className="min-w-0 flex-1">
+          <h2 id={titleId} className="m-0 truncate text-sm font-medium text-chat-text-primary" title={file.name}>
+            {file.name}
+          </h2>
+          {meta && <p className="m-0 truncate text-xs text-chat-text-tertiary">{meta}</p>}
+        </div>
+        {hasSource && (
+          <IconButton label={source ? t("chat.preview.rendered") : t("chat.preview.source")} pressed={source} onClick={() => setSource((v) => !v)}>
+            {source ? <EyeIcon className="h-4 w-4" /> : <CodeIcon className="h-4 w-4" />}
+          </IconButton>
+        )}
+        {text !== undefined && (
+          <IconButton label={copied ? t("chat.preview.copied") : t("chat.preview.copy")} onClick={() => void copy()}>
+            {copied ? <CheckIcon className="h-4 w-4 text-chat-success" /> : <CopyIcon className="h-4 w-4" />}
+          </IconButton>
+        )}
+        {ready?.content.kind === "markdown" ? (
+          <SaveMenu onDownload={() => void download()} onExport={exportAs} />
+        ) : (
+          <IconButton label={t("chat.preview.download")} onClick={() => void download()}>
+            <DownloadIcon className="h-4 w-4" />
+          </IconButton>
+        )}
+        <IconButton ref={closeRef} label={t("chat.preview.close")} onClick={close}>
+          <XIcon className="h-5 w-5" />
+        </IconButton>
+      </header>
+      {notice && (
+        <p role="alert" className="m-0 flex-shrink-0 border-b border-chat-border-primary bg-chat-danger-bg px-4 py-2 text-xs text-chat-danger">
+          {notice}
+        </p>
+      )}
+      <div className="relative min-h-0 flex-1 overflow-auto overscroll-contain">
+        {!kind ? (
+          <Unavailable message={t("chat.preview.unsupported")} onDownload={() => void download()} />
+        ) : state.status === "loading" ? (
+          <div role="status" className="flex h-full items-center justify-center gap-2 text-sm text-chat-text-secondary">
+            <LoadingIcon className="h-5 w-5 animate-spin motion-reduce:animate-none" />
+            {t("chat.preview.loading")}
+          </div>
+        ) : state.status === "tooLarge" ? (
+          <Unavailable message={t("chat.preview.tooLarge", { size: formatFileSize(state.size) })} onDownload={() => void download()} />
+        ) : state.status === "failed" ? (
+          <Unavailable message={t("chat.preview.failed")} onDownload={() => void download()} />
+        ) : (
+          <PreviewBody
+            file={file}
+            content={state.content}
+            source={source}
+            pdfFailed={pdfFailed}
+            docxFailed={docxFailed}
+            onPdfFailed={() => setPdfFailed(true)}
+            onDocxFailed={() => setDocxFailed(true)}
+            onDownload={() => void download()}
+          />
+        )}
+      </div>
+    </>
+  );
+
+  if (docked) {
+    // The pane's content keeps its width while the pane widens, so nothing inside is laid out again on every frame
+    return (
+      <div
+        className="h-full flex-shrink-0 overflow-hidden transition-[width] duration-200 ease-out motion-reduce:transition-none"
+        style={{ width: entered && !leaving ? paneWidth : 0 }}
+        data-chat-file-preview={kind ?? "none"}
+        data-chat-preview-pane=""
+      >
+        <aside
+          ref={dialogRef}
+          aria-labelledby={titleId}
+          onKeyDown={onKeyDown}
+          className="flex h-full flex-col border-l border-chat-border-primary bg-chat-bg-primary text-chat-text-primary"
+          style={{ width: paneWidth }}
+        >
+          {panel}
+        </aside>
+      </div>
+    );
+  }
+
   const dialog = (
     <div
       className="fixed inset-0 z-[70] flex justify-end"
@@ -293,7 +455,7 @@ export function FilePreview({ file, resolveFileUrl, onClose, container }: FilePr
     >
       <div aria-hidden="true" className="absolute inset-0 hidden animate-fade-in bg-black/50 sm:block" onClick={onClose} />
       <div
-        ref={dialogRef}
+        ref={dialogRef as React.RefObject<HTMLDivElement>}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
@@ -305,65 +467,7 @@ export function FilePreview({ file, resolveFileUrl, onClose, container }: FilePr
           "pb-[env(safe-area-inset-bottom)] sm:w-[min(960px,92vw)] sm:border-l sm:border-chat-border-primary"
         )}
       >
-        <header className="flex flex-shrink-0 items-center gap-1 border-b border-chat-border-primary py-2 pl-3 pr-2 pt-[max(0.5rem,env(safe-area-inset-top))] sm:gap-1.5 sm:pl-4">
-          <FileIcon className="mr-1 h-5 w-5 flex-shrink-0 text-chat-text-secondary" />
-          <div className="min-w-0 flex-1">
-            <h2 id={titleId} className="m-0 truncate text-sm font-medium text-chat-text-primary" title={file.name}>
-              {file.name}
-            </h2>
-            {meta && <p className="m-0 truncate text-xs text-chat-text-tertiary">{meta}</p>}
-          </div>
-          {hasSource && (
-            <IconButton label={source ? t("chat.preview.rendered") : t("chat.preview.source")} pressed={source} onClick={() => setSource((v) => !v)}>
-              {source ? <EyeIcon className="h-4 w-4" /> : <CodeIcon className="h-4 w-4" />}
-            </IconButton>
-          )}
-          {text !== undefined && (
-            <IconButton label={copied ? t("chat.preview.copied") : t("chat.preview.copy")} onClick={() => void copy()}>
-              {copied ? <CheckIcon className="h-4 w-4 text-chat-success" /> : <CopyIcon className="h-4 w-4" />}
-            </IconButton>
-          )}
-          {ready?.content.kind === "markdown" ? (
-            <SaveMenu onDownload={() => void download()} onExport={exportAs} />
-          ) : (
-            <IconButton label={t("chat.preview.download")} onClick={() => void download()}>
-              <DownloadIcon className="h-4 w-4" />
-            </IconButton>
-          )}
-          <IconButton ref={closeRef} label={t("chat.preview.close")} onClick={onClose}>
-            <XIcon className="h-5 w-5" />
-          </IconButton>
-        </header>
-        {notice && (
-          <p role="alert" className="m-0 flex-shrink-0 border-b border-chat-border-primary bg-chat-danger-bg px-4 py-2 text-xs text-chat-danger">
-            {notice}
-          </p>
-        )}
-        <div className="relative min-h-0 flex-1 overflow-auto overscroll-contain">
-          {!kind ? (
-            <Unavailable message={t("chat.preview.unsupported")} onDownload={() => void download()} />
-          ) : state.status === "loading" ? (
-            <div role="status" className="flex h-full items-center justify-center gap-2 text-sm text-chat-text-secondary">
-              <LoadingIcon className="h-5 w-5 animate-spin motion-reduce:animate-none" />
-              {t("chat.preview.loading")}
-            </div>
-          ) : state.status === "tooLarge" ? (
-            <Unavailable message={t("chat.preview.tooLarge", { size: formatFileSize(state.size) })} onDownload={() => void download()} />
-          ) : state.status === "failed" ? (
-            <Unavailable message={t("chat.preview.failed")} onDownload={() => void download()} />
-          ) : (
-            <PreviewBody
-              file={file}
-              content={state.content}
-              source={source}
-              pdfFailed={pdfFailed}
-              docxFailed={docxFailed}
-              onPdfFailed={() => setPdfFailed(true)}
-              onDocxFailed={() => setDocxFailed(true)}
-              onDownload={() => void download()}
-            />
-          )}
-        </div>
+        {panel}
       </div>
     </div>
   );

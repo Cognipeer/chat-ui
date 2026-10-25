@@ -2,9 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render as rtlRender, screen, waitFor, within } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { ChatI18nProvider } from "../../providers";
+import { Chat } from "./Chat";
 import { ChatMessage } from "./ChatMessage";
-import { FilePreview } from "./FilePreview";
+import { FilePreview, previewPaneWidth } from "./FilePreview";
 import { exportMarkdown } from "../../utils/markdownExport";
+import type { ChatTransport } from "../../api";
 import type { FileAttachment, Message } from "../../types";
 
 const render = (ui: ReactElement) => rtlRender(<ChatI18nProvider locale="en">{ui}</ChatI18nProvider>);
@@ -203,5 +205,99 @@ describe("FilePreview", () => {
     expect(document.activeElement).toBe(first);
     fireEvent.keyDown(dialog, { key: "Tab", shiftKey: true });
     expect(document.activeElement).toBe(close);
+  });
+});
+
+describe("previewPaneWidth", () => {
+  it("is about half of the area, 360 to 720 pixels, and leaves the conversation 520", () => {
+    expect(previewPaneWidth(879)).toBeUndefined();
+    expect(previewPaneWidth(880)).toBe(360);
+    expect(previewPaneWidth(1000)).toBe(450);
+    expect(previewPaneWidth(1280)).toBe(576);
+    expect(previewPaneWidth(2400)).toBe(720);
+  });
+});
+
+describe("the preview in a Chat", () => {
+  let counter = 0;
+  const agent = { id: "a", name: "Alpha" };
+  function transport(conversations: Record<string, Message[]>): ChatTransport {
+    const list = Object.keys(conversations).map((id) => ({ id, agentId: "a", title: `Chat ${id}`, createdAt: now, updatedAt: now }));
+    return {
+      getAgents: async () => [agent],
+      getConversations: async () => ({ conversations: list, total: list.length, limit: 20, offset: 0, hasMore: false }),
+      createConversation: async (p) => ({ id: "new", agentId: p.agentId, createdAt: now, updatedAt: now }),
+      getConversation: async (id) => ({ conversation: { id, agentId: "a", createdAt: now, updatedAt: now }, messages: conversations[id] ?? [] }),
+      deleteConversation: async () => {},
+      sendMessage: async () => {
+        throw new Error("unused");
+      },
+      sendMessageStream: async () => {},
+      resolveAction: async () => undefined,
+      getFileUrl: async () => "blob:stored",
+    };
+  }
+  const renderChat = (t: ChatTransport) =>
+    render(<Chat baseUrl={`http://preview-${++counter}`} transport={t} conversationId="c1" enableFileUpload={false} />);
+  /** jsdom lays nothing out: every element is this wide */
+  const layOut = (width: number) =>
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({ width, height: 800, top: 0, left: 0, right: width, bottom: 800, x: 0, y: 0, toJSON: () => ({}) });
+  const notes = [message([file("notes.txt", { mimeType: "text/plain" }), file("todo.md", { mimeType: "text/markdown" })])];
+
+  beforeEach(() => {
+    Element.prototype.scrollIntoView = vi.fn();
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it("opens beside the conversation on a wide screen, and the page stays as it is", async () => {
+    layOut(1280);
+    serve("hello from the agent");
+    renderChat(transport({ c1: notes }));
+    const opener = await screen.findByRole("button", { name: "Preview notes.txt" });
+    opener.focus();
+    fireEvent.click(opener);
+
+    const pane = await screen.findByRole("complementary", { name: "notes.txt" });
+    expect(await within(pane).findByText("hello from the agent")).toBeTruthy();
+    // it widens to its width on the next frame, pushing the conversation over: no dialog, no backdrop, no locked page
+    await waitFor(() => expect(pane.parentElement!.style.width).toBe("576px"));
+    expect(pane.style.width).toBe("576px");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(document.body.style.overflow).toBe("");
+    expect(screen.getByText("Here you go")).toBeTruthy();
+    expect(document.activeElement).toBe(within(pane).getByRole("button", { name: "Close preview" }));
+
+    // another file takes the same pane
+    const next = screen.getByRole("button", { name: "Preview todo.md" });
+    next.focus();
+    fireEvent.click(next);
+    expect(await screen.findByRole("complementary", { name: "todo.md" })).toBe(pane);
+
+    // Escape slides it out, then the focus goes back to the button the last file came from
+    fireEvent.keyDown(pane, { key: "Escape" });
+    await waitFor(() => expect(pane.parentElement?.style.width).toBe("0px"));
+    await waitFor(() => expect(screen.queryByRole("complementary", { name: "todo.md" })).toBeNull());
+    expect(document.activeElement).toBe(next);
+  });
+
+  it("is a dialog when the conversation has no room beside it", async () => {
+    layOut(700);
+    serve("hello");
+    renderChat(transport({ c1: notes }));
+    fireEvent.click(await screen.findByRole("button", { name: "Preview notes.txt" }));
+    const dialog = await screen.findByRole("dialog", { name: "notes.txt" });
+    expect(await within(dialog).findByText("hello")).toBeTruthy();
+    expect(document.body.style.overflow).toBe("hidden");
+    expect(document.querySelector("[data-chat-preview-pane]")).toBeNull();
+  });
+
+  it("closes when another conversation is opened", async () => {
+    layOut(1280);
+    serve("hello");
+    renderChat(transport({ c1: notes, c2: [] }));
+    fireEvent.click(await screen.findByRole("button", { name: "Preview notes.txt" }));
+    await screen.findByRole("complementary", { name: "notes.txt" });
+    fireEvent.click(await screen.findByText("Chat c2"));
+    await waitFor(() => expect(screen.queryByRole("complementary", { name: "notes.txt" })).toBeNull());
   });
 });

@@ -9,7 +9,7 @@ Documentation: <https://docs.cognipeer.com/chat-ui/guide/getting-started>
 - 🎨 **Customizable Theme** - Dark/light modes with full color customization
 - 📡 **Streaming Support** - Real-time SSE streaming with text updates
 - 📁 **File Uploads** - Pick, drag and drop or paste files; image thumbnails; send files without text
-- 👁️ **File Preview** - PDF, Word, Excel, CSV, Markdown (saved as PDF or Word too), HTML, pictures, text and media in a panel, full screen on a phone
+- 👁️ **File Preview** - PDF, Word, Excel, CSV, Markdown (saved as PDF or Word too), HTML, pictures, text and media in a pane beside the conversation, full screen on a phone
 - 🔧 **Tool Call UI** - Expandable tool call visualization
 - ✅ **Approvals and Questions** - Approve tool calls and answer agent questions inline (agent-server 0.3.0+, see `docs/guide/approvals.md`)
 - 🔁 **Runs that outlive the page** - Reload in the middle of a turn and it is picked up again, a dropped connection is not an error, and Stop really stops the run on the server (see `docs/guide/runs.md`)
