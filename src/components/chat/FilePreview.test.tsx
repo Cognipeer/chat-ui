@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render as rtlRender, screen, waitFor, within } from "@testing-library/react";
-import type { ReactElement } from "react";
+import { useLayoutEffect, useRef, type ReactElement } from "react";
 import { ChatI18nProvider } from "../../providers";
 import { Chat } from "./Chat";
 import { ChatMessage } from "./ChatMessage";
@@ -205,6 +205,42 @@ describe("FilePreview", () => {
     expect(document.activeElement).toBe(first);
     fireEvent.keyDown(dialog, { key: "Tab", shiftKey: true });
     expect(document.activeElement).toBe(close);
+  });
+
+  it("starts afresh for another file in the pane: the one before is not shown under its name, nor its source view", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => ({ ok: true, status: 200, blob: async () => new Blob([url === "blob:a" ? "# Alpha\n\nfirst" : "# Beta\n\nsecond"]) }))
+    );
+    const resolve = async (f: FileAttachment) => (f.id === "f-a.md" ? "blob:a" : "blob:b");
+    // what each commit puts on screen, before any effect of it has run
+    const commits: string[] = [];
+    function Pane({ f }: { f: FileAttachment }) {
+      const ref = useRef<HTMLDivElement>(null);
+      useLayoutEffect(() => {
+        commits.push(ref.current?.textContent ?? "");
+      });
+      return (
+        <div ref={ref}>
+          <FilePreview file={f} resolveFileUrl={resolve} onClose={() => undefined} paneWidth={500} />
+        </div>
+      );
+    }
+    const { rerender } = render(<Pane f={file("a.md")} />);
+    await screen.findByRole("heading", { name: "Alpha" });
+    fireEvent.click(screen.getByRole("button", { name: "Show source" }));
+    expect(screen.getByText(/# Alpha/)).toBeTruthy();
+
+    commits.length = 0;
+    rerender(
+      <ChatI18nProvider locale="en">
+        <Pane f={file("b.md")} />
+      </ChatI18nProvider>
+    );
+    expect(commits).toHaveLength(1);
+    expect(commits[0]).toContain("b.md");
+    expect(commits[0]).not.toContain("first");
+    expect(await screen.findByRole("heading", { name: "Beta" })).toBeTruthy();
   });
 });
 

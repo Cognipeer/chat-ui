@@ -125,14 +125,22 @@ function dataUrl(blob: Blob): Promise<string> {
 const capped = (text: string) =>
   text.length > PREVIEW_MAX_CHARS ? { text: text.slice(0, PREVIEW_MAX_CHARS), truncated: true } : { text, truncated: false };
 
-/** Reads the file and turns it into what the preview draws (nothing is read for a kind that cannot be shown). */
+/** Which file it is: the object can be a new one for the same file. */
+const fileKey = (file: FileAttachment) => `${file.id}\n${file.url ?? ""}`;
+
+/**
+ * Reads the file and turns it into what the preview draws (nothing is read for a kind that cannot be shown).
+ * Another file opened in the same pane is loading until it is read, never the one before under its name.
+ */
 function useFileContent(file: FileAttachment, kind: FilePreviewKind | undefined, resolve: FileUrlResolver | undefined): LoadState {
-  const [state, setState] = React.useState<LoadState>({ status: "loading" });
+  const key = fileKey(file);
+  const [read, setRead] = React.useState<{ key: string; state: LoadState }>({ key, state: { status: "loading" } });
   React.useEffect(() => {
     if (!kind) return;
     const controller = new AbortController();
     let objectUrl: string | undefined;
     const limit = PREVIEW_MAX_BYTES[kind];
+    const setState = (state: LoadState) => setRead({ key, state });
     setState({ status: "loading" });
     (async () => {
       if (file.size > limit) return setState({ status: "tooLarge", size: file.size });
@@ -190,7 +198,7 @@ function useFileContent(file: FileAttachment, kind: FilePreviewKind | undefined,
     // the file's identity decides, not the object
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [file.id, file.url, kind]);
-  return state;
+  return read.key === key ? read.state : { status: "loading" };
 }
 
 /**
@@ -245,6 +253,18 @@ export function FilePreview({ file, resolveFileUrl, onClose, container, paneWidt
   // The pane is laid out at no width first and widens on the next frame; closing narrows it before it goes
   const [entered, setEntered] = React.useState(false);
   const [leaving, setLeaving] = React.useState(false);
+  // Another file opened in the pane starts afresh: nothing of the one before (a PDF that could not be drawn, the
+  // source view, a notice) is carried over, and a pane sliding out stays for it
+  const [shown, setShown] = React.useState(() => fileKey(file));
+  if (shown !== fileKey(file)) {
+    setShown(fileKey(file));
+    setSource(false);
+    setCopied(false);
+    setNotice(undefined);
+    setPdfFailed(false);
+    setDocxFailed(false);
+    setLeaving(false);
+  }
   const onCloseRef = React.useRef(onClose);
   React.useEffect(() => {
     onCloseRef.current = onClose;
@@ -279,9 +299,6 @@ export function FilePreview({ file, resolveFileUrl, onClose, container, paneWidt
     const frame = requestAnimationFrame(() => setEntered(true));
     return () => cancelAnimationFrame(frame);
   }, [docked]);
-
-  // Another file opened while this one was sliding out: the pane stays for it
-  React.useEffect(() => setLeaving(false), [file.id, file.url]);
 
   React.useEffect(() => {
     if (!leaving) return;
