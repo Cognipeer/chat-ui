@@ -425,6 +425,49 @@ describe("the controller", () => {
   });
 });
 
+const historyRow = (id: string) =>
+  waitFor(() => {
+    const row = document.querySelector<HTMLButtonElement>(`button[data-chat-conversation="${id}"]`);
+    if (!row) throw new Error(`no history row ${id}`);
+    return row;
+  });
+
+describe("the conversation the host keeps in its address", () => {
+  it("tells the host a new chat's id once it exists, an opened conversation, and a new chat", async () => {
+    const onConversationChange = vi.fn();
+    renderChat(makeTransport(), { onConversationChange });
+    await screen.findByText("Start a conversation");
+    expect(onConversationChange).not.toHaveBeenCalled();
+
+    fireEvent.change(textbox(), { target: { value: "hi" } });
+    fireEvent.keyDown(textbox(), { key: "Enter" });
+    await screen.findByText("hello back");
+    expect(onConversationChange.mock.calls).toEqual([["c-new"]]);
+
+    fireEvent.click(await historyRow("c1"));
+    await screen.findByText("first answer");
+    expect(onConversationChange).toHaveBeenLastCalledWith("c1");
+
+    fireEvent.click(screen.getAllByRole("button", { name: "New Chat" })[0]);
+    await screen.findByText("Start a conversation");
+    expect(onConversationChange.mock.calls).toEqual([["c-new"], ["c1"], [null]]);
+  });
+
+  it("stays quiet for the conversation it opened with, and says null when that one is deleted", async () => {
+    const onConversationChange = vi.fn();
+    renderChat(makeTransport(), { conversationId: "c1", onConversationChange });
+    await screen.findByText("first answer");
+    // opening it again from the list is no change
+    fireEvent.click(await historyRow("c1"));
+    await screen.findByText("first answer");
+    expect(onConversationChange).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete conversation: Budget talk" }));
+    await waitFor(() => expect(screen.queryByText("first answer")).toBeNull());
+    expect(onConversationChange.mock.calls).toEqual([[null]]);
+  });
+});
+
 describe("notifications", () => {
   it("shows the bell only when the host offers a sound or desktop notifications", async () => {
     renderChat(makeTransport(), { notifications: { tabBadge: true } });

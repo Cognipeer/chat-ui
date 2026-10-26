@@ -250,6 +250,11 @@
   margin-top: 0;
 }
 
+/* The block spacing above is between blocks: none after the last one (it showed as an empty line in the person's bubble) */
+.chat-appearance-modern .chat-markdown > :last-child {
+  margin-bottom: 0;
+}
+
 .chat-appearance-modern .chat-markdown ul,
 .chat-appearance-modern .chat-markdown ol {
   margin-bottom: 0.8em;

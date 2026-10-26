@@ -78,7 +78,7 @@ describe("Chat reattaches to a turn that is still running", () => {
     );
     renderChat(transportFor({ conversation: undefined, messages: [user], overrides: { followEvents, cancel, getConversation } }), { conversationId: "c1" });
 
-    await screen.findByText("This conversation is answering in another window. You can stop it here.");
+    await screen.findByText("This conversation is still answering. You can stop it here.");
     expect(textbox().disabled).toBe(true);
     expect(followEvents.mock.calls[0][1].after).toBe(3);
     act(() => {
@@ -96,7 +96,7 @@ describe("Chat reattaches to a turn that is still running", () => {
     });
     expect(await screen.findByText("The report is ready.")).toBeTruthy();
     await waitFor(() => expect(textbox().disabled).toBe(false));
-    expect(screen.queryByText(/answering in another window/)).toBeNull();
+    expect(screen.queryByText(/is still answering/)).toBeNull();
     expect(screen.queryByText("Almost there")).toBeNull();
   });
 
@@ -119,7 +119,7 @@ describe("Chat reattaches to a turn that is still running", () => {
       })
     );
     fireEvent.click(await screen.findByText("Research"));
-    await screen.findByText(/answering in another window/);
+    await screen.findByText(/is still answering/);
     expect(followEvents).toHaveBeenCalledTimes(1);
     // the selected row says what this page knows
     await waitFor(() => expect(within(screen.getByText("Research").closest("li")!).getByText("Working")).toBeTruthy());

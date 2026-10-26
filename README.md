@@ -459,6 +459,10 @@ With `fileTransport="upload-on-select"` each file is stored the moment it is pic
   onConversationSelected={(conversation) => {
     console.log("Selected conversation:", conversation);
   }}
+  onConversationChange={(conversationId) => {
+    // a new chat's id once created, an opened one, or null for a new chat: keep it in the URL
+    console.log("Now on:", conversationId);
+  }}
 />
 ```
 
