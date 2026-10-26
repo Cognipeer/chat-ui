@@ -206,6 +206,14 @@ export interface ChatProps extends ChatConfig, ChatCallbacks {
   showAgentName?: boolean;
   /** Called when selected agent changes (multi-agent mode) */
   onAgentChange?: (agentId: string) => void;
+  /**
+   * Called when the chat moves to another conversation: a new chat's id as soon as the server created it, a
+   * conversation opened from the history, and `null` when the person starts a new chat (or deletes the one on
+   * screen). Not called for the `conversationId` the chat opened with. A host that keeps the id in its address
+   * (and passes it back as `conversationId` on the next load) brings a reload back to the same conversation;
+   * a turn still running there is picked up again.
+   */
+  onConversationChange?: (conversationId: string | null) => void;
   // --- Portal experience: every feature below is off until it is switched on here (or by the agent's `metadata.experience`) ---
   /**
    * The built-in buttons under each message: `copy`; `regenerate` (the newest answer, needs a transport
@@ -334,6 +342,7 @@ function ChatContent({
   onConversationTitleGenerated,
   onBudgetReached,
   onAgentChange,
+  onConversationChange,
   // UI options
   className,
   appearance = "classic",
@@ -518,6 +527,16 @@ function ChatContent({
   onConversationTitleGeneratedRef.current = onConversationTitleGenerated;
   const historyRef = useRef<ReturnType<typeof useChatHistory> | null>(null);
 
+  // The conversation the chat is on, told to the host each time it changes (null: a new chat)
+  const onConversationChangeRef = useRef(onConversationChange);
+  onConversationChangeRef.current = onConversationChange;
+  const reportedConversationRef = useRef<string | null>(conversationId ?? null);
+  const reportConversation = useCallback((id: string | null) => {
+    if (reportedConversationRef.current === id) return;
+    reportedConversationRef.current = id;
+    onConversationChangeRef.current?.(id);
+  }, []);
+
   const wrappedOnMessageReceived = useCallback((message: Message) => {
     onMessageReceivedRef.current?.(message);
     if (showHistory) {
@@ -527,11 +546,12 @@ function ChatContent({
 
   const wrappedOnConversationCreated = useCallback((conv: Conversation) => {
     onConversationCreatedRef.current?.(conv);
+    reportConversation(conv.id);
     modelChoiceRef.current?.adopt(conv.id);
     if (showHistory) {
       historyRef.current?.refresh();
     }
-  }, [showHistory]);
+  }, [showHistory, reportConversation]);
 
   const wrappedOnConversationTitleGenerated = useCallback((conversationId: string, title: string) => {
     onConversationTitleGeneratedRef.current?.(conversationId, title);
@@ -687,6 +707,7 @@ function ChatContent({
 
   const handleConversationSelect = useCallback(
     (conversation: ConversationListItem) => {
+      reportConversation(conversation.id);
       followConversationAgent(conversation.agentId);
       const match = conversation.searchMatch;
       setJumpTo(match?.field === "message" && match.messageId ? { conversationId: conversation.id, messageId: match.messageId } : null);
@@ -698,7 +719,7 @@ function ChatContent({
         setTimeout(() => inputRef.current?.focus(), 100);
       }
     },
-    [chat, onConversationSelected, autoFocusInput, followConversationAgent]
+    [chat, onConversationSelected, autoFocusInput, followConversationAgent, reportConversation]
   );
 
   // The same for a conversation opened without the sidebar (the `conversationId` prop)
@@ -709,12 +730,13 @@ function ChatContent({
 
   const handleNewChat = useCallback(() => {
     chat.clearMessages();
+    reportConversation(null);
     setHistoryOpen(false);
     // Focus the input after starting a new chat
     if (autoFocusInput) {
       setTimeout(() => inputRef.current?.focus(), 100);
     }
-  }, [chat, autoFocusInput]);
+  }, [chat, autoFocusInput, reportConversation]);
 
   // An agent picked in the (modern) sidebar: a new chat with it
   const handleAgentPick = useCallback(
@@ -730,9 +752,10 @@ function ChatContent({
       await history.deleteConversation(id);
       if (chat.conversation?.id === id) {
         chat.clearMessages();
+        reportConversation(null);
       }
     },
-    [history, chat]
+    [history, chat, reportConversation]
   );
 
   const handleRenameConversation = useCallback(
@@ -747,10 +770,13 @@ function ChatContent({
   const handleBulkDelete = useCallback(
     async (ids: string[]) => {
       const outcome = await history.deleteConversations(ids);
-      if (chat.conversation && outcome.deleted.includes(chat.conversation.id)) chat.clearMessages();
+      if (chat.conversation && outcome.deleted.includes(chat.conversation.id)) {
+        chat.clearMessages();
+        reportConversation(null);
+      }
       return outcome;
     },
-    [history, chat]
+    [history, chat, reportConversation]
   );
 
   const showAgentSelector = !chat.isLoadingConversation && chat.messages.length === 0;
@@ -1088,6 +1114,7 @@ function ChatContent({
                 messages={chat.messages}
                 isStreaming={chat.isStreaming}
                 streamingText={chat.streamingText}
+                workingAfterText={chat.workingAfterText}
                 progressMessage={chat.progressMessage}
                 activeToolCalls={chat.activeToolCalls}
                 plan={chat.plan}

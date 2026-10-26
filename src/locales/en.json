@@ -172,7 +172,7 @@
   "chat.error.code.portal_not_found": "This portal could not be found.",
   "chat.error.code.portal_disabled": "This portal is turned off.",
   "chat.error.code.portal_access_denied": "You do not have access to this portal.",
-  "chat.input.followingNotice": "This conversation is answering in another window. You can stop it here.",
+  "chat.input.followingNotice": "This conversation is still answering. You can stop it here.",
   "chat.input.followingPlaceholder": "The assistant is still working on this conversation...",
   "chat.input.budgetPlaceholder": "This conversation reached its usage limit",
   "chat.input.readOnlyNotice": "This conversation is read-only",

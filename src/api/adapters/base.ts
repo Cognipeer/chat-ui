@@ -30,6 +30,7 @@ import {
   flowCompaction,
   flowMetadata,
   flowPlan,
+  flowText,
   flowToolEnd,
   flowToolStart,
   normalizePlan,
@@ -373,6 +374,9 @@ export abstract class StatelessTransport implements ChatTransport {
   /** The `RunEmit` of one turn: relays to the stream callbacks and remembers text, tool calls, the plan and the order of it all. */
   private makeEmit(callbacks: StreamCallbacks | undefined) {
     let text = "";
+    // where the words since the last tool call begin, and whether a call came after them (see `flowText`)
+    let saidFrom = 0;
+    let closed = false;
     let flow = emptyTurnFlow();
     const toolDetails: Array<{ id: string; name: string; args: Record<string, unknown>; result?: unknown }> = [];
     const event = (e: Record<string, unknown>) =>
@@ -380,17 +384,27 @@ export abstract class StatelessTransport implements ChatTransport {
     const emit: RunEmit = {
       text: (delta) => {
         if (!delta) return;
+        if (closed) {
+          saidFrom = text.length;
+          closed = false;
+        }
         text += delta;
         callbacks?.onText?.(delta, text);
       },
       setText: (full) => {
         text = full;
+        saidFrom = 0;
+        closed = false;
         callbacks?.onText?.("", text);
       },
       toolCall: (id, name, args) => {
         const existing = toolDetails.find((t) => t.id === id);
         if (existing) existing.args = args;
         else toolDetails.push({ id, name, args });
+        if (!closed && text.slice(saidFrom).trim()) {
+          flow = flowText(flow, text.slice(saidFrom));
+          closed = true;
+        }
         flow = flowToolStart(flow, { id, name });
         callbacks?.onToolCall?.(
           event({ type: "stream.tool_call", toolCallId: id, toolName: name, args })

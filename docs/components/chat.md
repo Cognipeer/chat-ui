@@ -136,6 +136,7 @@ Every one of these is off until you switch it on. See [Portal Experience](/guide
 | `onToolResult` | `(name: string, result: any) => void` | Called when tool returns |
 | `onConversationCreated` | `(conv: Conversation) => void` | Called on new conversation |
 | `onConversationSelected` | `(item: ConversationListItem) => void` | Called on conversation switch |
+| `onConversationChange` | `(id: string \| null) => void` | The chat moved to another conversation: a new chat's id once the server created it, one opened from the history, `null` for a new chat (or when the open one is deleted). Not called for the `conversationId` it opened with. See [Keep the conversation in the address](/guide/history#keep-the-conversation-in-the-address) |
 | `onConversationTitleGenerated` | `(id: string, title: string) => void` | The server named the conversation |
 | `onAgentChange` | `(agentId: string) => void` | The selected agent changed |
 | `onError` | `(error: Error) => void` | Called on error (a refused file, a failed request) |

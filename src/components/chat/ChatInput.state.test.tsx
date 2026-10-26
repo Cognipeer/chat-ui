@@ -14,7 +14,7 @@ const files = (...list: Partial<FileAttachment>[]) => list.map((extra, i) => fil
 
 describe("ChatInput states", () => {
   it.each<[ComposerState, string, RegExp | null]>([
-    ["following", "The assistant is still working on this conversation...", /answering in another window/],
+    ["following", "The assistant is still working on this conversation...", /is still answering/],
     ["blocked", "Respond to the request above to continue", /waiting for your response above/],
     ["readonly", "This conversation is read-only", /read-only/],
     ["budget_paused", "This conversation reached its usage limit", null],

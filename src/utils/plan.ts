@@ -102,6 +102,8 @@ export function readActivity(message: Pick<Message, "metadata">): ActivityEntry[
       });
     } else if (entry.kind === "compaction") {
       entries.push({ kind: "compaction", ...(typeof entry.id === "string" ? { id: entry.id } : {}) });
+    } else if (entry.kind === "text" && typeof entry.text === "string" && entry.text.trim()) {
+      entries.push({ kind: "text", text: entry.text.trim() });
     }
   }
   return entries.length > 0 ? entries : undefined;
@@ -156,6 +158,17 @@ export function flowToolStart(flow: TurnFlowState, call: { id?: string; name: st
     ...(call.label ? { label: call.label } : {}),
   };
   return { ...flow, activity: [...flow.activity, entry] };
+}
+
+/**
+ * The agent wrote these words and then called a tool. A model that announces its calls ("Let me look that up.") does
+ * it in the same text stream as its answer: the words are kept here, where they were said, and the answer is the
+ * text written after the last call. Blank words add nothing.
+ */
+export function flowText(flow: TurnFlowState, text: string): TurnFlowState {
+  const said = text.trim();
+  if (!said) return flow;
+  return { ...flow, activity: [...flow.activity, { kind: "text", text: said }] };
 }
 
 /** A tool call ended; its entry says whether it went well. A call that was never seen is ignored. */

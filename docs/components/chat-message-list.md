@@ -17,6 +17,7 @@ const chat = useChat({ baseUrl: "/api/agents", agentId: "assistant" });
   messages={chat.messages}
   isStreaming={chat.isStreaming}
   streamingText={chat.streamingText}
+  workingAfterText={chat.workingAfterText}
   progressMessage={chat.progressMessage}
   activeToolCalls={chat.activeToolCalls}
   actions={{ onResolve: chat.resolveAction, canResolve: chat.canResolveActions }}
@@ -30,6 +31,7 @@ const chat = useChat({ baseUrl: "/api/agents", agentId: "assistant" });
 | `messages` | `Message[]` | required | Array of messages |
 | `isStreaming` | `boolean` | `false` | A reply is streaming |
 | `streamingText` | `string` | - | Current streaming text |
+| `workingAfterText` | `boolean` | `false` | A tool started after `streamingText` (`useChat().workingAfterText`): what runs now shows under the text |
 | `progressMessage` | `string` | - | Progress line shown while waiting |
 | `activeToolCalls` | `Map` | - | Tool calls of the running turn |
 | `plan` | `PlanSnapshot` | - | The agent's plan for the running turn (`useChat().plan`): a card above the live answer |

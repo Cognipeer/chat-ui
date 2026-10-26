@@ -13,6 +13,18 @@ All notable changes to Chat UI will be documented here.
 - `filePreview` on `Chat`, `ChatMessageList` and `ChatMessage` (default `true`; `false` leaves chips and thumbnails as they were). `FilePreview` (`file`, `resolveFileUrl`, `onClose`, `container`, `paneWidth`) shows a file from a list of the host's own, as a dialog or as a pane of the given width (`previewPaneWidth(areaWidth)`); `filePreviewKind(file)` says how a file would be shown, or `undefined` when it cannot be. Types `FilePreviewProps`, `FilePreviewKind`, `MarkdownExportFormat`.
 - New dependencies `pdfjs-dist`, `docx-preview`, `jszip`, `docx`, `pdfmake`, `unified` and `remark-parse`. The PDF, Word, Excel and export code is loaded only when a preview or an export needs it.
 - English and Turkish strings `chat.preview.*`.
+- `onConversationChange(conversationId | null)` on `Chat`: called when the chat moves to another conversation - a new chat's id as soon as the server created it, a conversation opened from the history (or a search hit), and `null` when the person starts a new chat (the sidebar, an agent picked in the sidebar, `controllerRef.newChat()`) or deletes the conversation on screen. It is not called for the `conversationId` the chat opened with, nor twice for the same one. A host that keeps the id in its address and passes it back as `conversationId` brings a reload back to the same conversation, and a turn still running there is followed again. See [Keep the conversation in the address](/guide/history#keep-the-conversation-in-the-address).
+
+### Fixed
+
+- The notice above the composer while a turn that runs elsewhere is followed no longer says "in another window": after a reload it is the same window. It now reads "This conversation is still answering. You can stop it here." (`chat.input.followingNotice`, English and Turkish).
+- `appearance="modern"`: the last block of a message (paragraph, list, code block, quote, table) no longer keeps its bottom margin, which showed as an empty line at the foot of the person's bubble and under answers.
+
+## [0.12.1] - 2026-10-25
+
+### Fixed
+
+- Tool calls made after the agent had written some words were not shown while the turn ran. A model that announces its calls (Claude models: "Let me look that up.", then the call) writes the announcement in the same text stream as its answer; as soon as the first words arrived, the live view switched to the streaming message and drew no running tool, no "Running Web Search…" line and no progress dots for the rest of the turn, in both appearances. Now the words stay and what runs now shows under them; the next words the agent writes begin the shown text afresh, so the answer is no longer glued to the announcement ("…look that up.Found it."). The announcement is kept in the turn's activity ahead of the call it announced: new `ActivityEntry` `{ kind: 'text', text }`, drawn as a line of the "Worked for" timeline (`appearance="modern"`). `useChat` returns `workingAfterText`, and `ChatMessageList` takes it as a prop (default `false`: a host that does not pass it still gets the fresh text after a call). Following a turn that runs elsewhere (`FollowState.textClosed`) and the in-process adapters (`metadata.activity` of the stored answer) do the same.
 
 ## [0.12.0] - 2026-10-23
 

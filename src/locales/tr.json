@@ -172,7 +172,7 @@
   "chat.error.code.portal_not_found": "Bu portal bulunamadı.",
   "chat.error.code.portal_disabled": "Bu portal kapalı.",
   "chat.error.code.portal_access_denied": "Bu portala erişiminiz yok.",
-  "chat.input.followingNotice": "Bu sohbet başka bir pencerede yanıtlanıyor. Buradan durdurabilirsiniz.",
+  "chat.input.followingNotice": "Bu sohbet hâlâ yanıtlanıyor. Buradan durdurabilirsiniz.",
   "chat.input.followingPlaceholder": "Asistan bu sohbet üzerinde hâlâ çalışıyor...",
   "chat.input.budgetPlaceholder": "Bu sohbet kullanım sınırına ulaştı",
   "chat.input.readOnlyNotice": "Bu sohbet salt okunur",
