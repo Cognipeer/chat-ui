@@ -24,6 +24,7 @@ import {
   flowCompaction,
   flowMetadata,
   flowPlan,
+  flowText,
   flowToolEnd,
   flowToolStart,
   toolResultFailed,
@@ -156,6 +157,11 @@ export interface UseChatReturn {
   cancelReminder: (reminderId: string) => Promise<boolean>;
   /** Current streaming text */
   streamingText: string;
+  /**
+   * The agent called a tool after writing `streamingText` (a model that announces its calls): it is working again, and
+   * the next words it writes replace `streamingText`. False while it writes, and before it wrote anything.
+   */
+  workingAfterText: boolean;
   /** The model's reasoning for the turn being streamed (kept apart from `streamingText`) */
   streamingReasoning: string;
   /** Current progress message (from stream.progress events) */
@@ -429,6 +435,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
   const [isFollowing, setIsFollowing] = useState(false);
   const [isLoadingConversation, setIsLoadingConversation] = useState(false);
   const [streamingText, setStreamingText] = useState("");
+  const [workingAfterText, setWorkingAfterText] = useState(false);
   const [streamingReasoning, setStreamingReasoning] = useState("");
   const streamingReasoningRef = useRef("");
   const clearStreamingReasoning = useCallback(() => {
@@ -601,6 +608,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     stopFollowing();
     streamingTextRef.current = "";
     setStreamingText("");
+    setWorkingAfterText(false);
     clearStreamingReasoning();
     activeToolCallsRef.current = new Map();
     toolCallStartTimeRef.current = null;
@@ -867,18 +875,40 @@ export function useChat(options: UseChatOptions): UseChatReturn {
   const createStreamCallbacksRef = useRef<(isStale: () => boolean) => StreamCallbacks>(
     () => ({})
   );
-  createStreamCallbacksRef.current = (isStale: () => boolean): StreamCallbacks => (
-    {
+  createStreamCallbacksRef.current = (isStale: () => boolean): StreamCallbacks => {
+    // A model that announces its calls ("Let me look that up.") writes the announcement in the same text as its answer.
+    // Once a tool starts after some words, those words are kept in the turn's activity and the live status shows under
+    // them again; the next words begin the shown text afresh, so the answer is not glued to the announcement.
+    let shownFrom = 0; // where the shown text begins in the transport's full text
+    let fullLength = 0;
+    let closed = false; // a tool started after the shown text
+    const reopen = () => {
+      if (!closed) return;
+      closed = false;
+      setWorkingAfterText(false);
+    };
+    setWorkingAfterText(false);
+    return {
             onStart: () => {
               // Stream started
             },
             onText: (text, fullText) => {
               if (isStale()) return;
+              if (!text || fullText.length < fullLength) {
+                // the whole text was set anew, not added to: it is what the turn says now
+                shownFrom = 0;
+                reopen();
+              } else if (closed) {
+                shownFrom = fullLength;
+                reopen();
+              }
+              fullLength = fullText.length;
+              const shown = fullText.slice(shownFrom);
               // Use flushSync to force immediate render during streaming
               setProgressMessage(""); // Clear progress when text arrives
-              streamingTextRef.current = fullText;
+              streamingTextRef.current = shown;
               flushSync(() => {
-                setStreamingText(fullText);
+                setStreamingText(shown);
               });
               onStreamText?.(text, fullText);
             },
@@ -898,6 +928,12 @@ export function useChat(options: UseChatOptions): UseChatReturn {
             onToolCall: (event) => {
               if (isStale()) return;
               if (event.type === "stream.tool_call") {
+                // The words shown so far announced this call: kept in the turn's activity, ahead of the call
+                if (!closed && streamingTextRef.current.trim()) {
+                  closed = true;
+                  turnFlowRef.current = flowText(turnFlowRef.current, streamingTextRef.current);
+                  setWorkingAfterText(true);
+                }
                 // Track when the first tool call starts
                 if (toolCallStartTimeRef.current === null) {
                   toolCallStartTimeRef.current = Date.now();
@@ -1047,6 +1083,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
                 // Clear streaming first, then add message
                 streamingTextRef.current = "";
                 setStreamingText("");
+                reopen();
                 clearStreamingReasoning();
                 activeToolCallsRef.current = new Map();
                 toolCallStartTimeRef.current = null;
@@ -1150,8 +1187,8 @@ export function useChat(options: UseChatOptions): UseChatReturn {
                 })
               );
             },
-          }
-  );
+          };
+  };
 
   /** Shows the reply of a non-streaming answer / continuation (a new message, or more cards on the paused one). */
   const showReply = useCallback((response: SendMessageResponse | undefined) => {
@@ -1199,6 +1236,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     streamActionsRef.current = [];
     streamingTextRef.current = "";
     setStreamingText("");
+    setWorkingAfterText(false);
     clearStreamingReasoning();
     activeToolCallsRef.current = new Map();
     setActiveToolCalls(new Map());
@@ -1238,6 +1276,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       state = applyFollowEvent(state, event);
       // The plan of the followed turn, as the log has it so far (the finished message brings its own copy)
       if (state.flow.plan !== previous.flow.plan) setPlan(state.flow.plan);
+      if (Boolean(state.textClosed) !== Boolean(previous.textClosed)) setWorkingAfterText(Boolean(state.textClosed));
       switch (event.type) {
         case "user.message":
           showFollowedUserMessage();
@@ -2771,6 +2810,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     pendingFiles,
     isUploading:
       isUploadingMessage || pendingFiles.some((f) => f.status === "uploading" || f.status === "queued"),
+    workingAfterText,
     activeToolCalls,
     plan,
     isCondensing,

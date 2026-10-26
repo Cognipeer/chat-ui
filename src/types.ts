@@ -657,7 +657,9 @@ export interface StreamCompactionEvent extends StreamEventBase {
 export type ActivityEntry =
   | { kind: "tool"; id?: string; name: string; label?: string; status?: "ok" | "error" }
   | { kind: "plan"; version?: number; done: number; total: number; /** the agent wrote the plan out (the first plan of the turn, when the server does not say) */ created?: boolean }
-  | { kind: "compaction"; id?: string };
+  | { kind: "compaction"; id?: string }
+  /** What the agent wrote before a tool call ("Let me look that up."): its words, not part of the answer */
+  | { kind: "text"; text: string };
 
 export type StreamEvent =
   | StreamStartEvent

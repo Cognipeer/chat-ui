@@ -118,6 +118,7 @@ interface UseChatReturn {
   isFollowing: boolean;               // only watching a turn another window started (or this page before a reload)
   isLoadingConversation: boolean;
   streamingText: string;
+  workingAfterText: boolean;          // a tool started after `streamingText` (the agent announced its call); the next words replace it
   progressMessage: string;
   activeToolCalls: Map<string, ToolCallState>;
   plan: PlanSnapshot | undefined;     // the agent's plan for the running turn (stream.plan), if it published one
