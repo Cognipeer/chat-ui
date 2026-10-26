@@ -43,15 +43,23 @@
   "dependencies": {
     "@formatjs/intl": "^2.10.0",
     "clsx": "^2.1.0",
+    "docx": "^9.9.0",
+    "docx-preview": "^0.4.1",
+    "jszip": "^3.10.2",
     "lucide-react": "^0.312.0",
+    "pdfjs-dist": "^6.4.299",
+    "pdfmake": "^0.3.11",
     "react-intl": "^6.6.0",
     "react-markdown": "^9.0.1",
     "remark-gfm": "^4.0.0",
-    "tailwind-merge": "^2.2.0"
+    "remark-parse": "^11.0.0",
+    "tailwind-merge": "^2.2.0",
+    "unified": "^11.0.5"
   },
   "devDependencies": {
     "@testing-library/dom": "^10.4.2",
     "@testing-library/react": "^16.3.3",
+    "@types/mdast": "^4.0.4",
     "@types/react": "^18.2.48",
     "@types/react-dom": "^18.2.18",
     "autoprefixer": "^10.4.17",

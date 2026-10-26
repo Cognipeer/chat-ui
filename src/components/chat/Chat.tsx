@@ -34,6 +34,7 @@ import type {
   ExportConfig,
   ExportFormat,
   FeedbackConfig,
+  FileAttachment,
   HistoryActionsConfig,
   MessageActionProps,
   MessageActionsConfig,
@@ -64,6 +65,8 @@ import { ReminderStrip } from "./ReminderStrip";
 import { BudgetBanner, type BudgetBannerProps } from "./BudgetBanner";
 import { MenuIcon, ChevronDownIcon } from "./Icons";
 import { AgentBadge, ChatAppearanceProvider, type ChatAppearance } from "./appearance";
+import { FilePreview, FilePreviewOpenerContext, previewPaneWidth, type FilePreviewOpener } from "./FilePreview";
+import type { FileUrlResolver } from "../../utils/filePreview";
 
 export interface ChatProps extends ChatConfig, ChatCallbacks {
   /** Custom class name for the container */
@@ -157,6 +160,12 @@ export interface ChatProps extends ChatConfig, ChatCallbacks {
   expiryWarningSeconds?: number;
   /** Replace how an image in a message is drawn, e.g. to fetch it with credentials */
   renderImage?: (props: ImageRenderProps) => React.ReactNode;
+  /**
+   * Offer a preview next to Download on attached and produced files, and open pictures in it (default true):
+   * pictures, PDF, Word, spreadsheets (xlsx, csv), Markdown (also saved as PDF or Word), HTML, JSON, text and
+   * code, audio and video. A panel on a wide screen, the whole screen on a phone.
+   */
+  filePreview?: boolean;
   /** Replace the notice under an answer that stopped early (stopped, a limit, the usage limit, an error) */
   renderStopNotice?: (props: StopNoticeRenderProps) => React.ReactNode;
   /**
@@ -365,6 +374,7 @@ function ChatContent({
   allowArgumentEdit = false,
   expiryWarningSeconds,
   renderImage,
+  filePreview = true,
   renderStopNotice,
   showBudgetMeter = true,
   allowBudgetContinue = false,
@@ -680,6 +690,21 @@ function ChatContent({
   // The message a search hit points at, scrolled to once the conversation is shown
   const [jumpTo, setJumpTo] = useState<{ conversationId: string; messageId: string } | null>(null);
 
+  // The file being previewed: in a pane beside the conversation when there is room for both, else a dialog
+  const [preview, setPreview] = useState<{ file: FileAttachment; resolveFileUrl?: FileUrlResolver } | null>(null);
+  const openPreview = useCallback<FilePreviewOpener>((file, resolveFileUrl) => setPreview({ file, resolveFileUrl }), []);
+  const closePreview = useCallback(() => setPreview(null), []);
+  const areaRef = useRef<HTMLDivElement>(null);
+  const paneWidth = previewPaneWidth(useElementWidth(areaRef));
+  // A file belongs to its conversation: opening another one (or a new chat) closes the preview. The first message
+  // of a new chat names its conversation only now, which changes nothing.
+  const previewedIn = useRef(chat.conversation?.id);
+  useEffect(() => {
+    const id = chat.conversation?.id;
+    if (previewedIn.current !== undefined && previewedIn.current !== id) setPreview(null);
+    previewedIn.current = id;
+  }, [chat.conversation?.id]);
+
   const handleConversationSelect = useCallback(
     (conversation: ConversationListItem) => {
       reportConversation(conversation.id);
@@ -990,6 +1015,7 @@ function ChatContent({
         colors: themeColors,
       }}
     >
+    <FilePreviewOpenerContext.Provider value={filePreview ? openPreview : null}>
       <div
         className={cn(
           "chat-container flex h-full bg-chat-bg-primary text-chat-text-primary",
@@ -1032,167 +1058,182 @@ function ChatContent({
           />
         )}
 
-        {/* Main Chat Area */}
-        <div className="flex-1 flex flex-col min-w-0">
-          {/* Notices from the operator */}
-          {announcements && announcements.length > 0 && (
-            <AnnouncementBanner announcements={announcements} onDismiss={onAnnouncementDismiss} />
-          )}
+        {/* The conversation, and the file preview's pane beside it */}
+        <div ref={areaRef} className="flex flex-1 min-w-0">
+          {/* Main Chat Area */}
+          <div className="flex-1 flex flex-col min-w-0">
+            {/* Notices from the operator */}
+            {announcements && announcements.length > 0 && (
+              <AnnouncementBanner announcements={announcements} onDismiss={onAnnouncementDismiss} />
+            )}
 
-          {/* Header */}
-          {renderHeader ? (
-            renderHeader({
-              onMenuClick: showHistory ? () => setHistoryOpen(true) : undefined,
-              agents,
-              selectedAgentId: effectiveAgentId,
-              onAgentChange: handleAgentChange,
-              actions: headerActions,
-            })
-          ) : modern ? (
-            <ModernHeader
-              showMenuButton={showHistory}
-              onMenuClick={() => setHistoryOpen(true)}
-              agent={selectedAgent ?? (agents.length === 1 ? agents[0] : undefined)}
-              title={chat.conversation?.title || t("chat.history.newChat")}
-              actions={headerActions}
-            />
-          ) : (
-            <DefaultHeader
-              showMenuButton={showHistory}
-              onMenuClick={() => setHistoryOpen(true)}
-              title={chat.conversation?.title || t("chat.history.newChat")}
-              agents={agents}
-              selectedAgentId={effectiveAgentId}
-              onAgentChange={handleAgentChange}
-              showAgentSelector={showAgentSelector}
-              actions={headerActions}
-            />
-          )}
+            {/* Header */}
+            {renderHeader ? (
+              renderHeader({
+                onMenuClick: showHistory ? () => setHistoryOpen(true) : undefined,
+                agents,
+                selectedAgentId: effectiveAgentId,
+                onAgentChange: handleAgentChange,
+                actions: headerActions,
+              })
+            ) : modern ? (
+              <ModernHeader
+                showMenuButton={showHistory}
+                onMenuClick={() => setHistoryOpen(true)}
+                agent={selectedAgent ?? (agents.length === 1 ? agents[0] : undefined)}
+                title={chat.conversation?.title || t("chat.history.newChat")}
+                actions={headerActions}
+              />
+            ) : (
+              <DefaultHeader
+                showMenuButton={showHistory}
+                onMenuClick={() => setHistoryOpen(true)}
+                title={chat.conversation?.title || t("chat.history.newChat")}
+                agents={agents}
+                selectedAgentId={effectiveAgentId}
+                onAgentChange={handleAgentChange}
+                showAgentSelector={showAgentSelector}
+                actions={headerActions}
+              />
+            )}
 
-          {/* Messages */}
-          {chat.isLoadingConversation ? (
-            <div className="flex-1 flex items-center justify-center">
-              <div className="flex flex-col items-center gap-3">
-                <div className="flex gap-1.5">
-                  <div className="w-2.5 h-2.5 bg-chat-text-tertiary rounded-full animate-pulse-dot" />
-                  <div className="w-2.5 h-2.5 bg-chat-text-tertiary rounded-full animate-pulse-dot animation-delay-200" />
-                  <div className="w-2.5 h-2.5 bg-chat-text-tertiary rounded-full animate-pulse-dot animation-delay-400" />
+            {/* Messages */}
+            {chat.isLoadingConversation ? (
+              <div className="flex-1 flex items-center justify-center">
+                <div className="flex flex-col items-center gap-3">
+                  <div className="flex gap-1.5">
+                    <div className="w-2.5 h-2.5 bg-chat-text-tertiary rounded-full animate-pulse-dot" />
+                    <div className="w-2.5 h-2.5 bg-chat-text-tertiary rounded-full animate-pulse-dot animation-delay-200" />
+                    <div className="w-2.5 h-2.5 bg-chat-text-tertiary rounded-full animate-pulse-dot animation-delay-400" />
+                  </div>
+                  <span className="text-sm text-chat-text-tertiary">{t("chat.loading.conversation")}</span>
                 </div>
-                <span className="text-sm text-chat-text-tertiary">{t("chat.loading.conversation")}</span>
               </div>
-            </div>
-          ) : (
-            <ChatMessageList
-              messages={chat.messages}
-              isStreaming={chat.isStreaming}
-              streamingText={chat.streamingText}
-              workingAfterText={chat.workingAfterText}
-              progressMessage={chat.progressMessage}
-              activeToolCalls={chat.activeToolCalls}
-              plan={chat.plan}
-              condensing={chat.isCondensing}
-              autoScroll={autoScroll}
-              renderActions={renderMessageActions}
-              renderAvatar={renderAvatar}
-              showAvatars={showAvatars}
-              showTimestamps={showTimestamps}
-              enableCitations={enableCitations}
-              actions={actionsConfig}
-              renderImage={renderImage}
-              renderStopNotice={renderStopNotice}
-              resolveFileUrl={chat.resolveFileUrl}
-              hasEarlier={chat.hasEarlierMessages}
-              isLoadingEarlier={chat.isLoadingEarlierMessages}
-              onLoadEarlier={chat.loadEarlierMessages}
-              interrupted={chat.interrupted}
-              onRetryInterrupted={composerState === "open" ? retryInterrupted : undefined}
-              emptyState={emptyState}
-              toolbar={toolbar}
-              canAct={canAct}
-              aiLabel={aiLabelText}
-              models={modelChoice.models}
-              showAnsweredWith={showAnsweredWith}
-              streamingReasoning={chat.streamingReasoning}
-              showReasoning={showReasoning && selectedAgent?.showReasoning !== false}
-              focusMessageId={jumpTo && jumpTo.conversationId === chat.conversation?.id ? jumpTo.messageId : undefined}
-              onFocusHandled={() => setJumpTo(null)}
-            />
-          )}
+            ) : (
+              <ChatMessageList
+                messages={chat.messages}
+                isStreaming={chat.isStreaming}
+                streamingText={chat.streamingText}
+                workingAfterText={chat.workingAfterText}
+                progressMessage={chat.progressMessage}
+                activeToolCalls={chat.activeToolCalls}
+                plan={chat.plan}
+                condensing={chat.isCondensing}
+                autoScroll={autoScroll}
+                renderActions={renderMessageActions}
+                renderAvatar={renderAvatar}
+                showAvatars={showAvatars}
+                showTimestamps={showTimestamps}
+                enableCitations={enableCitations}
+                actions={actionsConfig}
+                renderImage={renderImage}
+                filePreview={filePreview}
+                renderStopNotice={renderStopNotice}
+                resolveFileUrl={chat.resolveFileUrl}
+                hasEarlier={chat.hasEarlierMessages}
+                isLoadingEarlier={chat.isLoadingEarlierMessages}
+                onLoadEarlier={chat.loadEarlierMessages}
+                interrupted={chat.interrupted}
+                onRetryInterrupted={composerState === "open" ? retryInterrupted : undefined}
+                emptyState={emptyState}
+                toolbar={toolbar}
+                canAct={canAct}
+                aiLabel={aiLabelText}
+                models={modelChoice.models}
+                showAnsweredWith={showAnsweredWith}
+                streamingReasoning={chat.streamingReasoning}
+                showReasoning={showReasoning && selectedAgent?.showReasoning !== false}
+                focusMessageId={jumpTo && jumpTo.conversationId === chat.conversation?.id ? jumpTo.messageId : undefined}
+                onFocusHandled={() => setJumpTo(null)}
+              />
+            )}
 
-          {/* Error Display */}
-          {chat.error && (
-            <div className="px-4 py-2">
-              <div className="max-w-3xl mx-auto">
-                <div
-                  role="alert"
-                  className="bg-chat-danger-bg border border-chat-danger rounded-lg px-4 py-3 text-chat-danger text-sm flex items-center justify-between gap-3"
-                >
-                  <span className="min-w-0 break-words">{chat.error.message}</span>
-                  <button
-                    type="button"
-                    onClick={() => chat.setError(null)}
-                    className="flex-shrink-0 text-chat-danger underline-offset-2 hover:underline"
+            {/* Error Display */}
+            {chat.error && (
+              <div className="px-4 py-2">
+                <div className="max-w-3xl mx-auto">
+                  <div
+                    role="alert"
+                    className="bg-chat-danger-bg border border-chat-danger rounded-lg px-4 py-3 text-chat-danger text-sm flex items-center justify-between gap-3"
                   >
-                    {t("chat.error.dismiss")}
-                  </button>
+                    <span className="min-w-0 break-words">{chat.error.message}</span>
+                    <button
+                      type="button"
+                      onClick={() => chat.setError(null)}
+                      className="flex-shrink-0 text-chat-danger underline-offset-2 hover:underline"
+                    >
+                      {t("chat.error.dismiss")}
+                    </button>
+                  </div>
                 </div>
               </div>
-            </div>
-          )}
+            )}
 
-          {/* Where the conversation stands against its usage limit */}
-          {(chat.budget || chat.budgetExhausted) && (
-            <div className="px-4 pt-2">
-              <div className="max-w-3xl mx-auto">
-                {renderBudgetBanner ? renderBudgetBanner(budgetBannerProps) : <BudgetBanner {...budgetBannerProps} />}
+            {/* Where the conversation stands against its usage limit */}
+            {(chat.budget || chat.budgetExhausted) && (
+              <div className="px-4 pt-2">
+                <div className="max-w-3xl mx-auto">
+                  {renderBudgetBanner ? renderBudgetBanner(budgetBannerProps) : <BudgetBanner {...budgetBannerProps} />}
+                </div>
               </div>
-            </div>
-          )}
+            )}
 
-          {/* When the agent will check back (only for an agent that has reminders) */}
-          {chat.reminders.length > 0 && (
-            <div className="px-4 pt-2">
-              <div className="max-w-3xl mx-auto">
-                <ReminderStrip reminders={chat.reminders} onCancel={chat.canCancelReminder ? chat.cancelReminder : undefined} />
+            {/* When the agent will check back (only for an agent that has reminders) */}
+            {chat.reminders.length > 0 && (
+              <div className="px-4 pt-2">
+                <div className="max-w-3xl mx-auto">
+                  <ReminderStrip reminders={chat.reminders} onCancel={chat.canCancelReminder ? chat.cancelReminder : undefined} />
+                </div>
               </div>
-            </div>
-          )}
+            )}
 
-          {/* Input */}
-          <ChatInput
-            ref={inputRef}
-            onSend={handleSend}
-            onStop={chat.stop}
-            onFilesAdd={effectiveFileUpload ? chat.addFiles : undefined}
-            onFileRemove={chat.removeFile}
-            onFileRetry={chat.retryFile}
-            isLoading={chat.isStreaming}
-            isUploading={chat.isUploading}
-            pendingFiles={chat.pendingFiles}
-            placeholder={inputPlaceholder}
-            enableFileUpload={effectiveFileUpload}
-            allowedFileTypes={settings.allowedFileTypes}
-            maxFiles={settings.maxFiles}
-            filesHeld={settings.maxFilesScope === "conversation" ? chat.heldFiles : 0}
-            fileCounter={settings.maxFilesScope === "conversation" && settings.maxFiles !== undefined}
-            retentionDays={settings.retentionDays}
-            imagesIgnored={imagesIgnored}
-            autoFocus={autoFocusInput}
-            state={composerState}
-            footer={legalFooter}
-            modelPicker={
-              modelChoice.models ? (
-                <ModelPicker
-                  models={modelChoice.models}
-                  value={modelChoice.selected}
-                  onChange={modelChoice.select}
-                  disabled={chat.isStreaming || composerState === "readonly"}
-                />
-              ) : undefined
-            }
-          />
+            {/* Input */}
+            <ChatInput
+              ref={inputRef}
+              onSend={handleSend}
+              onStop={chat.stop}
+              onFilesAdd={effectiveFileUpload ? chat.addFiles : undefined}
+              onFileRemove={chat.removeFile}
+              onFileRetry={chat.retryFile}
+              isLoading={chat.isStreaming}
+              isUploading={chat.isUploading}
+              pendingFiles={chat.pendingFiles}
+              placeholder={inputPlaceholder}
+              enableFileUpload={effectiveFileUpload}
+              allowedFileTypes={settings.allowedFileTypes}
+              maxFiles={settings.maxFiles}
+              filesHeld={settings.maxFilesScope === "conversation" ? chat.heldFiles : 0}
+              fileCounter={settings.maxFilesScope === "conversation" && settings.maxFiles !== undefined}
+              retentionDays={settings.retentionDays}
+              imagesIgnored={imagesIgnored}
+              autoFocus={autoFocusInput}
+              state={composerState}
+              footer={legalFooter}
+              modelPicker={
+                modelChoice.models ? (
+                  <ModelPicker
+                    models={modelChoice.models}
+                    value={modelChoice.selected}
+                    onChange={modelChoice.select}
+                    disabled={chat.isStreaming || composerState === "readonly"}
+                  />
+                ) : undefined
+              }
+            />
+          </div>
+
+          {preview && (
+            <FilePreview
+              file={preview.file}
+              resolveFileUrl={preview.resolveFileUrl}
+              onClose={closePreview}
+              paneWidth={paneWidth}
+              container={areaRef.current}
+            />
+          )}
         </div>
       </div>
+    </FilePreviewOpenerContext.Provider>
     </ChatThemeProvider>
     </ChatAppearanceProvider>
   );
@@ -1355,6 +1396,22 @@ function DefaultHeader({ showMenuButton, onMenuClick, title, agents = [], select
 /**
  * Bot / Agent icon
  */
+/** The width of an element, followed as it changes (0 until it is laid out, and where nothing lays out). */
+function useElementWidth(ref: React.RefObject<HTMLElement | null>): number {
+  const [width, setWidth] = useState(0);
+  useEffect(() => {
+    const node = ref.current;
+    if (!node) return;
+    const measure = () => setWidth(Math.round(node.getBoundingClientRect().width));
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [ref]);
+  return width;
+}
+
 function BotIcon({ className }: { className?: string }) {
   return (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className={className}>

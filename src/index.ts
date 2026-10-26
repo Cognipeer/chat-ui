@@ -26,6 +26,9 @@ export {
   type MessageEditorProps,
   ExportMenu,
   type ExportMenuProps,
+  FilePreview,
+  type FilePreviewProps,
+  previewPaneWidth,
   NotificationsMenu,
   type NotificationsMenuProps,
   type ListToolbarConfig,
@@ -306,6 +309,8 @@ export {
   type ExperienceInput,
 } from "./utils/experience";
 export { conversationToMarkdown, conversationToJson, conversationToPrintHtml, exportFilename } from "./utils/export";
+export { filePreviewKind, type FilePreviewKind } from "./utils/filePreview";
+export { exportMarkdown, markdownExportName, type MarkdownExportFormat } from "./utils/markdownExport";
 export { copyText } from "./utils/clipboard";
 export {
   insertCitationMarkers,

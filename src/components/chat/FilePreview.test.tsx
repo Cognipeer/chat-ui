@@ -1,0 +1,339 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render as rtlRender, screen, waitFor, within } from "@testing-library/react";
+import { useLayoutEffect, useRef, type ReactElement } from "react";
+import { ChatI18nProvider } from "../../providers";
+import { Chat } from "./Chat";
+import { ChatMessage } from "./ChatMessage";
+import { FilePreview, previewPaneWidth } from "./FilePreview";
+import { exportMarkdown } from "../../utils/markdownExport";
+import type { ChatTransport } from "../../api";
+import type { FileAttachment, Message } from "../../types";
+
+const render = (ui: ReactElement) => rtlRender(<ChatI18nProvider locale="en">{ui}</ChatI18nProvider>);
+const now = new Date();
+const message = (files: FileAttachment[]): Message => ({
+  id: "m", conversationId: "c", role: "assistant", content: "Here you go", files, createdAt: now, updatedAt: now,
+});
+const file = (name: string, extra: Partial<FileAttachment> = {}): FileAttachment => ({
+  id: `f-${name}`, name, mimeType: "application/octet-stream", size: 120, ...extra,
+});
+
+/** `fetch` answering with these bytes (a jsdom Blob, as the page's own `Blob` is). */
+function serve(body: string | null, status = 200) {
+  const fetchMock = vi.fn(async () => ({ ok: status < 400, status, blob: async () => new Blob(body === null ? [] : [body]) }));
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
+beforeEach(() => {
+  URL.createObjectURL = vi.fn(() => "blob:preview");
+  URL.revokeObjectURL = vi.fn();
+});
+
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+  document.body.style.overflow = "";
+});
+
+describe("the Preview button on a file chip", () => {
+  it("sits next to Download for a file it can show, and opens the file in a dialog", async () => {
+    const fetchMock = serve("# Quarterly report\n\nRevenue **grew**.");
+    const resolve = vi.fn(async () => "blob:stored");
+    render(<ChatMessage message={message([file("report.md")])} resolveFileUrl={resolve} />);
+
+    expect(screen.getByRole("button", { name: "Download" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Preview report.md" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "report.md" });
+    expect(await within(dialog).findByRole("heading", { name: "Quarterly report" })).toBeTruthy();
+    expect(resolve).toHaveBeenCalledWith(expect.objectContaining({ id: "f-report.md" }), { disposition: "attachment" });
+    expect(fetchMock).toHaveBeenCalledWith("blob:stored", expect.anything());
+    // the page behind stops scrolling while it is open
+    expect(document.body.style.overflow).toBe("hidden");
+  });
+
+  it("is not offered for a type it cannot show, an expired file, a file still uploading, or when turned off", () => {
+    const resolve = vi.fn(async () => "blob:x");
+    render(
+      <ChatMessage
+        message={message([
+          file("bundle.zip"),
+          file("gone.pdf", { expired: true }),
+          file("going.csv", { status: "uploading", progress: 0.4 }),
+        ])}
+        resolveFileUrl={resolve}
+      />
+    );
+    expect(screen.queryByRole("button", { name: /^Preview/ })).toBeNull();
+    cleanup();
+    render(<ChatMessage message={message([file("report.md")])} resolveFileUrl={resolve} filePreview={false} />);
+    expect(screen.queryByRole("button", { name: /^Preview/ })).toBeNull();
+    expect(screen.getByRole("button", { name: "Download" })).toBeTruthy();
+  });
+
+  it("needs a way to read the file: its own link, the transport, or the copy on this device", () => {
+    render(<ChatMessage message={message([file("notes.txt")])} />);
+    expect(screen.queryByRole("button", { name: /^Preview/ })).toBeNull();
+    cleanup();
+    render(<ChatMessage message={message([file("notes.txt", { url: "https://files.example/notes.txt" })])} />);
+    expect(screen.getByRole("button", { name: "Preview notes.txt" })).toBeTruthy();
+  });
+
+  it("opens a picture's thumbnail in the preview instead of a new tab", async () => {
+    serve("png-bytes");
+    render(<ChatMessage message={message([file("cat.png", { mimeType: "image/png", url: "https://files.example/cat.png" })])} />);
+    expect(document.querySelector('a[href="https://files.example/cat.png"]')).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Preview cat.png" }));
+    const dialog = await screen.findByRole("dialog", { name: "cat.png" });
+    await waitFor(() => expect(within(dialog).getByRole("img", { name: "cat.png" }).getAttribute("src")).toBe("blob:preview"));
+  });
+
+  it("closes on Escape and gives focus back to the button that opened it", async () => {
+    serve("hello");
+    render(<ChatMessage message={message([file("hello.txt", { url: "https://files.example/hello.txt" })])} />);
+    const opener = screen.getByRole("button", { name: "Preview hello.txt" });
+    opener.focus();
+    fireEvent.click(opener);
+    const dialog = await screen.findByRole("dialog");
+    await within(dialog).findByText("hello");
+    expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Close preview" }));
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(document.activeElement).toBe(opener);
+    expect(document.body.style.overflow).toBe("");
+  });
+});
+
+describe("FilePreview", () => {
+  const open = (f: FileAttachment, resolve?: () => Promise<string>) =>
+    render(<FilePreview file={f} resolveFileUrl={resolve ?? (async () => "blob:stored")} onClose={() => undefined} />);
+
+  it("offers a Markdown file as Markdown, PDF or Word, and shows its source on request", async () => {
+    serve("# Title\n\nSome *text*.");
+    open(file("notes.md"));
+    await screen.findByRole("heading", { name: "Title" });
+    fireEvent.click(screen.getByRole("button", { name: "Download" }));
+    const menu = screen.getByRole("menu");
+    expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+      "Markdown (.md)",
+      "PDF document (.pdf)",
+      "Word document (.docx)",
+    ]);
+    fireEvent.keyDown(menu, { key: "Escape" });
+    expect(screen.queryByRole("menu")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Show source" }));
+    expect(screen.getByText(/# Title/)).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Title" })).toBeNull();
+  });
+
+  it("shows a CSV as a table with its header row", async () => {
+    serve("name,amount\nAyşe,1250\nMehmet,980\n");
+    open(file("sales.csv"));
+    const table = await screen.findByRole("table");
+    expect(within(table).getAllByRole("columnheader").map((th) => th.textContent)).toEqual(["", "name", "amount"]);
+    expect(within(table).getByText("Ayşe")).toBeTruthy();
+    expect(within(table).getByText("980").className).toContain("text-right");
+    expect(screen.getByRole("button", { name: "Copy contents" })).toBeTruthy();
+  });
+
+  it("pretty-prints JSON", async () => {
+    serve('{"a":1,"b":[true,null]}');
+    open(file("data.json"));
+    expect((await screen.findByText(/"a": 1/)).textContent).toBe('{\n  "a": 1,\n  "b": [\n    true,\n    null\n  ]\n}');
+  });
+
+  it("runs an HTML file's scripts only in a frame of its own", async () => {
+    serve("<h1>Hi</h1><script>parent.document.title = 'owned'</script>");
+    open(file("page.html"));
+    await waitFor(() => expect(document.querySelector("iframe")).toBeTruthy());
+    const frame = document.querySelector("iframe")!;
+    expect(frame.getAttribute("title")).toBe("page.html");
+    expect(frame.getAttribute("sandbox")).toBe("allow-scripts");
+    expect(frame.getAttribute("srcdoc")).toContain("<h1>Hi</h1>");
+  });
+
+  it("draws an SVG from a data: URL, never an object URL", async () => {
+    serve('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>');
+    open(file("logo.svg"));
+    const img = await screen.findByRole("img", { name: "logo.svg" });
+    expect(img.getAttribute("src")).toMatch(/^data:image\/svg\+xml;base64,/);
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
+  });
+
+  it("lays a Word document out in a shadow root, where its styles cannot reach the page", async () => {
+    const docx = await exportMarkdown("# Rapor\n\nMerhaba dünya.", "docx", "Rapor");
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, status: 200, blob: async () => docx })));
+    open(file("rapor.docx"));
+    const host = await waitFor(
+      () => {
+        const el = document.querySelector<HTMLElement>(".chat-docx-preview");
+        expect(el?.shadowRoot?.querySelector("section.docx")).toBeTruthy();
+        return el!;
+      },
+      { timeout: 5000 }
+    );
+    expect(host.shadowRoot!.textContent).toContain("Merhaba dünya.");
+    expect(document.querySelector("section.docx, .docx-wrapper")).toBeNull();
+    expect(document.head.querySelector("style")).toBeNull();
+  });
+
+  it("does not read a file that is too large, and offers the download instead", async () => {
+    const fetchMock = serve("x");
+    open(file("huge.txt", { size: 6 * 1024 * 1024 }));
+    expect(await screen.findByText("This file is too large to preview here (6 MB).")).toBeTruthy();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(screen.getAllByRole("button", { name: "Download" }).length).toBeGreaterThan(0);
+  });
+
+  it("says so when the file cannot be read", async () => {
+    serve(null, 404);
+    open(file("missing.txt"));
+    expect(await screen.findByText("The preview could not be loaded. You can still download the file.")).toBeTruthy();
+  });
+
+  it("keeps Tab inside the dialog", async () => {
+    serve("text");
+    open(file("a.txt"));
+    const dialog = await screen.findByRole("dialog");
+    await within(dialog).findByText("text");
+    const close = within(dialog).getByRole("button", { name: "Close preview" });
+    const first = within(dialog).getByRole("button", { name: "Copy contents" });
+    close.focus();
+    fireEvent.keyDown(dialog, { key: "Tab" });
+    expect(document.activeElement).toBe(first);
+    fireEvent.keyDown(dialog, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(close);
+  });
+
+  it("starts afresh for another file in the pane: the one before is not shown under its name, nor its source view", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => ({ ok: true, status: 200, blob: async () => new Blob([url === "blob:a" ? "# Alpha\n\nfirst" : "# Beta\n\nsecond"]) }))
+    );
+    const resolve = async (f: FileAttachment) => (f.id === "f-a.md" ? "blob:a" : "blob:b");
+    // what each commit puts on screen, before any effect of it has run
+    const commits: string[] = [];
+    function Pane({ f }: { f: FileAttachment }) {
+      const ref = useRef<HTMLDivElement>(null);
+      useLayoutEffect(() => {
+        commits.push(ref.current?.textContent ?? "");
+      });
+      return (
+        <div ref={ref}>
+          <FilePreview file={f} resolveFileUrl={resolve} onClose={() => undefined} paneWidth={500} />
+        </div>
+      );
+    }
+    const { rerender } = render(<Pane f={file("a.md")} />);
+    await screen.findByRole("heading", { name: "Alpha" });
+    fireEvent.click(screen.getByRole("button", { name: "Show source" }));
+    expect(screen.getByText(/# Alpha/)).toBeTruthy();
+
+    commits.length = 0;
+    rerender(
+      <ChatI18nProvider locale="en">
+        <Pane f={file("b.md")} />
+      </ChatI18nProvider>
+    );
+    expect(commits).toHaveLength(1);
+    expect(commits[0]).toContain("b.md");
+    expect(commits[0]).not.toContain("first");
+    expect(await screen.findByRole("heading", { name: "Beta" })).toBeTruthy();
+  });
+});
+
+describe("previewPaneWidth", () => {
+  it("is about half of the area, 360 to 720 pixels, and leaves the conversation 520", () => {
+    expect(previewPaneWidth(879)).toBeUndefined();
+    expect(previewPaneWidth(880)).toBe(360);
+    expect(previewPaneWidth(1000)).toBe(450);
+    expect(previewPaneWidth(1280)).toBe(576);
+    expect(previewPaneWidth(2400)).toBe(720);
+  });
+});
+
+describe("the preview in a Chat", () => {
+  let counter = 0;
+  const agent = { id: "a", name: "Alpha" };
+  function transport(conversations: Record<string, Message[]>): ChatTransport {
+    const list = Object.keys(conversations).map((id) => ({ id, agentId: "a", title: `Chat ${id}`, createdAt: now, updatedAt: now }));
+    return {
+      getAgents: async () => [agent],
+      getConversations: async () => ({ conversations: list, total: list.length, limit: 20, offset: 0, hasMore: false }),
+      createConversation: async (p) => ({ id: "new", agentId: p.agentId, createdAt: now, updatedAt: now }),
+      getConversation: async (id) => ({ conversation: { id, agentId: "a", createdAt: now, updatedAt: now }, messages: conversations[id] ?? [] }),
+      deleteConversation: async () => {},
+      sendMessage: async () => {
+        throw new Error("unused");
+      },
+      sendMessageStream: async () => {},
+      resolveAction: async () => undefined,
+      getFileUrl: async () => "blob:stored",
+    };
+  }
+  const renderChat = (t: ChatTransport) =>
+    render(<Chat baseUrl={`http://preview-${++counter}`} transport={t} conversationId="c1" enableFileUpload={false} />);
+  /** jsdom lays nothing out: every element is this wide */
+  const layOut = (width: number) =>
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({ width, height: 800, top: 0, left: 0, right: width, bottom: 800, x: 0, y: 0, toJSON: () => ({}) });
+  const notes = [message([file("notes.txt", { mimeType: "text/plain" }), file("todo.md", { mimeType: "text/markdown" })])];
+
+  beforeEach(() => {
+    Element.prototype.scrollIntoView = vi.fn();
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it("opens beside the conversation on a wide screen, and the page stays as it is", async () => {
+    layOut(1280);
+    serve("hello from the agent");
+    renderChat(transport({ c1: notes }));
+    const opener = await screen.findByRole("button", { name: "Preview notes.txt" });
+    opener.focus();
+    fireEvent.click(opener);
+
+    const pane = await screen.findByRole("complementary", { name: "notes.txt" });
+    expect(await within(pane).findByText("hello from the agent")).toBeTruthy();
+    // it widens to its width on the next frame, pushing the conversation over: no dialog, no backdrop, no locked page
+    await waitFor(() => expect(pane.parentElement!.style.width).toBe("576px"));
+    expect(pane.style.width).toBe("576px");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(document.body.style.overflow).toBe("");
+    expect(screen.getByText("Here you go")).toBeTruthy();
+    expect(document.activeElement).toBe(within(pane).getByRole("button", { name: "Close preview" }));
+
+    // another file takes the same pane
+    const next = screen.getByRole("button", { name: "Preview todo.md" });
+    next.focus();
+    fireEvent.click(next);
+    expect(await screen.findByRole("complementary", { name: "todo.md" })).toBe(pane);
+
+    // Escape slides it out, then the focus goes back to the button the last file came from
+    fireEvent.keyDown(pane, { key: "Escape" });
+    await waitFor(() => expect(pane.parentElement?.style.width).toBe("0px"));
+    await waitFor(() => expect(screen.queryByRole("complementary", { name: "todo.md" })).toBeNull());
+    expect(document.activeElement).toBe(next);
+  });
+
+  it("is a dialog when the conversation has no room beside it", async () => {
+    layOut(700);
+    serve("hello");
+    renderChat(transport({ c1: notes }));
+    fireEvent.click(await screen.findByRole("button", { name: "Preview notes.txt" }));
+    const dialog = await screen.findByRole("dialog", { name: "notes.txt" });
+    expect(await within(dialog).findByText("hello")).toBeTruthy();
+    expect(document.body.style.overflow).toBe("hidden");
+    expect(document.querySelector("[data-chat-preview-pane]")).toBeNull();
+  });
+
+  it("closes when another conversation is opened", async () => {
+    layOut(1280);
+    serve("hello");
+    renderChat(transport({ c1: notes, c2: [] }));
+    fireEvent.click(await screen.findByRole("button", { name: "Preview notes.txt" }));
+    await screen.findByRole("complementary", { name: "notes.txt" });
+    fireEvent.click(await screen.findByText("Chat c2"));
+    await waitFor(() => expect(screen.queryByRole("complementary", { name: "notes.txt" })).toBeNull());
+  });
+});

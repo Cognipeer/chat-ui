@@ -19,6 +19,8 @@ import { MessageActionCards, type ChatActionsConfig } from "./ActionCards";
 import { MessageToolbar, type MessageToolbarConfig } from "./MessageToolbar";
 import { MessageEditor } from "./MessageEditor";
 import { MessageStopNotice, MessageWarnings } from "./StopNotice";
+import { FilePreview, FilePreviewOpenerContext } from "./FilePreview";
+import { filePreviewKind, saveFile } from "../../utils/filePreview";
 import { useI18n } from "../../hooks";
 import { useAppearance } from "./appearance";
 
@@ -64,6 +66,12 @@ export interface ChatMessageProps {
   actions?: ChatActionsConfig;
   /** Replace how an image is drawn, e.g. to fetch it with credentials */
   renderImage?: (props: ImageRenderProps) => React.ReactNode;
+  /**
+   * Offer a preview next to Download on the message's files, and open its pictures in it (default true):
+   * pictures, PDF, Word, spreadsheets (xlsx, csv), Markdown (also saved as PDF or Word), HTML, JSON, text and
+   * code, audio and video. A panel on a wide screen, the whole screen on a phone.
+   */
+  filePreview?: boolean;
   /** Replace the notice under an answer that stopped early (stopped, limit, usage limit, error) */
   renderStopNotice?: (props: StopNoticeRenderProps) => React.ReactNode;
   /**
@@ -104,6 +112,7 @@ export function ChatMessage({
   enableCitations = true,
   actions,
   renderImage,
+  filePreview = true,
   renderStopNotice,
   resolveFileUrl,
   toolbar,
@@ -231,7 +240,7 @@ export function ChatMessage({
 
         {/* File attachments */}
         {message.files && message.files.length > 0 && (
-          <FileAttachments files={message.files} renderImage={renderImage} resolveFileUrl={resolveFileUrl} />
+          <FileAttachments files={message.files} renderImage={renderImage} resolveFileUrl={resolveFileUrl} preview={filePreview} />
         )}
 
         {/* Things worth knowing about the turn (files cut short, images not seen) */}
@@ -330,7 +339,7 @@ function splitFileName(name: string): { base: string; ext: string } {
   return { base: name.slice(0, idx), ext: name.slice(idx) };
 }
 
-/** An image, opening full size in a new tab on click or Enter. */
+/** An image, opening full size in a new tab on click or Enter (or in the preview, with `onOpen`). */
 function ImageThumb({
   src,
   alt,
@@ -338,6 +347,7 @@ function ImageThumb({
   renderImage,
   file,
   onError,
+  onOpen,
 }: {
   src: string;
   alt: string;
@@ -346,9 +356,23 @@ function ImageThumb({
   file?: FileAttachment;
   /** The picture could not be loaded (not called for a host's own `renderImage`) */
   onError?: () => void;
+  /** Open the picture in the file preview instead of a new tab */
+  onOpen?: () => void;
 }) {
   const { t } = useI18n();
   if (renderImage) return <>{renderImage({ src, alt, file })}</>;
+  if (onOpen) {
+    return (
+      <button
+        type="button"
+        onClick={onOpen}
+        aria-label={t("chat.preview.openFile", { fileName: alt })}
+        className="inline-block cursor-zoom-in rounded-lg border-0 bg-transparent p-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-chat-accent-primary"
+      >
+        <img src={src} alt={alt} loading="lazy" onError={onError} className={cn("rounded-lg object-contain bg-chat-bg-tertiary", className)} />
+      </button>
+    );
+  }
   return (
     <a
       href={src}
@@ -439,13 +463,19 @@ function FileAttachmentItem({
   file,
   renderImage,
   resolveFileUrl,
+  preview,
 }: {
   file: FileAttachment;
   renderImage?: (props: ImageRenderProps) => React.ReactNode;
   resolveFileUrl?: ResolveFileUrl;
+  preview: boolean;
 }) {
   const { t, formatDate } = useI18n();
   const [downloadFailed, setDownloadFailed] = React.useState(false);
+  const [previewing, setPreviewing] = React.useState(false);
+  // Inside `Chat` the preview opens in the chat's pane; a message shown on its own opens a dialog
+  const openInChat = React.useContext(FilePreviewOpenerContext);
+  const rootRef = React.useRef<HTMLElement | null>(null);
   const expired = isFileExpired(file);
   // Going up (or refused by the server): there is no stored copy to show, open or download yet
   const uploading = file.status === "uploading" || file.status === "queued";
@@ -463,10 +493,27 @@ function FileAttachmentItem({
   // A picture that is still on this device shows even if its server copy is gone
   const stored = useStoredFileUrl(file, resolveFileUrl, raster && !local && !ownUrl && !expired && !notStored);
   const thumb = raster ? local ?? (expired || notStored ? undefined : ownUrl ?? usable(stored.src)) : undefined;
+  const href = expired || notStored ? undefined : safeFileHref(file.url);
+  // A preview reads the bytes: from this device, the file's own link or the transport
+  const canPreview =
+    preview &&
+    !expired &&
+    !notStored &&
+    filePreviewKind(file) !== undefined &&
+    Boolean(href || resolveFileUrl || (file.previewUrl && /^blob:/i.test(file.previewUrl)));
+  const openPreview = () => (openInChat ? openInChat(file, resolveFileUrl) : setPreviewing(true));
+  const previewPanel = previewing && (
+    <FilePreview
+      file={file}
+      resolveFileUrl={resolveFileUrl}
+      onClose={() => setPreviewing(false)}
+      container={rootRef.current?.closest(".chat-container, .chat-theme-root")}
+    />
+  );
 
   if (thumb) {
     return (
-      <figure className="m-0 max-w-full" data-chat-file-status={file.status}>
+      <figure ref={rootRef} className="m-0 max-w-full" data-chat-file-status={file.status}>
         <ImageThumb
           src={thumb}
           alt={file.name}
@@ -474,6 +521,7 @@ function FileAttachmentItem({
           renderImage={renderImage}
           file={file}
           onError={() => setFailedSrc((prev) => [...prev, thumb])}
+          onOpen={canPreview ? openPreview : undefined}
         />
         <figcaption className="mt-1 text-xs text-chat-text-secondary truncate max-w-[16rem]" title={file.name}>
           {file.name} · {formatFileSize(file.size)}
@@ -481,35 +529,25 @@ function FileAttachmentItem({
           {failed && <span className="text-chat-danger"> · {file.uploadError ?? t("chat.file.uploadFailed")}</span>}
         </figcaption>
         {uploading && <UploadBar name={file.name} percent={percent} className="mt-1 max-w-[16rem] rounded" />}
+        {previewPanel}
       </figure>
     );
   }
 
   const { base, ext } = splitFileName(file.name);
-  const href = expired || notStored ? undefined : safeFileHref(file.url);
   const noText = file.conversionStatus === "failed" || file.conversionStatus === "skipped";
   const keptUntil = !expired && file.expiresAt ? formatDate(new Date(file.expiresAt), { dateStyle: "medium" }) : undefined;
   const canDownload = !expired && !notStored && !href && Boolean(resolveFileUrl);
 
   const download = async () => {
     setDownloadFailed(false);
-    try {
-      const url = await resolveFileUrl?.(file, { disposition: "attachment" });
-      if (!url) throw new Error("no url");
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = file.name;
-      link.rel = "noopener";
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-    } catch {
-      setDownloadFailed(true);
-    }
+    const saved = await saveFile(file, resolveFileUrl).catch(() => false);
+    if (!saved) setDownloadFailed(true);
   };
 
   return (
     <div
+      ref={rootRef as React.RefObject<HTMLDivElement>}
       data-chat-file={expired ? "expired" : noText ? "no-text" : undefined}
       data-chat-file-status={file.status}
       title={
@@ -524,7 +562,7 @@ function FileAttachmentItem({
                 : undefined
       }
       className={cn(
-        "relative flex items-center gap-2 overflow-hidden px-3 py-2 bg-chat-bg-tertiary rounded-lg text-sm border",
+        "relative flex max-w-full items-center gap-2 overflow-hidden px-3 py-2 bg-chat-bg-tertiary rounded-lg text-sm border",
         expired ? "border-transparent opacity-60" : failed ? "border-chat-danger" : noText ? "border-chat-warning" : "border-transparent"
       )}
     >
@@ -569,6 +607,16 @@ function FileAttachmentItem({
           {t("chat.file.noText")}
         </span>
       )}
+      {canPreview && (
+        <button
+          type="button"
+          onClick={openPreview}
+          aria-label={t("chat.preview.openFile", { fileName: file.name })}
+          className="text-chat-accent-primary hover:underline flex-shrink-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-chat-accent-primary rounded"
+        >
+          {t("chat.preview.open")}
+        </button>
+      )}
       {href && (
         <a
           href={href}
@@ -594,6 +642,7 @@ function FileAttachmentItem({
         </span>
       )}
       {uploading && <UploadBar name={file.name} percent={percent} className="absolute inset-x-0 bottom-0" />}
+      {previewPanel}
     </div>
   );
 }
@@ -607,15 +656,17 @@ function FileAttachments({
   files,
   renderImage,
   resolveFileUrl,
+  preview,
 }: {
   files: FileAttachment[];
   renderImage?: (props: ImageRenderProps) => React.ReactNode;
   resolveFileUrl?: ResolveFileUrl;
+  preview: boolean;
 }) {
   return (
     <div className="flex flex-wrap gap-2 mt-2">
       {files.map((file) => (
-        <FileAttachmentItem key={file.id} file={file} renderImage={renderImage} resolveFileUrl={resolveFileUrl} />
+        <FileAttachmentItem key={file.id} file={file} renderImage={renderImage} resolveFileUrl={resolveFileUrl} preview={preview} />
       ))}
     </div>
   );

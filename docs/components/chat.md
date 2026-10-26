@@ -77,6 +77,7 @@ import { Chat } from "@cognipeer/chat-ui";
 | `fileTransport` | `"inline" \| "upload" \| "upload-on-select"` | `"inline"` | Files in the message body, uploaded when the message is sent, or uploaded as soon as they are picked |
 | `attachmentsOnlyMessage` | `string` | localized | Text sent with files and no typed text (`""` sends none) |
 | `renderImage` | `(props: ImageRenderProps) => ReactNode` | - | Draw images yourself, e.g. fetch them with credentials |
+| `filePreview` | `boolean` | `true` | A **Preview** button on the files under messages (PDF, Word, Excel, CSV, Markdown with PDF / Word export, HTML, pictures, text, ...), opened in a pane beside the conversation (a dialog on a phone); see [File preview](/components/chat-message#file-preview) |
 
 ### Approvals and questions
 

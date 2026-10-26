@@ -28,6 +28,7 @@ export { MessageToolbar, type MessageToolbarProps, type MessageToolbarConfig } f
 export { FeedbackSheet, type FeedbackSheetProps } from "./FeedbackSheet";
 export { MessageEditor, type MessageEditorProps } from "./MessageEditor";
 export { ExportMenu, type ExportMenuProps } from "./ExportMenu";
+export { FilePreview, previewPaneWidth, type FilePreviewProps } from "./FilePreview";
 export { NotificationsMenu, type NotificationsMenuProps } from "./NotificationsMenu";
 export type { ListToolbarConfig } from "./ChatMessageList";
 export { ChatAppearanceProvider, useAppearance, AgentBadge, type ChatAppearance } from "./appearance";
