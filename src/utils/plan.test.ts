@@ -4,6 +4,7 @@ import {
   flowCompaction,
   flowMetadata,
   flowPlan,
+  flowText,
   flowToolEnd,
   flowToolStart,
   normalizePlan,
@@ -123,6 +124,20 @@ describe("toolResultFailed", () => {
 });
 
 describe("turn flow", () => {
+  it("keeps what the agent wrote before a call, ahead of the call, and nothing for blank words", () => {
+    let flow = emptyTurnFlow();
+    flow = flowText(flow, "  Let me look that up.\n");
+    flow = flowToolStart(flow, { id: "t1", name: "search" });
+    flow = flowText(flow, " \n ");
+    expect(flow.activity).toEqual([
+      { kind: "text", text: "Let me look that up." },
+      { kind: "tool", id: "t1", name: "search" },
+    ]);
+    // and reads it back from a stored message
+    expect(readActivity({ metadata: { activity: flow.activity } })).toEqual(flow.activity);
+    expect(readActivity({ metadata: { activity: [{ kind: "text", text: "  " }, { kind: "text", text: 3 }] } })).toBeUndefined();
+  });
+
   it("records calls, plan changes and condensing in arrival order", () => {
     let flow = emptyTurnFlow();
     flow = flowToolStart(flow, { id: "t1", name: "lookup", label: "Look up customer" });

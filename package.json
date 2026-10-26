@@ -73,12 +73,21 @@
     "agent",
     "chatgpt",
     "streaming",
-    "sse"
+    "sse",
+    "react-chat",
+    "chat-component",
+    "llm",
+    "ai-chat",
+    "tool-calling"
   ],
   "author": "Cognipeer",
   "license": "MIT",
+  "homepage": "https://docs.cognipeer.com/chat-ui/",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Cognipeer/chat-ui"
+    "url": "git+https://github.com/Cognipeer/chat-ui.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Cognipeer/chat-ui/issues"
   }
 }

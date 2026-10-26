@@ -15,6 +15,12 @@ All notable changes to Chat UI will be documented here.
 - The notice above the composer while a turn that runs elsewhere is followed no longer says "in another window": after a reload it is the same window. It now reads "This conversation is still answering. You can stop it here." (`chat.input.followingNotice`, English and Turkish).
 - `appearance="modern"`: the last block of a message (paragraph, list, code block, quote, table) no longer keeps its bottom margin, which showed as an empty line at the foot of the person's bubble and under answers.
 
+## [0.12.1] - 2026-10-25
+
+### Fixed
+
+- Tool calls made after the agent had written some words were not shown while the turn ran. A model that announces its calls (Claude models: "Let me look that up.", then the call) writes the announcement in the same text stream as its answer; as soon as the first words arrived, the live view switched to the streaming message and drew no running tool, no "Running Web Search…" line and no progress dots for the rest of the turn, in both appearances. Now the words stay and what runs now shows under them; the next words the agent writes begin the shown text afresh, so the answer is no longer glued to the announcement ("…look that up.Found it."). The announcement is kept in the turn's activity ahead of the call it announced: new `ActivityEntry` `{ kind: 'text', text }`, drawn as a line of the "Worked for" timeline (`appearance="modern"`). `useChat` returns `workingAfterText`, and `ChatMessageList` takes it as a prop (default `false`: a host that does not pass it still gets the fresh text after a call). Following a turn that runs elsewhere (`FollowState.textClosed`) and the in-process adapters (`metadata.activity` of the stored answer) do the same.
+
 ## [0.12.0] - 2026-10-23
 
 ### Added

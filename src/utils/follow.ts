@@ -4,6 +4,7 @@ import {
   emptyTurnFlow,
   flowCompaction,
   flowPlan,
+  flowText,
   flowToolEnd,
   flowToolStart,
   normalizePlan,
@@ -27,6 +28,11 @@ export interface FollowState {
   text: string;
   /** Text deltas were seen (so `agent.message` repeats what is already there) */
   streamed: boolean;
+  /**
+   * A tool call came after `text`: those words announced it and are kept in `flow`; the next delta begins the text
+   * afresh (a model that announces its calls writes the announcement and the answer in the same stream).
+   */
+  textClosed?: boolean;
   tools: Map<string, FollowedTool>;
   /**
    * The plan of the turn and what happened in it, in order (calls, plan changes, condensing passes), folded from
@@ -132,7 +138,7 @@ export function applyFollowEvent(state: FollowState, event: ConversationEvent): 
         return { ...base, ...(carried && untouched ? { flow: emptyTurnFlow(carried) } : {}), error: undefined, snapshotRunId: base.snapshotRunId ?? incoming };
       }
       // A new run begins: nothing of the previous one is on screen any more (but the plan a paused turn carries on)
-      return { ...base, text: "", streamed: false, tools: new Map(), flow: emptyTurnFlow(carried), idle: undefined, error: undefined, messageId: undefined, snapshotRunId: undefined, seeded: false };
+      return { ...base, text: "", streamed: false, textClosed: false, tools: new Map(), flow: emptyTurnFlow(carried), idle: undefined, error: undefined, messageId: undefined, snapshotRunId: undefined, seeded: false };
     }
 
     case "agent.message.snapshot": {
@@ -146,6 +152,7 @@ export function applyFollowEvent(state: FollowState, event: ConversationEvent): 
         ...base,
         text,
         streamed: text.length > 0 ? true : base.streamed,
+        textClosed: false,
         snapshotRunId: runIdOf(event, data) ?? base.snapshotRunId,
         seeded: true,
         idle: undefined,
@@ -170,13 +177,14 @@ export function applyFollowEvent(state: FollowState, event: ConversationEvent): 
         // A delta of another run than the snapshot's: that run began without us seeing its start, and
         // nothing the snapshot seeded belongs to it
         if (incoming !== undefined && base.snapshotRunId !== undefined && incoming !== base.snapshotRunId) {
-          return { ...base, text, streamed: true, tools: new Map(), flow: emptyTurnFlow(), idle: undefined, error: undefined, messageId: undefined, snapshotRunId: incoming, seeded: false };
+          return { ...base, text, streamed: true, textClosed: false, tools: new Map(), flow: emptyTurnFlow(), idle: undefined, error: undefined, messageId: undefined, snapshotRunId: incoming, seeded: false };
         }
         if (incoming !== undefined && base.snapshotRunId === undefined) {
-          return { ...base, text: base.text + text, streamed: true, snapshotRunId: incoming };
+          return { ...base, text: base.textClosed ? text : base.text + text, streamed: true, textClosed: false, snapshotRunId: incoming };
         }
       }
-      return { ...base, text: base.text + text, streamed: true };
+      // the words after a call begin the text afresh: the ones before it are in the flow
+      return { ...base, text: base.textClosed ? text : base.text + text, streamed: true, textClosed: false };
     }
 
     case "agent.tool_use": {
@@ -185,7 +193,11 @@ export function applyFollowEvent(state: FollowState, event: ConversationEvent): 
       const tools = new Map(base.tools);
       const name = asString(data.name) ?? "tool";
       tools.set(id, { name, args: asRecord(data.args) });
-      return { ...base, tools, flow: flowToolStart(base.flow, { id, name }) };
+      // the words shown so far announced this call (kept ahead of it). A snapshot's text is everything the run wrote, from
+      // before earlier calls too: it closes the text the same way, but where its words belong is not known
+      const announced = !base.textClosed && base.text.trim() !== "";
+      const flow = announced && !base.seeded ? flowText(base.flow, base.text) : base.flow;
+      return { ...base, tools, flow: flowToolStart(flow, { id, name }), ...(announced ? { textClosed: true } : {}) };
     }
 
     case "agent.tool_result": {

@@ -30,7 +30,9 @@ export type ActivityItem =
   /** The agent wrote its plan ("Plan created · 5 steps") or moved it on ("Plan updated · 2 of 5") */
   | { kind: "plan"; key: string; label: string; detail?: string }
   /** A pass that condensed the agent's earlier context happened here (drawn as a divider) */
-  | { kind: "compaction"; key: string; label: string };
+  | { kind: "compaction"; key: string; label: string }
+  /** What the agent wrote before its next call ("Let me look that up.") */
+  | { kind: "text"; key: string; text: string };
 
 /** Argument keys that say best what a call was about, in order of preference. */
 const TELLING_ARGS = ["query", "q", "search", "question", "url", "path", "file", "name", "prompt", "input", "text"];
@@ -116,6 +118,8 @@ export function activityItems(messages: Message[], t: Translate, options: { reas
           });
         } else if (entry.kind === "compaction") {
           items.push({ kind: "compaction", key, label: t("chat.activity.condensed") });
+        } else if (entry.kind === "text") {
+          items.push({ kind: "text", key, text: entry.text });
         } else {
           // the stored call (when the message kept it) says what it was asked; without it the entry stands alone
           const call = entry.id ? byId.get(entry.id) : undefined;
@@ -332,6 +336,8 @@ export function TurnActivity({ items, durationMs, live = false, liveLabel, class
             )}
             {item.kind === "thinking" ? (
               <ThinkingLine text={item.text} />
+            ) : item.kind === "text" ? (
+              <p className="m-0 whitespace-pre-wrap break-words text-chat-text-secondary">{item.text}</p>
             ) : item.kind === "plan" ? (
               <div className="break-words text-chat-text-primary">
                 <span className="font-medium">{item.label}</span>

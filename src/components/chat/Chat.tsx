@@ -1086,6 +1086,7 @@ function ChatContent({
               messages={chat.messages}
               isStreaming={chat.isStreaming}
               streamingText={chat.streamingText}
+              workingAfterText={chat.workingAfterText}
               progressMessage={chat.progressMessage}
               activeToolCalls={chat.activeToolCalls}
               plan={chat.plan}

@@ -40,6 +40,11 @@ export interface ChatMessageListProps {
   isStreaming?: boolean;
   /** Current streaming text */
   streamingText?: string;
+  /**
+   * The agent called a tool after writing `streamingText` (`useChat().workingAfterText`): what runs now shows under
+   * the text, as it does before any words arrive.
+   */
+  workingAfterText?: boolean;
   /** Reasoning of the turn being streamed (`useChat().streamingReasoning`) */
   streamingReasoning?: string;
   /** Show the collapsible "Thinking" block (default true) */
@@ -170,6 +175,7 @@ export function ChatMessageList({
   messages,
   isStreaming = false,
   streamingText,
+  workingAfterText = false,
   streamingReasoning,
   showReasoning = true,
   progressMessage,
@@ -475,11 +481,12 @@ export function ChatMessageList({
           />
         )}
 
-        {/* Modern: one live line - the reasoning as it arrives, or what runs now */}
-        {modern && isStreaming && !streamingText && (
+        {/* Modern: one live line - the reasoning as it arrives, or what runs now (also under words written before a call;
+            the message above shows their reasoning) */}
+        {modern && isStreaming && (!streamingText || workingAfterText) && (
           <div className="space-y-2 px-4 py-3 animate-fade-in">
-            {showReasoning && streamingReasoning && <ThinkingBlock reasoning={streamingReasoning} streaming />}
-            {(latestTool || !(showReasoning && streamingReasoning)) && (
+            {showReasoning && streamingReasoning && !streamingText && <ThinkingBlock reasoning={streamingReasoning} streaming />}
+            {(latestTool || streamingText || !(showReasoning && streamingReasoning)) && (
               <div role="status" className="inline-flex items-center gap-2 text-sm text-chat-text-secondary">
                 <LoadingIcon className="h-4 w-4 animate-spin text-chat-text-tertiary motion-reduce:animate-none" />
                 <span>{liveLabel}</span>
@@ -489,12 +496,13 @@ export function ChatMessageList({
           </div>
         )}
 
-        {/* Thinking / loading indicator when streaming but no text yet */}
-        {!modern && isStreaming && !streamingText && (
-          <div className="flex gap-4 px-4 py-6 bg-chat-bg-secondary animate-fade-in">
+        {/* Thinking / loading indicator when streaming but no text yet, or under words written before a call */}
+        {!modern && isStreaming && (!streamingText || workingAfterText) && (
+          <div className={cn("flex gap-4 px-4 bg-chat-bg-secondary animate-fade-in", streamingText ? "pb-6" : "py-6")}>
             {showAvatars && (
               <div className="flex-shrink-0">
-                {renderAvatar ? renderAvatar("assistant") : (
+                {/* the message above has the avatar: lined up with its text */}
+                {streamingText ? <div aria-hidden="true" className="w-8" /> : renderAvatar ? renderAvatar("assistant") : (
                   <div className="w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium bg-chat-bg-tertiary text-chat-text-primary">
                     {t("chat.message.ai")}
                   </div>
@@ -502,7 +510,7 @@ export function ChatMessageList({
               </div>
             )}
             <div className="flex-1 min-w-0 flex flex-col gap-3 py-1">
-              {showReasoning && streamingReasoning && (
+              {showReasoning && streamingReasoning && !streamingText && (
                 <ThinkingBlock reasoning={streamingReasoning} streaming />
               )}
               {/* Active tool calls during streaming */}

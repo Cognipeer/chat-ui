@@ -24,6 +24,28 @@ describe("applyFollowEvent", () => {
     expect(state.lastSeq).toBe(11);
   });
 
+  it("words written before a call announce it: kept in the flow, and the next words begin the text afresh", () => {
+    const running = fold([
+      ev("agent.message.delta", { text: "Let me " }),
+      ev("agent.message.delta", { text: "look that up." }),
+      ev("agent.tool_use", { tool_call_id: "t1", name: "search", args: {} }, 3),
+      ev("agent.tool_use", { tool_call_id: "t2", name: "fetch", args: {} }, 4),
+    ]);
+    // the words stay on screen while the calls run
+    expect(running.text).toBe("Let me look that up.");
+    expect(running.textClosed).toBe(true);
+    expect(running.flow.activity).toEqual([
+      { kind: "text", text: "Let me look that up." },
+      { kind: "tool", id: "t1", name: "search" },
+      { kind: "tool", id: "t2", name: "fetch" },
+    ]);
+    const answered = fold([ev("agent.tool_result", { tool_call_id: "t1", ok: true }, 5), ev("agent.message.delta", { text: "Found it." })], running);
+    expect(answered.text).toBe("Found it.");
+    expect(answered.textClosed).toBe(false);
+    // a call with nothing written before it adds no words
+    expect(fold([ev("agent.tool_use", { tool_call_id: "t1", name: "search" }, 1)]).flow.activity).toEqual([{ kind: "tool", id: "t1", name: "search" }]);
+  });
+
   it("a turn that did not stream shows its answer at agent.message", () => {
     const state = fold([ev("agent.message", { content: "All at once", message_id: "m2" }, 3)]);
     expect(state.text).toBe("All at once");
@@ -296,6 +318,8 @@ describe("applyFollowEvent", () => {
         const seen = fold([snapshot({ run_id: "run_2", text: "Half" }), ev("agent.tool_use", { tool_call_id: "t1", name: "lookup" }, 7), resumed()], withCarried());
         expect(seen.flow.plan).toBeUndefined();
         expect(seen.flow.activity).toHaveLength(1);
+        // the snapshot's words are closed by the call (the next words begin afresh) but not taken as its announcement
+        expect(seen.textClosed).toBe(true);
       });
     });
   });
