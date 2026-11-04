@@ -216,6 +216,23 @@ export function ChatMessageList({
   // What the list looked like at the last render, and where it was scrolled when older messages were asked for
   const shown = useRef<{ first?: string; last?: string; count: number }>({ count: 0 });
   const anchor = useRef<{ top: number; height: number } | null>(null);
+  // Whether the reader is at the end. Scrolling up while an answer streams unsticks it, so the list stops
+  // pulling the reader back down; reaching the end again (or sending a message) sticks it again.
+  const stuck = useRef(true);
+  // The list's own smooth scrolling also moves it away from the end for a moment, so only a scroll that follows
+  // the reader's own input (wheel, touch, keys, the scrollbar) unsticks it.
+  const userInput = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const markUserInput = () => {
+    if (userInput.current) clearTimeout(userInput.current);
+    userInput.current = setTimeout(() => (userInput.current = null), 300);
+  };
+  useEffect(() => () => { if (userInput.current) clearTimeout(userInput.current); }, []);
+  const onScroll = () => {
+    const c = containerRef.current;
+    if (!c) return;
+    if (c.scrollHeight - c.scrollTop - c.clientHeight < 40) stuck.current = true;
+    else if (userInput.current) stuck.current = false;
+  };
   const { focusIds, announcement } = useNewCards(messages);
   const cardActions = useMemo(
     () => (actions ? { ...actions, focusActionIds: actions.focusActionIds ?? focusIds } : actions),
@@ -237,7 +254,9 @@ export function ChatMessageList({
       anchor.current = null;
       return;
     }
-    if (autoScroll && container) {
+    // The person's own new message always brings the end back into view
+    if (before.last !== last && messages[messages.length - 1]?.role === "user") stuck.current = true;
+    if (autoScroll && container && stuck.current) {
       // Scroll the message list itself. `scrollIntoView` would also scroll every scrollable ancestor,
       // the page included, so a host page a little taller than the window would jump on every answer.
       if (typeof container.scrollTo === "function") {
@@ -401,6 +420,11 @@ export function ChatMessageList({
   return (
     <div
       ref={containerRef}
+      onScroll={onScroll}
+      onWheel={markUserInput}
+      onTouchMove={markUserInput}
+      onKeyDown={markUserInput}
+      onPointerDown={markUserInput}
       // A log announces what is added; while a reply streams it is busy, so the finished
       // answer is read once instead of every word
       role="log"
