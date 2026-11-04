@@ -255,3 +255,44 @@ describe("ChatMessageList: following the newest message", () => {
     expect(log.scrollTop).toBe(10);
   });
 });
+
+describe("ChatMessageList: reading earlier text while an answer streams", () => {
+  const first = [msg("u1", { role: "user", content: "hi" })];
+  const geometry = (log: HTMLElement, state: { height: number }) => {
+    Object.defineProperty(log, "scrollHeight", { configurable: true, get: () => state.height });
+    Object.defineProperty(log, "clientHeight", { configurable: true, get: () => 400 });
+  };
+
+  it("stops following once the reader scrolls up, and follows again at the end or after they send a message", () => {
+    const view = rtlRender(wrap(<ChatMessageList messages={first} isStreaming streamingText="a" />));
+    const log = screen.getByRole("log") as HTMLElement;
+    const scrollTo = vi.fn();
+    log.scrollTo = scrollTo as unknown as typeof log.scrollTo;
+    const state = { height: 1000 };
+    geometry(log, state);
+
+    // the reader wheels up, far from the end
+    fireEvent.wheel(log, { deltaY: -120 });
+    log.scrollTop = 200;
+    fireEvent.scroll(log);
+    scrollTo.mockClear();
+    state.height = 1200;
+    view.rerender(wrap(<ChatMessageList messages={first} isStreaming streamingText="a b" />));
+    expect(scrollTo).not.toHaveBeenCalled();
+
+    // back at the end: following resumes
+    log.scrollTop = state.height - 400;
+    fireEvent.scroll(log);
+    state.height = 1400;
+    view.rerender(wrap(<ChatMessageList messages={first} isStreaming streamingText="a b c" />));
+    expect(scrollTo).toHaveBeenCalledWith({ top: 1400, behavior: "smooth" });
+
+    // scrolled up again, then a new message of their own brings the end back
+    fireEvent.wheel(log, { deltaY: -120 });
+    log.scrollTop = 100;
+    fireEvent.scroll(log);
+    scrollTo.mockClear();
+    view.rerender(wrap(<ChatMessageList messages={[...first, msg("m1", { content: "answer" }), msg("u2", { role: "user", content: "more" })]} />));
+    expect(scrollTo).toHaveBeenCalled();
+  });
+});
