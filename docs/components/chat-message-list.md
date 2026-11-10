@@ -38,6 +38,7 @@ const chat = useChat({ baseUrl: "/api/agents", agentId: "assistant" });
 | `condensing` | `boolean` | `false` | The agent is condensing its earlier context (`useChat().isCondensing`): a line says so |
 | `actions` | `ChatActionsConfig` | - | How approval / question cards behave. Without `onResolve` they are read-only ("Waiting for approval in another app"); see [Approvals and Questions](/guide/approvals#custom-layouts) |
 | `autoScroll` | `boolean` | `true` | Scroll to new messages |
+| `pinSentMessage` | `boolean` | `true` | A message the person sends goes to the top of the list and the answer streams in below it (needs `autoScroll`) |
 | `showAvatars`, `showTimestamps` | `boolean` | `true`, `false` | Message chrome |
 | `enableCitations` | `boolean` | `true` | Sources under answers |
 | `renderActions` | `(props: MessageActionProps) => ReactNode` | - | Custom action buttons |
