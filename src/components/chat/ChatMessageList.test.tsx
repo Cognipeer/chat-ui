@@ -1,6 +1,6 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render as rtlRender, screen } from "@testing-library/react";
-import type { ReactElement } from "react";
+import type { ComponentProps, ReactElement } from "react";
 import { ChatI18nProvider } from "../../providers";
 import { ChatMessageList } from "./ChatMessageList";
 import type { ChatActionsConfig } from "./ActionCards";
@@ -292,7 +292,184 @@ describe("ChatMessageList: reading earlier text while an answer streams", () => 
     log.scrollTop = 100;
     fireEvent.scroll(log);
     scrollTo.mockClear();
+    const sent = [...first, msg("m1", { content: "answer" }), msg("u2", { role: "user", content: "more" })];
+    view.rerender(wrap(<ChatMessageList messages={sent} pinSentMessage={false} />));
+    expect(scrollTo).toHaveBeenCalledWith({ top: 1400, behavior: "smooth" });
+  });
+
+  it("with the default, a message of their own is pinned to the top instead of following the end", () => {
+    const view = rtlRender(wrap(<ChatMessageList messages={first} isStreaming streamingText="a" />));
+    const log = screen.getByRole("log") as HTMLElement;
+    const scrollTo = vi.fn();
+    log.scrollTo = scrollTo as unknown as typeof log.scrollTo;
+    geometry(log, { height: 1000 });
+    fireEvent.wheel(log, { deltaY: -120 });
+    log.scrollTop = 100;
+    fireEvent.scroll(log);
+    scrollTo.mockClear();
     view.rerender(wrap(<ChatMessageList messages={[...first, msg("m1", { content: "answer" }), msg("u2", { role: "user", content: "more" })]} />));
-    expect(scrollTo).toHaveBeenCalled();
+    expect(scrollTo).toHaveBeenCalledTimes(1);
+    expect(scrollTo.mock.calls[0][0].top).not.toBe(1000);
+  });
+});
+
+describe("ChatMessageList: the sent message is pinned to the top", () => {
+  const old = [msg("u1", { role: "user", content: "hi" }), msg("m1", { content: "an answer" })];
+  const sentList = [...old, msg("u2", { role: "user", content: "next" })];
+  // jsdom has no layout: the list is 400px high, the sent message starts 1000px into the content, which ends 60px below it
+  const state = { client: 400, rowTop: 1000, endTop: 1060 };
+  const rect = (top: number) => ({ top, bottom: top, left: 0, right: 0, width: 0, height: 0, x: 0, y: top, toJSON: () => ({}) });
+  const realRect = Element.prototype.getBoundingClientRect;
+  const realClient = Object.getOwnPropertyDescriptor(Element.prototype, "clientHeight");
+  beforeEach(() => {
+    Object.assign(state, { client: 400, rowTop: 1000, endTop: 1060 });
+    const log = () => document.querySelector('[role="log"]') as HTMLElement;
+    Element.prototype.getBoundingClientRect = function (this: Element) {
+      if (this.getAttribute("role") === "log") return rect(0);
+      if (this.getAttribute("data-chat-message-id") === "u2") return rect(state.rowTop - log().scrollTop);
+      if (this.hasAttribute("data-chat-pin-end")) return rect(state.endTop - log().scrollTop);
+      return rect(0);
+    };
+    Object.defineProperty(Element.prototype, "clientHeight", {
+      configurable: true,
+      get(this: Element) {
+        return this.getAttribute("role") === "log" ? state.client : 0;
+      },
+    });
+  });
+  afterEach(() => {
+    Element.prototype.getBoundingClientRect = realRect;
+    if (realClient) Object.defineProperty(Element.prototype, "clientHeight", realClient);
+    else delete (Element.prototype as unknown as Record<string, unknown>).clientHeight;
+  });
+  const start = (props: Partial<ComponentProps<typeof ChatMessageList>> = {}) => {
+    const view = rtlRender(wrap(<ChatMessageList messages={old} {...props} />));
+    const log = screen.getByRole("log") as HTMLElement;
+    const scrollTo = vi.fn();
+    log.scrollTo = scrollTo as unknown as typeof log.scrollTo;
+    const send = (messages: Message[] = sentList, extra: Partial<ComponentProps<typeof ChatMessageList>> = {}) =>
+      view.rerender(wrap(<ChatMessageList messages={messages} {...props} {...extra} />));
+    return { view, log, scrollTo, send };
+  };
+  const spacer = (log: HTMLElement) => log.querySelector("[data-chat-pin-space]") as HTMLElement | null;
+
+  it("scrolls the list to the message minus 16px and reserves the room below it", () => {
+    const { log, scrollTo, send } = start();
+    const windowScroll = vi.spyOn(window, "scrollTo").mockImplementation(() => {});
+    send();
+    expect(scrollTo).toHaveBeenCalledWith({ top: 984, behavior: "smooth" });
+    // 400 - 16 - (1060 - 1000)
+    expect(spacer(log)?.style.height).toBe("324px");
+    expect(windowScroll).not.toHaveBeenCalled();
+    windowScroll.mockRestore();
+  });
+
+  it("does not scroll while the answer streams", () => {
+    const { log, scrollTo, send } = start();
+    send();
+    scrollTo.mockClear();
+    log.scrollTop = 984;
+    state.endTop = 1300;
+    send(sentList, { isStreaming: true, streamingText: "Hello" });
+    send(sentList, { isStreaming: true, streamingText: "Hello there, a longer answer" });
+    expect(scrollTo).not.toHaveBeenCalled();
+    expect(log.scrollTop).toBe(984);
+    // the content grew by 240px, so the room shrank by as much
+    expect(spacer(log)?.style.height).toBe("84px");
+  });
+
+  it("grows the room for a taller list afterwards and never shrinks it for a shorter one", () => {
+    const { log, send } = start();
+    send();
+    expect(spacer(log)?.style.height).toBe("324px");
+    state.client = 250; // the keyboard opens
+    send(sentList, { isStreaming: true, streamingText: "a" });
+    expect(spacer(log)?.style.height).toBe("324px");
+    state.client = 600; // closed, and larger than before
+    send(sentList, { isStreaming: true, streamingText: "ab" });
+    expect(spacer(log)?.style.height).toBe("524px");
+  });
+
+  it("follows the answer again once the reader scrolls to its end after it outgrew the room", () => {
+    const { log, scrollTo, send } = start();
+    send();
+    scrollTo.mockClear();
+    log.scrollTop = 984;
+    state.endTop = 1600; // the answer is taller than the list now: no room is left under it
+    send(sentList, { isStreaming: true, streamingText: "a long answer" });
+    expect(spacer(log)?.style.height).toBe("0px");
+    expect(scrollTo).not.toHaveBeenCalled();
+    // the reader scrolls down to the end with the wheel
+    Object.defineProperty(log, "scrollHeight", { configurable: true, get: () => 1600 });
+    fireEvent.wheel(log);
+    log.scrollTop = 1200;
+    fireEvent.scroll(log);
+    expect(spacer(log)).toBeNull();
+    send(sentList, { isStreaming: true, streamingText: "a long answer that goes on" });
+    expect(scrollTo).toHaveBeenCalledWith({ top: 1600, behavior: "smooth" });
+  });
+
+  it("stays pinned when the reader reaches the end while the answer still fits the room", () => {
+    const { log, scrollTo, send } = start();
+    send();
+    scrollTo.mockClear();
+    Object.defineProperty(log, "scrollHeight", { configurable: true, get: () => 1384 });
+    fireEvent.wheel(log);
+    log.scrollTop = 984;
+    fireEvent.scroll(log);
+    expect(spacer(log)?.style.height).toBe("324px");
+    send(sentList, { isStreaming: true, streamingText: "Hello" });
+    expect(scrollTo).not.toHaveBeenCalled();
+  });
+
+  it("is unpinned by another conversation, which opens at its end", () => {
+    const { view, log, scrollTo, send } = start();
+    send();
+    expect(spacer(log)).not.toBeNull();
+    Object.defineProperty(log, "scrollHeight", { configurable: true, get: () => 2000 });
+    scrollTo.mockClear();
+    view.rerender(wrap(<ChatMessageList messages={[msg("x1", { role: "user", content: "other" }), msg("x2", { content: "reply" })]} />));
+    expect(spacer(log)).toBeNull();
+    expect(scrollTo).toHaveBeenCalledWith({ top: 2000, behavior: "smooth" });
+  });
+
+  it("is unpinned by older messages arriving in front, which keep the reader where they were", () => {
+    const { view, log, scrollTo, send } = start({ hasEarlier: true, onLoadEarlier: () => {} });
+    send();
+    expect(spacer(log)).not.toBeNull();
+    let height = 1000;
+    Object.defineProperty(log, "scrollHeight", { configurable: true, get: () => height });
+    log.scrollTop = 40;
+    fireEvent.click(screen.getByRole("button", { name: "Show earlier messages" }));
+    scrollTo.mockClear();
+    height = 1900;
+    view.rerender(wrap(<ChatMessageList messages={[msg("o1", { role: "user", content: "older" }), ...sentList]} hasEarlier onLoadEarlier={() => {}} />));
+    expect(spacer(log)).toBeNull();
+    expect(log.scrollTop).toBe(940);
+    expect(scrollTo).not.toHaveBeenCalled();
+  });
+
+  it("draws no spacer and keeps following the end with pinSentMessage={false} or autoScroll={false}", () => {
+    for (const off of [{ pinSentMessage: false }, { autoScroll: false }]) {
+      const { log, scrollTo, send } = start(off);
+      Object.defineProperty(log, "scrollHeight", { configurable: true, get: () => 1200 });
+      send();
+      expect(spacer(log)).toBeNull();
+      if ("pinSentMessage" in off) expect(scrollTo).toHaveBeenCalledWith({ top: 1200, behavior: "smooth" });
+      else expect(scrollTo).not.toHaveBeenCalled();
+      cleanup();
+    }
+  });
+
+  it("scrolls without animation when the person prefers reduced motion", () => {
+    const original = window.matchMedia;
+    window.matchMedia = ((query: string) => ({ matches: query.includes("reduce"), media: query })) as unknown as typeof window.matchMedia;
+    try {
+      const { scrollTo, send } = start();
+      send();
+      expect(scrollTo).toHaveBeenCalledWith({ top: 984, behavior: "auto" });
+    } finally {
+      window.matchMedia = original;
+    }
   });
 });

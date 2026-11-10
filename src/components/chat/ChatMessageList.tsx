@@ -61,6 +61,11 @@ export interface ChatMessageListProps {
   className?: string;
   /** Auto-scroll to bottom on new messages */
   autoScroll?: boolean;
+  /**
+   * A message the person sends goes to the top of the list and the answer streams in below it, instead of the list
+   * following the end of the answer (default true; needs `autoScroll`).
+   */
+  pinSentMessage?: boolean;
   /** Render custom message actions */
   renderActions?: (props: MessageActionProps) => React.ReactNode;
   /** Render custom avatar */
@@ -116,6 +121,9 @@ export interface ChatMessageListProps {
 const useIsomorphicLayoutEffect = typeof window !== "undefined" ? useLayoutEffect : useEffect;
 
 const NO_IDS: ReadonlySet<string> = new Set();
+
+// How far below the top of the list a pinned message sits
+const PIN_GAP = 16;
 
 /**
  * Notices the approval / question cards that appear while the list is on screen (not the ones a
@@ -186,6 +194,7 @@ export function ChatMessageList({
   condensing = false,
   className,
   autoScroll = true,
+  pinSentMessage = true,
   renderActions,
   renderAvatar,
   showAvatars = true,
@@ -214,7 +223,7 @@ export function ChatMessageList({
   const modern = useAppearance() === "modern";
   const containerRef = useRef<HTMLDivElement>(null);
   // What the list looked like at the last render, and where it was scrolled when older messages were asked for
-  const shown = useRef<{ first?: string; last?: string; count: number }>({ count: 0 });
+  const shown = useRef<{ first?: string; last?: string; count: number; ids: ReadonlySet<string> }>({ count: 0, ids: NO_IDS });
   const anchor = useRef<{ top: number; height: number } | null>(null);
   // Whether the reader is at the end. Scrolling up while an answer streams unsticks it, so the list stops
   // pulling the reader back down; reaching the end again (or sending a message) sticks it again.
@@ -230,8 +239,15 @@ export function ChatMessageList({
   const onScroll = () => {
     const c = containerRef.current;
     if (!c) return;
-    if (c.scrollHeight - c.scrollTop - c.clientHeight < 40) stuck.current = true;
-    else if (userInput.current) stuck.current = false;
+    if (c.scrollHeight - c.scrollTop - c.clientHeight < 40) {
+      // A pinned message stays put until the reader scrolls down to the end of an answer that has outgrown the
+      // room under it: from there the list follows the answer again.
+      if (!pinned.current) stuck.current = true;
+      else if (userInput.current && (parseFloat(spacerRef.current?.style.height ?? "") || 0) === 0) {
+        setPinned(false);
+        stuck.current = true;
+      }
+    } else if (userInput.current) stuck.current = false;
   };
   const { focusIds, announcement } = useNewCards(messages);
   const cardActions = useMemo(
@@ -239,14 +255,69 @@ export function ChatMessageList({
     [actions, focusIds]
   );
 
+  // Pinned: the person's last message sits at the top of the list and the answer fills the room below it.
+  // The ref steers the scrolling, the state draws the spacer that makes that room.
+  const pinned = useRef(false);
+  const [pinnedView, setPinnedView] = useState(false);
+  const pinPending = useRef(false);
+  const pinViewport = useRef(0);
+  const mounted = useRef(false);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const endRef = useRef<HTMLDivElement>(null);
+  const spacerRef = useRef<HTMLDivElement>(null);
+  const setPinned = (on: boolean) => {
+    pinned.current = on;
+    pinPending.current = on;
+    if (!on) pinViewport.current = 0;
+    setPinnedView(on);
+  };
+  const lastUserId = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) if (messages[i].role === "user") return messages[i].id;
+    return undefined;
+  }, [messages]);
+  const pinRow = () => {
+    const container = containerRef.current;
+    if (!container || !lastUserId) return null;
+    const row = Array.from(container.querySelectorAll<HTMLElement>("[data-chat-message-id]")).find(
+      (el) => el.getAttribute("data-chat-message-id") === lastUserId
+    );
+    return row ?? null;
+  };
+  /** Where an element starts inside the scrolled content of the list */
+  const offsetIn = (container: HTMLElement, el: HTMLElement) =>
+    el.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop;
+  /** Sizes the spacer so the pinned message can reach the top; the largest height the list had counts, a keyboard must not shrink it */
+  const reserveRoom = () => {
+    const container = containerRef.current;
+    const spacer = spacerRef.current;
+    const end = endRef.current;
+    const row = pinRow();
+    if (!container || !spacer || !end || !row) return null;
+    pinViewport.current = Math.max(pinViewport.current, container.clientHeight);
+    const rowTop = offsetIn(container, row);
+    spacer.style.height = `${Math.max(0, pinViewport.current - PIN_GAP - (offsetIn(container, end) - rowTop))}px`;
+    return rowTop;
+  };
+
   // Auto-scroll to bottom. Older messages added in front keep the reader where they were instead.
   useIsomorphicLayoutEffect(() => {
     const first = messages[0]?.id;
     const last = messages[messages.length - 1]?.id;
     const before = shown.current;
-    shown.current = { first, last, count: messages.length };
+    const ids = new Set(messages.map((m) => m.id));
+    // a list that opens with its messages is not a message being sent
+    const opening = !mounted.current;
+    mounted.current = true;
+    shown.current = { first, last, count: messages.length, ids };
     const prepended = before.count > 0 && last === before.last && first !== before.first && messages.length > before.count;
     const container = containerRef.current;
+    const canPin = autoScroll && pinSentMessage;
+    // the same conversation unless it had messages and none of them is left
+    const continued = before.count === 0 || Array.from(before.ids).some((id) => ids.has(id));
+    if (pinned.current && (!canPin || prepended || !continued || messages.length === 0)) {
+      if (!prepended) stuck.current = true;
+      setPinned(false);
+    }
     if (prepended) {
       if (container && anchor.current) {
         container.scrollTop = anchor.current.top + (container.scrollHeight - anchor.current.height);
@@ -254,8 +325,15 @@ export function ChatMessageList({
       anchor.current = null;
       return;
     }
+    const sent = before.last !== last && messages[messages.length - 1]?.role === "user";
     // The person's own new message always brings the end back into view
-    if (before.last !== last && messages[messages.length - 1]?.role === "user") stuck.current = true;
+    if (sent) stuck.current = true;
+    if (canPin && !opening && sent && continued && messages.length > before.count && (before.count > 0 || messages.length === 1)) {
+      setPinned(true);
+      return;
+    }
+    // while pinned the answer fills the room below the message; nothing follows it
+    if (pinned.current) return;
     if (autoScroll && container && stuck.current) {
       // Scroll the message list itself. `scrollIntoView` would also scroll every scrollable ancestor,
       // the page included, so a host page a little taller than the window would jump on every answer.
@@ -265,7 +343,37 @@ export function ChatMessageList({
         container.scrollTop = container.scrollHeight;
       }
     }
-  }, [messages, streamingText, streamingReasoning, activeToolCalls, plan, condensing, autoScroll]);
+  }, [messages, streamingText, streamingReasoning, activeToolCalls, plan, condensing, autoScroll, pinSentMessage]);
+
+  // Pinned: keep the room under the message, and scroll the message to the top when it was just sent
+  useIsomorphicLayoutEffect(() => {
+    if (!pinned.current || !pinnedView) return;
+    const rowTop = reserveRoom();
+    if (!pinPending.current) return;
+    const container = containerRef.current;
+    if (!container || rowTop === null) return;
+    pinPending.current = false;
+    const top = Math.max(0, rowTop - PIN_GAP);
+    const calm = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true;
+    if (typeof container.scrollTo === "function") {
+      container.scrollTo({ top, behavior: calm ? "auto" : "smooth" });
+    } else {
+      container.scrollTop = top;
+    }
+  }, [messages, streamingText, streamingReasoning, activeToolCalls, plan, condensing, pinnedView]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // The list or its content changing size (the keyboard, an image, a token) resizes the room, without a render
+  useEffect(() => {
+    const container = containerRef.current;
+    const content = contentRef.current;
+    if (!pinnedView || typeof ResizeObserver === "undefined" || !container || !content) return;
+    const observer = new ResizeObserver(() => {
+      if (pinned.current) reserveRoom();
+    });
+    observer.observe(container);
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, [pinnedView]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Jump to the message a search hit pointed at: the list is scrolled, never the page
   const handledFocus = useRef(onFocusHandled);
@@ -440,7 +548,7 @@ export function ChatMessageList({
       <div aria-live="assertive" aria-atomic="true" className="sr-only">
         {announcement}
       </div>
-      <div className={cn("max-w-3xl mx-auto", modern && "px-1 py-4 sm:px-3")}>
+      <div ref={contentRef} className={cn("max-w-3xl mx-auto", modern && "px-1 py-4 sm:px-3")}>
         {hasEarlier && onLoadEarlier && (
           <div className="flex justify-center px-4 pt-4">
             <button type="button" className={SECONDARY_BUTTON} disabled={isLoadingEarlier} onClick={loadEarlier}>
@@ -563,6 +671,12 @@ export function ChatMessageList({
           </div>
         )}
       </div>
+      {pinnedView && (
+        <>
+          <div ref={endRef} aria-hidden="true" data-chat-pin-end style={{ height: 0 }} />
+          <div ref={spacerRef} aria-hidden="true" data-chat-pin-space style={{ height: 0 }} />
+        </>
+      )}
     </div>
   );
 }

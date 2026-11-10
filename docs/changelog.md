@@ -4,6 +4,16 @@ All notable changes to Chat UI will be documented here.
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-11-10
+
+### Changed
+
+- A message the person sends goes to the top of the message list and the answer streams in under it. The list scrolls (smoothly, or at once when reduced motion is asked for) until the message sits 16 pixels under its top, and empty room under the answer keeps it there while the answer is short. Nothing moves while the answer streams, nor when the list gets shorter or taller (a phone keyboard). Once the answer is taller than the list it runs on below; a reader who scrolls down to its end is followed again. Another conversation, older messages loaded in front, or `autoScroll={false}` end it. New prop `pinSentMessage` on `ChatMessageList` (default `true`; `false` keeps following the end as before).
+
+### Fixed
+
+- While an answer streams, a reader who scrolls up (wheel, touch, keys, the scrollbar) is no longer pulled back to the end on every token: following pauses until they reach the end again or send a message.
+
 ## [0.13.0] - 2026-10-25
 
 ### Added
